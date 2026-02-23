@@ -1,6 +1,6 @@
 # GCP ML Framework — Implementation Plan
 
-> **Status:** Draft — awaiting review before implementation begins.
+> **Status:** Approved — ready for implementation.
 
 ---
 
@@ -117,9 +117,8 @@ def bq_safe(branch: str) -> str:
 │   │   ├── gcs_extract.py
 │   │   └── api_extract.py
 │   ├── transformation/
-│   │   ├── spark_transform.py
-│   │   ├── bq_transform.py
-│   │   └── pandas_transform.py
+│   │   ├── bq_transform.py            # Phase 1. SparkTransform deferred to future release.
+│   │   └── pandas_transform.py        # local-only; used by LocalRunner stubs
 │   ├── feature_store/
 │   │   ├── write_features.py
 │   │   └── read_features.py
@@ -186,6 +185,8 @@ gcp_ml_framework/                      # installable library
 │   ├── cmd_run.py
 │   ├── cmd_deploy.py
 │   └── cmd_promote.py
+├── secrets/
+│   └── client.py                      # SecretManagerClient: resolve secret refs at runtime
 └── utils/
     ├── gcp.py
     └── logging.py
@@ -209,14 +210,27 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
 class GCPConfig(BaseModel):
-    project_id: str
-    region: str = "us-central1"
+    dev_project_id: str
+    staging_project_id: str
+    prod_project_id: str
+    region: str = "us-central1"       # single-region: us-central1 (multi-region deferred)
     composer_env: str | None = None
     artifact_registry: str | None = None
 
 class FeatureStoreConfig(BaseModel):
-    online_serving_fixed_node_count: int = 1
+    # Vertex AI Feature Store with Bigtable-backed online serving (not the legacy API).
+    # Online serving is required; all feature reads for model inference go through the
+    # online store. Offline/batch reads go through the underlying BigQuery source tables.
+    online_serving_fixed_node_count: int = 1   # DEV: 1, STAGE/PROD: scale as needed
     bigtable_min_node_count: int = 1
+
+class SecretsConfig(BaseModel):
+    # GCP Secret Manager integration. Secrets are referenced by name; the framework
+    # resolves their values at runtime via the Secret Manager API. No secrets in code or YAML.
+    # Secret names follow the convention: {namespace}-{secret-name}
+    # Example: dsci-churn-pred-main-db-password → resolved from Secret Manager at runtime.
+    project_id: str | None = None     # defaults to the active GCP project
+    secret_prefix: str | None = None  # optional prefix override; defaults to namespace
 
 class FrameworkConfig(BaseSettings):
     team: str
@@ -224,6 +238,7 @@ class FrameworkConfig(BaseSettings):
     branch: str = Field(default_factory=_get_git_branch)
     gcp: GCPConfig
     feature_store: FeatureStoreConfig = FeatureStoreConfig()
+    secrets: SecretsConfig = SecretsConfig()
 
     model_config = SettingsConfigDict(
         env_prefix="GML_",
@@ -240,12 +255,18 @@ project: churn-pred
 gcp:
   # GCP project IDs are environment-specific; the framework selects the correct
   # one based on the git state (branch type, main, or release tag).
-  dev_project_id: my-gcp-project-dev        # feature/* and hotfix/* branches
-  staging_project_id: my-gcp-project-staging # main branch
-  prod_project_id: my-gcp-project-prod       # release tags and prod/* branches
-  region: us-central1
+  dev_project_id: my-gcp-project-dev         # feature/* and hotfix/* branches
+  staging_project_id: my-gcp-project-staging  # main branch
+  prod_project_id: my-gcp-project-prod        # release tags and prod/* branches
+  region: us-central1                          # single region; multi-region deferred
   composer_env: ml-composer-env
   artifact_registry: us-central1-docker.pkg.dev/my-gcp-project-dev/dsci-churn-pred
+
+secrets:
+  # Secret names are resolved via GCP Secret Manager at runtime.
+  # Reference secrets in pipeline config as: !secret my-api-key
+  # Resolved name: {namespace}-my-api-key (e.g., dsci-churn-pred-main-my-api-key)
+  secret_prefix: null  # defaults to namespace token; override only if needed
 ```
 
 ### 4.3 Runtime Context
@@ -280,7 +301,7 @@ from gcp_ml_framework.components import (
 )
 
 pipeline = (
-    PipelineBuilder(name="churn-prediction")
+    PipelineBuilder(name="churn-prediction", schedule="0 6 * * 1")  # every Monday 06:00 UTC
     .ingest(
         BigQueryExtract(
             query="SELECT * FROM `{bq_dataset}.raw_events` WHERE dt = '{run_date}'",
@@ -328,24 +349,26 @@ pipeline = (
 Adding, removing, or reordering steps = editing one file:
 
 ```python
-# Remove training/deployment — feature engineering only pipeline
+# Remove training/deployment — feature engineering only pipeline, run daily
 pipeline = (
-    PipelineBuilder(name="churn-features-only")
+    PipelineBuilder(name="churn-features-only", schedule="@daily")
     .ingest(BigQueryExtract(...))
     .transform(BQTransform(...))
     .write_features(WriteFeatures(...))
     .build()
 )
 
-# Swap transformer
+# One-shot pipeline (no schedule)
 pipeline = (
-    PipelineBuilder(name="churn-spark")
-    .ingest(GCSExtract(...))
-    .transform(SparkTransform(script="pyspark/churn_transform.py"))  # different transformer
+    PipelineBuilder(name="churn-backfill", schedule=None)
+    .ingest(BigQueryExtract(...))
+    .transform(BQTransform(...))
     .write_features(WriteFeatures(...))
     .build()
 )
 ```
+
+`schedule` accepts any Airflow/cron expression, `"@daily"`, `"@once"`, or `None` (manual trigger only). It is passed through to both the KFP run trigger and the Composer DAG `schedule_interval` — a single source of truth.
 
 ### 5.3 `PipelineBuilder` generates both:
 1. A **KFP v2 pipeline** (`@pipeline` decorated function) for Vertex AI
@@ -382,19 +405,19 @@ class BaseComponent(ABC):
 
 ### 6.2 Built-in Components
 
-| Category | Component | Description |
-|---|---|---|
-| **Ingestion** | `BigQueryExtract` | SQL query → GCS/BQ staging |
-| | `GCSExtract` | GCS file → staging |
-| | `APIExtract` | REST/HTTP → GCS |
-| **Transformation** | `BQTransform` | SQL file → BQ table |
-| | `SparkTransform` | PySpark script via Dataproc |
-| | `PandasTransform` | Python function (small data, local-friendly) |
-| **Feature Store** | `WriteFeatures` | BQ table → Vertex AI Feature Store |
-| | `ReadFeatures` | Feature Store → BQ/GCS for training |
-| **ML** | `TrainModel` | Custom container training job |
-| | `EvaluateModel` | Evaluation + metric gating |
-| | `DeployModel` | Model → Vertex AI Endpoint |
+| Category | Component | Phase | Description |
+|---|---|---|---|
+| **Ingestion** | `BigQueryExtract` | 1 | SQL query → GCS/BQ staging |
+| | `GCSExtract` | 1 | GCS file → staging |
+| | `APIExtract` | 1 | REST/HTTP → GCS |
+| **Transformation** | `BQTransform` | 1 | SQL file → BQ table (primary transformer) |
+| | `PandasTransform` | 1 | Python function; local-only stub for `LocalRunner` |
+| | `SparkTransform` | _future_ | PySpark via Dataproc — deferred; BQ SQL covers Phase 1 needs |
+| **Feature Store** | `WriteFeatures` | 1 | BQ table → Vertex AI Feature Store (Bigtable online store) |
+| | `ReadFeatures` | 1 | Feature Store online/offline → training dataset |
+| **ML** | `TrainModel` | 1 | Custom container training job on Vertex AI |
+| | `EvaluateModel` | 1 | Evaluation + metric gating (halts pipeline if gate not met) |
+| | `DeployModel` | 1 | Model → Vertex AI Endpoint (online serving only; batch prediction deferred) |
 
 ---
 
@@ -408,9 +431,10 @@ def make_dag(pipeline_def: PipelineDefinition, context: MLContext) -> DAG:
     """
     Converts a PipelineDefinition into an Airflow DAG.
     DAG ID = {namespace}--{pipeline_name}
+    schedule comes directly from PipelineBuilder(schedule=...) — single source of truth.
     """
     dag_id = f"{context.namespace}--{pipeline_def.name}"
-    with DAG(dag_id=dag_id, schedule=pipeline_def.schedule, ...) as dag:
+    with DAG(dag_id=dag_id, schedule_interval=pipeline_def.schedule, ...) as dag:
         tasks = {}
         for step in pipeline_def.steps:
             operator = step.component.as_airflow_operator(context, dag)
@@ -440,6 +464,8 @@ Composer env vars `GML_TEAM`, `GML_PROJECT`, `GML_GCP__PROJECT_ID`, etc. are set
 ---
 
 ## 8. Feature Store Integration
+
+**Technology choice:** Vertex AI Feature Store with Bigtable-backed online serving. The online store is required — all real-time inference reads hit the online API (low-latency Bigtable lookups). Offline/batch training reads go directly to the BigQuery source tables that back the feature views. The legacy Feature Store API is not used.
 
 ### 8.1 Entity-Centric Schema (YAML)
 
@@ -480,12 +506,23 @@ class FeatureStoreClient:
         entity_id_column: str,
         context: MLContext,
     ) -> None:
-        """Writes BQ table to Feature Store under the branch namespace."""
+        """Sync BQ source table into the Bigtable online store for this branch namespace."""
         feature_view_id = f"{entity}_{context.config.branch_safe}"
-        # upsert to Vertex AI Feature Store ...
+        # Triggers a Feature Store sync from BQ → Bigtable online store ...
+
+    def read_online(
+        self,
+        entity: str,
+        entity_ids: list[str],
+        feature_ids: list[str],
+        context: MLContext,
+    ) -> dict:
+        """Low-latency Bigtable read for real-time inference. Returns {entity_id: {feature: value}}."""
+        feature_view_id = f"{entity}_{context.config.branch_safe}"
+        # calls FetchFeatureValues on the online store endpoint ...
 ```
 
-Branch-based Feature Store isolation: each branch writes to its own feature view (`user_feature__user-embeddings`), so experimental feature definitions never contaminate production serving.
+Branch-based Feature Store isolation: each branch writes to its own feature view (`user_feature__user-embeddings`), so experimental feature definitions never contaminate production online serving.
 
 ---
 
@@ -643,13 +680,14 @@ dependencies = [
     "google-cloud-aiplatform>=1.49",
     "google-cloud-bigquery>=3.17",
     "google-cloud-storage>=2.16",
+    "google-cloud-secret-manager>=2.20",  # Secret Manager integration (Phase 1)
     "apache-airflow>=2.8",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "typer>=0.12",
     "rich>=13",
     "pyyaml>=6",
-    "duckdb>=0.10",           # local SQL execution
+    "duckdb>=0.10",           # local SQL execution (mirrors BigQuery SQL dialect)
     "pyarrow>=15",
 ]
 
@@ -690,10 +728,11 @@ A `ruff` plugin (or pre-commit hook) enforces:
 ### Phase 1 — Foundation (Week 1–2)
 - [ ] `gcp_ml_framework` package scaffold (UV project setup)
 - [ ] `naming.py`: namespace resolution + sanitization
-- [ ] `config.py`: Pydantic config with YAML + env var layering
-- [ ] `context.py`: `MLContext` dataclass
+- [ ] `config.py`: Pydantic config with YAML + env var layering; `GCPConfig`, `FeatureStoreConfig`, `SecretsConfig`
+- [ ] `context.py`: `MLContext` dataclass with resolved GCP project per git state
+- [ ] `secrets/client.py`: `SecretManagerClient` — resolve `!secret <name>` references to values at runtime
 - [ ] `gml init` CLI command + project scaffolding
-- [ ] `gml context show` command
+- [ ] `gml context show` command (shows resolved GCP project, namespace, secret prefix)
 
 ### Phase 2 — Component Library (Week 2–3)
 - [ ] `BaseComponent` ABC
@@ -749,14 +788,24 @@ A `ruff` plugin (or pre-commit hook) enforces:
 | Feature schemas in YAML, not Python | Non-engineers can read/edit them. YAML is version-controlled and diff-friendly. Python-based validation enforces schema correctness. |
 | `gml` CLI over Makefiles | Makefile targets don't carry type safety, help text, or argument validation. Typer CLI is self-documenting and testable. |
 | No `if env == "prod"` anywhere | Forces clean separation. All environment differences live in config injection at the boundary (CI/CD, Composer env vars). |
+| **Vertex AI Feature Store — Bigtable online serving** | Online serving is required for real-time inference. Bigtable-backed online store gives sub-10ms p99 latency. Legacy Feature Store API not used. |
+| **BQ SQL transforms only (Phase 1)** | BigQuery covers all current transformation needs. SparkTransform (Dataproc) deferred — avoids Dataproc cluster management complexity until a concrete use case requires it. |
+| **Vertex AI Endpoint only (Phase 1)** | Synchronous online inference is the primary serving pattern. Batch prediction deferred; teams can trigger ad-hoc Vertex Batch Prediction jobs outside the framework if needed. |
+| **Single region: us-central1** | Simplifies IAM, networking, and Feature Store topology for Phase 1. Multi-region support deferred until regional compliance requirements are defined. |
+| **GCP Secret Manager (Phase 1)** | Workload Identity Federation handles auth; Secret Manager handles application secrets (API keys, DB passwords). Secrets referenced by name (`!secret <key>`) and resolved at runtime — never stored in YAML or environment variables in plaintext. |
+| **`schedule` on `PipelineBuilder`** | Single source of truth. The schedule is a pipeline property, not a DAG property — it flows through to both the Composer DAG `schedule_interval` and is recorded in the pipeline manifest for auditability. |
 
 ---
 
-## 16. Open Questions for Review
+## 16. Resolved Design Decisions
 
-1. **Feature Store version**: Vertex AI Feature Store (Bigtable-backed online serving) vs. Feature Store Legacy? Online serving required?
-2. **Spark/Dataproc**: Is `SparkTransform` needed in Phase 1, or can teams start with BQ SQL transforms only?
-3. **Model serving**: Vertex AI Endpoint only, or also need Batch Prediction support?
-4. **Multi-region**: Single region (`us-central1`) to start, or multi-region from day one?
-5. **Secrets management**: GCP Secret Manager integration needed in Phase 1, or assume service account key-less auth (Workload Identity)?
-6. **DAG scheduling**: Should `PipelineBuilder` accept a `schedule` parameter, or is scheduling always defined at the DAG level separately?
+All open questions have been resolved. Decisions are incorporated throughout the plan; this section serves as a summary reference.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Feature Store version & online serving | **Vertex AI Feature Store (Bigtable-backed online serving).** Online serving is required. Legacy API not used. |
+| 2 | Spark/Dataproc scope | **BQ SQL transforms only in Phase 1.** `SparkTransform` deferred to a future release when a concrete use case requires it. |
+| 3 | Model serving | **Vertex AI Endpoint only.** Batch Prediction deferred to a future release. |
+| 4 | Multi-region | **Single region: `us-central1`.** Multi-region support deferred until regional compliance requirements are defined. |
+| 5 | Secrets management | **GCP Secret Manager integration required in Phase 1.** Secrets referenced by name (`!secret <key>`) and resolved at runtime. Workload Identity handles authentication; Secret Manager handles application secrets. |
+| 6 | DAG scheduling | **`PipelineBuilder` accepts a `schedule` parameter.** Single source of truth — flows through to Composer DAG `schedule_interval` and the pipeline manifest. |
