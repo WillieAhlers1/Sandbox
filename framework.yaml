@@ -1,0 +1,22 @@
+# GCP ML Framework — project configuration
+# This file is the single source of truth for team/project identity.
+# Commit it. Never put secrets here — use GCP Secret Manager (!secret key-name).
+
+team: dsci
+project: example-churn
+
+gcp:
+  # Replace these with your actual GCP project IDs.
+  dev_project_id: my-gcp-project-dev
+  staging_project_id: my-gcp-project-staging
+  prod_project_id: my-gcp-project-prod
+  region: us-central1
+  composer_env: ml-composer-env
+  artifact_registry_host: us-central1-docker.pkg.dev
+
+secrets:
+  # Secrets are referenced in config/pipeline code as: !secret <key-name>
+  # They are resolved at runtime from GCP Secret Manager.
+  # The full secret name will be: {namespace}-{key-name}
+  # e.g. dsci-example-churn-main-db-password
+  secret_prefix:    # leave blank to default to the namespace token
