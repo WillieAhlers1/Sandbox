@@ -1,0 +1,59 @@
+[project]
+name = "gcp-ml-framework"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "kfp>=2.7,<3",
+    "google-cloud-aiplatform>=1.49",
+    "google-cloud-bigquery>=3.17",
+    "google-cloud-storage>=2.16",
+    "google-cloud-secret-manager>=2.20",
+    "apache-airflow>=2.8",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "typer>=0.12",
+    "rich>=13",
+    "pyyaml>=6",
+    "duckdb>=0.10",
+    "pyarrow>=15",
+]
+
+[project.scripts]
+gml = "gcp_ml_framework.cli.main:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
