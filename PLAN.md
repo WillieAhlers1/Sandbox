@@ -10,7 +10,7 @@ This framework lets data scientists and analysts define ML pipelines as Python c
 
 | Principle | What it means in practice |
 |---|---|
-| **Branch-based isolation** | Each git branch gets its own GCS prefix, BQ dataset, Vertex experiment, and Feature Store entity namespace. `main`/`prod` is just another branch with promotion gates. |
+| **Branch-based isolation** | Each git branch gets its own GCS prefix, BQ dataset, Vertex experiment, and Feature Store entity namespace. The git state (branch type, `main`, release tag) determines which GCP environment is targeted — no `if env == "prod"` flags, no manual routing decisions. |
 | **Feature Store foundation** | Feature data is organized around business *entities* (User, Item, Session…). All transformation outputs write entity-keyed feature groups. |
 | **Environment agnostic** | No `if env == "prod"` in pipeline code. Config is injected; pipelines are pure functions of config. |
 | **Code-as-mode hygiene** | Every resource is declared in code. No manual GCP console actions. DAGs, pipelines, and feature schemas are version-controlled. |
@@ -54,7 +54,31 @@ This framework lets data scientists and analysts define ML pipelines as Python c
 | Feature Store Feature View | `{entity}_{branch_safe}` |
 | Artifact Registry repo | `{team}-{project}` (shared; images tagged `{branch_safe}-{sha}`) |
 
-### 2.3 Branch Sanitization Rules
+### 2.3 Branch-to-Environment Mapping
+
+The git state — not a config flag — determines which GCP project and resource lifecycle applies. This is the foundation of the framework's environment model.
+
+| Git State | Environment | GCP Project | Purpose | Lifecycle |
+|---|---|---|---|---|
+| **Feature / Hotfix / Other branches** | DEV | `{project}-dev` | Experimentation & iteration | **Ephemeral.** Resources created on first push; automatically marked for deletion after merge or configurable inactivity period (e.g., 14 days). |
+| **`main` branch** | STAGE | `{project}-staging` | Integration & validation | **Persistent.** Deployed automatically on every merge to `main`. Mirrors production topology. |
+| **Release Tag** (e.g., `v1.2.3`) | PROD | `{project}-prod` | Production serving | **Immutable.** A manual tag push promotes the validated STAGE artifact to PROD. No code changes in PROD — only artifact promotion. |
+| **`prod/*` branches** | PROD (Exp) | `{project}-prod` | A/B / live experimentation | **Controlled.** Specific branches explicitly pushed to the PROD project for live traffic experiments alongside the stable release. |
+
+**Key implications for naming and config:**
+
+- The `{branch}` token in the namespace (`{team}-{project}-{branch}`) still encodes the actual git branch name for DEV and PROD (Exp) isolation.
+- For STAGE, the namespace is always `{team}-{project}-main` (stable, predictable).
+- For PROD (release tag), the namespace is `{team}-{project}-{tag}` (e.g., `dsci-churn-pred-v1.2.3`) — or a stable alias `{team}-{project}-prod` for Endpoints/Feature Store online serving.
+- The target **GCP project** is resolved from the git state, not from the branch name itself. The framework reads the appropriate `GCP_PROJECT_ID` from the CI/CD environment.
+
+**Resource cleanup (DEV ephemeral resources):**
+
+- The `gml teardown` command (Phase 5) deletes all GCP resources in a given namespace.
+- CI/CD runs `gml teardown --namespace {branch_namespace}` automatically on PR merge or on a scheduled inactivity sweep.
+- STAGE and PROD resources are never touched by automated teardown.
+
+### 2.4 Branch Sanitization Rules
 
 ```python
 import re
@@ -120,8 +144,11 @@ def bq_safe(branch: str) -> str:
 │
 ├── .github/
 │   └── workflows/
-│       ├── ci.yaml                    # lint, test, build on PR
-│       └── deploy.yaml                # deploy on push to main
+│       ├── ci-dev.yaml                # lint, test, DEV deploy on feature/hotfix push
+│       ├── ci-stage.yaml              # full test suite + STAGE deploy on merge to main
+│       ├── promote.yaml               # STAGE → PROD promotion on release tag push
+│       ├── ci-prod-exp.yaml           # PROD (Exp) deploy on prod/* branch push
+│       └── teardown.yaml             # ephemeral DEV resource cleanup on merge/inactivity
 │
 └── scripts/
     └── bootstrap.sh                   # one-time GCP project setup
@@ -211,10 +238,14 @@ class FrameworkConfig(BaseSettings):
 team: dsci
 project: churn-pred
 gcp:
-  project_id: my-gcp-project
+  # GCP project IDs are environment-specific; the framework selects the correct
+  # one based on the git state (branch type, main, or release tag).
+  dev_project_id: my-gcp-project-dev        # feature/* and hotfix/* branches
+  staging_project_id: my-gcp-project-staging # main branch
+  prod_project_id: my-gcp-project-prod       # release tags and prod/* branches
   region: us-central1
   composer_env: ml-composer-env
-  artifact_registry: us-central1-docker.pkg.dev/my-gcp-project/dsci-churn-pred
+  artifact_registry: us-central1-docker.pkg.dev/my-gcp-project-dev/dsci-churn-pred
 ```
 
 ### 4.3 Runtime Context
@@ -487,13 +518,13 @@ gml context show
 
 ### 9.1 `gml init` Scaffolds
 
-- `framework.yaml` with team/project/GCP project
+- `framework.yaml` with team/project/GCP project IDs per environment (dev/staging/prod)
 - `pipelines/__init__.py`
 - `feature_schemas/` with example entity YAML
 - `dags/_base.py`
 - `pyproject.toml` with UV and `gcp-ml-framework` as dependency
 - `.python-version` pinned to 3.11
-- `.github/workflows/ci.yaml` and `deploy.yaml`
+- `.github/workflows/ci-dev.yaml`, `ci-stage.yaml`, `promote.yaml`, `ci-prod-exp.yaml`, `teardown.yaml`
 
 ---
 
@@ -531,31 +562,72 @@ class BQTransform(BaseComponent):
 
 ## 11. GCP Deployment Workflow
 
+The CI/CD system has four distinct deployment paths, each driven by git state rather than manual environment selection.
+
 ```
-Git push → GitHub Actions
-│
-├─ ci.yaml (every PR)
-│   ├── uv sync
-│   ├── ruff lint + mypy
-│   ├── pytest tests/unit/
-│   └── gml run {changed_pipelines} --compile-only  (KFP compile check)
-│
-└─ deploy.yaml (push to main)
-    ├── gml deploy dags           → sync to Composer GCS bucket
-    ├── gml deploy features       → upsert Feature Store schemas
-    └── gml run {all} --vertex    → submit Vertex AI Pipeline runs
+─────────────────────────────────────────────────────────────────────────────
+ GIT EVENT                   ENVIRONMENT    ACTIONS
+─────────────────────────────────────────────────────────────────────────────
+ Push to feature/*, hotfix/* → DEV          ci-dev.yaml:
+                                             ├── uv sync
+                                             ├── ruff lint + mypy
+                                             ├── pytest tests/unit/
+                                             ├── gml run {pipeline} --compile-only
+                                             ├── gml deploy dags        (DEV Composer)
+                                             ├── gml deploy features    (DEV Feature Store)
+                                             └── gml run {pipeline} --vertex (optional smoke)
+
+ Merge to main              → STAGE         ci-stage.yaml:
+                                             ├── pytest tests/unit/ + tests/integration/
+                                             ├── gml deploy dags        (STAGE Composer)
+                                             ├── gml deploy features    (STAGE Feature Store)
+                                             └── gml run {all} --vertex --sync
+
+ Push release tag (v*)      → PROD          promote.yaml:
+                                             ├── gml promote --from main --to prod
+                                             │     (copies model artifact, pipeline YAML,
+                                             │      feature schemas from STAGE → PROD)
+                                             ├── gml deploy dags        (PROD Composer)
+                                             └── gml deploy features    (PROD Feature Store)
+
+ Push to prod/*             → PROD (Exp)    ci-prod-exp.yaml:
+                                             ├── pytest tests/unit/
+                                             ├── gml deploy dags        (PROD Composer, isolated DAG ID)
+                                             └── gml run {pipeline} --vertex (A/B experiment run)
+
+ PR merged / branch inactive → DEV teardown teardown.yaml:
+                                             └── gml teardown --namespace {branch_namespace}
+                                                   (deletes DEV GCS prefix, BQ dataset,
+                                                    Vertex experiments, Feature Store views)
+─────────────────────────────────────────────────────────────────────────────
 ```
 
-### 11.1 Environment Promotion
+### 11.1 Environment Promotion (STAGE → PROD)
 
-Environments = GCP projects + branch (`main`). Promotion is:
+PROD is never deployed to directly from source code. Only validated STAGE artifacts are promoted.
 
-1. PR from `feature/X` → `main`
-2. CI runs full test suite
-3. On merge, deploy workflow triggers for `main` branch namespace
-4. `gml promote --resource model:churn-v1` copies a validated model artifact from feature namespace → main namespace and updates the Endpoint traffic split
+**Standard release flow:**
 
-No separate "staging" environment config files. Staging IS the feature branch.
+1. Feature branches iterate in DEV (ephemeral, branch-namespaced resources).
+2. PR merge to `main` triggers a full STAGE deployment — compiles pipelines, syncs DAGs, upserts Feature Store schemas, runs Vertex AI pipelines end-to-end.
+3. A data scientist or release engineer reviews STAGE metrics and model evaluation results.
+4. When ready, a **release tag** (e.g., `v1.3.0`) is pushed manually. The `promote.yaml` workflow:
+   - Copies the compiled pipeline YAML from STAGE GCS → PROD GCS (no recompilation in PROD).
+   - Promotes the validated Vertex AI Model from STAGE Model Registry → PROD Model Registry.
+   - Updates PROD Endpoint traffic split (supports canary: e.g., 10% new / 90% existing).
+   - Syncs PROD Composer DAGs and Feature Store schemas.
+5. The PROD namespace uses a stable alias (`{team}-{project}-prod`) for Endpoints and online Feature Store serving, so consumer URLs never change across releases.
+
+**A/B / live experimentation flow (`prod/*` branches):**
+
+1. A `prod/experiment-xyz` branch is created from `main`.
+2. The `ci-prod-exp.yaml` workflow deploys it to PROD with its own namespace (`{team}-{project}-experiment-xyz`), a separate Endpoint or traffic split, and isolated DAG IDs.
+3. Experiment results are evaluated; the branch is merged to `main` (becoming the next STAGE candidate) or deleted.
+
+**What is NEVER done:**
+- Deploying directly from a feature branch to PROD.
+- Recompiling or rebuilding pipeline code in the PROD project.
+- Running `terraform apply` in PROD from a feature branch.
 
 ---
 
@@ -651,13 +723,14 @@ A `ruff` plugin (or pre-commit hook) enforces:
 
 ### Phase 5 — CLI & Developer Experience (Week 5–6)
 - [ ] `gml deploy dags` (Composer DAG sync)
-- [ ] `gml promote` (artifact promotion between namespaces)
+- [ ] `gml promote` (STAGE → PROD artifact promotion via release tag)
+- [ ] `gml teardown` (ephemeral DEV resource deletion by namespace)
 - [ ] `gml lint` (naming convention enforcement)
-- [ ] `gml context show` (full resource map)
+- [ ] `gml context show` (full resource map, includes resolved GCP project per environment)
 - [ ] Project template (cookiecutter or `gml init`)
 
 ### Phase 6 — CI/CD & Documentation (Week 6–7)
-- [ ] GitHub Actions: `ci.yaml` + `deploy.yaml` templates
+- [ ] GitHub Actions: `ci-dev.yaml`, `ci-stage.yaml`, `promote.yaml`, `ci-prod-exp.yaml`, `teardown.yaml` templates
 - [ ] `bootstrap.sh` for one-time GCP project setup (IAM, APIs, Composer env)
 - [ ] End-to-end example pipeline (churn prediction)
 - [ ] Developer guide
