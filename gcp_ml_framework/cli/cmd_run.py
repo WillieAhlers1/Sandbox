@@ -53,7 +53,8 @@ def run_local(
     )
     pipeline_def = _load_pipeline(pipeline_dir)
 
-    runner = LocalRunner(ctx)
+    seeds_dir = pipeline_dir / "seeds"
+    runner = LocalRunner(ctx, seeds_dir=seeds_dir if seeds_dir.exists() else None)
     if dry_run:
         runner.print_plan(pipeline_def)
     else:
