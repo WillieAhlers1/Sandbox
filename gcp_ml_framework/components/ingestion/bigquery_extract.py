@@ -83,8 +83,9 @@ class BigQueryExtract(BaseComponent):
             gcs_prefix=context.gcs_prefix,
             run_date=run_date or "2024-01-01",
         )
+        # DuckDB uses ANSI double-quote identifier quoting; BigQuery uses backticks.
+        rendered = rendered.replace("`", '"')
         out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")
         out_path = os.path.join(out_dir, "output.parquet")
-        # DuckDB can execute most BigQuery-compatible SQL dialects
         duckdb.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
         return out_path
