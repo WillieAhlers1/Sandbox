@@ -1,0 +1,11 @@
+user_id,session_count_7d,session_count_30d,total_purchases_30d,days_since_last_login,support_tickets_90d,avg_session_duration_s,churned_within_30d,event_date
+u001,12,45,3,2,0,320.5,false,2023-12-20
+u002,3,8,0,15,2,95.0,true,2023-12-18
+u003,25,90,12,1,0,540.2,false,2023-12-22
+u004,1,2,0,30,4,45.0,true,2023-11-30
+u005,8,30,5,5,1,280.0,false,2023-12-15
+u006,0,1,0,60,3,20.0,true,2023-10-15
+u007,18,70,8,3,0,410.8,false,2023-12-21
+u008,5,12,1,12,1,150.3,false,2023-12-10
+u009,2,5,0,25,2,60.0,true,2023-12-01
+u010,30,110,20,1,0,620.0,false,2023-12-23

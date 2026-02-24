@@ -25,10 +25,75 @@ class LocalRunner:
     - Local iteration without GCP access
     - Unit and integration tests
     - CI compile-only checks (--dry-run)
+
+    Seed data
+    ---------
+    SQL-based components (BigQueryExtract, BQTransform) query DuckDB by the
+    branch-namespaced table name, e.g. ``"dsci_churn_pred_main"."raw_events"``.
+    Two mechanisms populate those tables automatically:
+
+    1. **Seed files** — place ``seeds/<table_name>.csv`` (or ``.parquet``) in the
+       pipeline directory.  ``_seed_duckdb()`` loads them into DuckDB before the
+       first step runs.
+
+    2. **Intermediate registration** — after each step ``_register_output()``
+       registers the step's Parquet output as a DuckDB table so that downstream
+       SQL transforms can reference it by name.
     """
 
-    def __init__(self, context: "MLContext") -> None:
+    def __init__(self, context: "MLContext", seeds_dir: Path | None = None) -> None:
         self._ctx = context
+        self._seeds_dir = Path(seeds_dir) if seeds_dir else None
+
+    def _seed_duckdb(self) -> None:
+        """Pre-populate DuckDB with fixture data from the seeds/ directory.
+
+        Any ``.csv`` or ``.parquet`` file in ``seeds_dir`` is loaded as a table
+        named ``<bq_dataset>.<stem>`` so that ingestion SQL can reference it.
+        """
+        if not self._seeds_dir or not self._seeds_dir.exists():
+            return
+
+        import duckdb
+
+        dataset = self._ctx.bq_dataset
+        duckdb.sql(f'CREATE SCHEMA IF NOT EXISTS "{dataset}"')
+
+        for seed_file in sorted(self._seeds_dir.iterdir()):
+            if seed_file.suffix == ".parquet":
+                reader = f"read_parquet('{seed_file.as_posix()}')"
+            elif seed_file.suffix == ".csv":
+                reader = f"read_csv_auto('{seed_file.as_posix()}')"
+            else:
+                continue
+
+            table_name = seed_file.stem
+            duckdb.sql(
+                f'CREATE OR REPLACE TABLE "{dataset}"."{table_name}" '
+                f"AS SELECT * FROM {reader}"
+            )
+            print(f"[local]   seeded  {dataset}.{table_name}  ({seed_file.name})")
+
+    def _register_output(self, component: Any, result: Any) -> None:
+        """Register a step's Parquet output as a DuckDB table.
+
+        This makes intermediate outputs (e.g. ``churn_training_raw``) queryable
+        by name in downstream SQL transforms without any extra configuration.
+        """
+        if not isinstance(result, str) or not result.endswith(".parquet"):
+            return
+        if not hasattr(component, "output_table"):
+            return
+
+        import duckdb
+
+        dataset = self._ctx.bq_dataset
+        table_name = component.output_table
+        duckdb.sql(
+            f'CREATE OR REPLACE TABLE "{dataset}"."{table_name}" '
+            f"AS SELECT * FROM read_parquet('{result}')"
+        )
+        print(f"[local]   registered  {dataset}.{table_name}")
 
     def print_plan(self, pipeline_def: "PipelineDefinition") -> None:
         print(f"\nPipeline: {pipeline_def.name!r}  (schedule={pipeline_def.schedule!r})")
@@ -50,6 +115,8 @@ class LocalRunner:
 
         Returns a dict of {step_name: output}.
         """
+        self._seed_duckdb()
+
         outputs: dict[str, Any] = {}
         prev_output: Any = None
 
@@ -68,6 +135,7 @@ class LocalRunner:
                 result = step.component.local_run(self._ctx, **kwargs)
                 outputs[step.name] = result
                 prev_output = result
+                self._register_output(step.component, result)
                 print(f"[local]   → {result}")
             except Exception as exc:
                 print(f"[local]   FAILED: {exc}")
