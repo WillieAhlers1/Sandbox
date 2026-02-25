@@ -3,15 +3,15 @@
 # Commit it. Never put secrets here — use GCP Secret Manager (!secret key-name).
 
 team: dsci
-project: example-churn
+project: examplechurn
 
 gcp:
   # Replace these with your actual GCP project IDs.
-  dev_project_id: my-gcp-project-dev
-  staging_project_id: my-gcp-project-staging
-  prod_project_id: my-gcp-project-prod
+  dev_project_id: gcp-gap-demo-dev
+  staging_project_id: gcp-gap-demo-staging
+  prod_project_id: gcp-gap-demo-prod
   region: us-central1
-  composer_env: ml-composer-env
+  composer_env:
   artifact_registry_host: us-central1-docker.pkg.dev
 
 secrets:
