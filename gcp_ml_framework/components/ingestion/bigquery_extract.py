@@ -1,7 +1,5 @@
 """BigQueryExtract — run a SQL query and export results to GCS as Parquet."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -72,7 +70,7 @@ class BigQueryExtract(BaseComponent):
 
         return bigquery_extract
 
-    def local_run(self, context: MLContext, run_date: str = "", **kwargs: Any) -> str:
+    def local_run(self, context: "MLContext", run_date: str = "", **kwargs: Any) -> str:
         """Run the BQ query locally using DuckDB and write Parquet to a temp dir."""
         import os
         import tempfile

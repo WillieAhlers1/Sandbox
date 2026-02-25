@@ -1,7 +1,5 @@
 """GCSExtract — copy files from a GCS source path to the branch staging prefix."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -69,7 +67,7 @@ class GCSExtract(BaseComponent):
 
         return gcs_extract
 
-    def local_run(self, context: MLContext, **kwargs: Any) -> str:
+    def local_run(self, context: "MLContext", **kwargs: Any) -> str:
         import tempfile
 
         out_dir = tempfile.mkdtemp(prefix=f"gml_{self.destination_folder}_")

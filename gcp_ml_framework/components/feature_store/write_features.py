@@ -1,7 +1,5 @@
 """WriteFeatures — sync a BQ table into the Vertex AI Feature Store online store."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -70,7 +68,7 @@ class WriteFeatures(BaseComponent):
 
         return write_features
 
-    def local_run(self, context: MLContext, input_path: str = "", **kwargs: Any) -> None:
+    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> None:
         """In local mode, log feature write without touching Feature Store."""
         import pandas as pd
 
@@ -142,7 +140,7 @@ class ReadFeatures(BaseComponent):
 
         return read_features
 
-    def local_run(self, context: MLContext, **kwargs: Any) -> str:
+    def local_run(self, context: "MLContext", **kwargs: Any) -> str:
         import os
         import tempfile
 

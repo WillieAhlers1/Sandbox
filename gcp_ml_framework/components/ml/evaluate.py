@@ -1,7 +1,5 @@
 """EvaluateModel — evaluate a trained model and apply metric gates."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -92,7 +90,7 @@ class EvaluateModel(BaseComponent):
 
     def local_run(
         self,
-        context: MLContext,
+        context: "MLContext",
         model_path: str = "",
         eval_dataset_path: str = "",
         **kwargs: Any,

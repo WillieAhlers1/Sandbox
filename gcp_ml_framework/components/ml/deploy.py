@@ -1,7 +1,5 @@
 """DeployModel — upload a model to Vertex AI Model Registry and deploy to an Endpoint."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -98,7 +96,7 @@ class DeployModel(BaseComponent):
 
     def local_run(
         self,
-        context: MLContext,
+        context: "MLContext",
         model_path: str = "",
         **kwargs: Any,
     ) -> str:

@@ -1,7 +1,5 @@
 """BQTransform — run a SQL transformation in BigQuery and write to a BQ table."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -85,7 +83,7 @@ class BQTransform(BaseComponent):
 
         return bq_transform
 
-    def local_run(self, context: MLContext, run_date: str = "", **kwargs: Any) -> str:
+    def local_run(self, context: "MLContext", run_date: str = "", **kwargs: Any) -> str:
         import os
         import tempfile
 
@@ -130,7 +128,7 @@ class PandasTransform(BaseComponent):
             "PandasTransform is a local-only stub. Use BQTransform for production."
         )
 
-    def local_run(self, context: MLContext, input_path: str = "", **kwargs: Any) -> str:
+    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> str:
         import os
         import tempfile
 

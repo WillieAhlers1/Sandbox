@@ -1,7 +1,5 @@
 """TrainModel — submit a Vertex AI Custom Training Job."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -93,7 +91,7 @@ class TrainModel(BaseComponent):
 
         return train_model
 
-    def local_run(self, context: MLContext, dataset_path: str = "", **kwargs: Any) -> str:
+    def local_run(self, context: "MLContext", dataset_path: str = "", **kwargs: Any) -> str:
         """Simulate training locally — writes a placeholder model artifact."""
         import json
         import os
