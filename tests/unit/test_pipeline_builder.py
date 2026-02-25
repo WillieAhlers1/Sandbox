@@ -246,6 +246,55 @@ class TestCompiler:
         )
 
 
+    def test_deploy_registers_model_via_upload(self):
+        """DeployModel KFP component must register model via aiplatform.Model.upload."""
+        dm = DeployModel(endpoint_name="ep")
+        kfp_fn = dm.as_kfp_component()
+        source = kfp_fn.component_spec.implementation.container.command[-1]
+        assert "Model.upload(" in source
+
+    def test_deploy_receives_model_uri_from_train(self, test_context):
+        """deploy-model's model_uri must come from train-model output in compiled YAML."""
+        import tempfile
+
+        from gcp_ml_framework.pipeline.compiler import PipelineCompiler
+
+        pipeline = (
+            PipelineBuilder(name="test-pipe", schedule="@daily")
+            .ingest(BigQueryExtract(query="SELECT 1", output_table="raw"))
+            .train(TrainModel(trainer_image="img:latest"))
+            .deploy(DeployModel(endpoint_name="ep"))
+            .build()
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            compiler = PipelineCompiler(output_dir=tmpdir)
+            yaml_path = compiler.compile(pipeline, test_context)
+            yaml_content = yaml_path.read_text()
+
+        import yaml as pyyaml
+
+        compiled = pyyaml.safe_load(yaml_content)
+        root = compiled.get("root", compiled)
+        dag = root.get("dag", {})
+        tasks = dag.get("tasks", {})
+        deploy_task = tasks.get("deploy-model", {})
+        deploy_inputs = deploy_task.get("inputs", {}).get("parameters", {})
+        model_ref = deploy_inputs.get("model_uri", {}).get("taskOutputParameter", {})
+        assert model_ref.get("producerTask") == "train-model", (
+            f"model_uri should come from train-model, got {model_ref}"
+        )
+
+    def test_example_churn_uses_prebuilt_serving_container(self):
+        """Example churn pipeline must use Vertex AI pre-built sklearn serving container."""
+        from pipelines.example_churn.pipeline import pipeline
+
+        deploy_step = [s for s in pipeline.steps if s.stage == "deploy"][0]
+        image = deploy_step.component.serving_container_image
+        assert "vertex-ai/prediction/sklearn-cpu" in image, (
+            f"Expected pre-built sklearn container, got {image}"
+        )
+
+
 class TestLocalRunner:
     def test_print_plan(self, simple_pipeline, test_context, capsys):
         from gcp_ml_framework.pipeline.runner import LocalRunner

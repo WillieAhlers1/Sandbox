@@ -101,11 +101,11 @@ pipeline = (
     .deploy(
         DeployModel(
             endpoint_name="churn-classifier",
-            serving_container_image="{artifact_registry}/churn-serving:latest",
+            serving_container_image="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest",
             machine_type="n1-standard-2",
             min_replica_count=1,
-            max_replica_count=5,
-            traffic_split={"new": 10, "current": 90},   # canary: 10% traffic to new model
+            max_replica_count=3,
+            traffic_split={"new": 100},
         ),
         name="deploy_churn_model",
     )
