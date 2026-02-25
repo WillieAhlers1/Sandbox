@@ -90,6 +90,10 @@ class BQTransform(BaseComponent):
         import tempfile
         import os
 
+        # Use the shared connection from LocalRunner so intermediate tables are visible.
+        # Fall back to a fresh connection when called outside the runner (e.g. tests).
+        conn: duckdb.DuckDBPyConnection = kwargs.get("db_conn") or duckdb.connect()
+
         sql = self._get_sql()
         rendered = sql.format(
             bq_dataset=context.bq_dataset,
@@ -100,7 +104,7 @@ class BQTransform(BaseComponent):
         rendered = rendered.replace("`", '"')
         out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")
         out_path = os.path.join(out_dir, f"{self.output_table}.parquet")
-        duckdb.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
+        conn.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
         return out_path
 
 

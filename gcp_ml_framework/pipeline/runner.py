@@ -7,6 +7,7 @@ VertexRunner  — submits a compiled KFP YAML to Vertex AI Pipelines.
 
 from __future__ import annotations
 
+import duckdb
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +45,9 @@ class LocalRunner:
     def __init__(self, context: "MLContext", seeds_dir: Path | None = None) -> None:
         self._ctx = context
         self._seeds_dir = Path(seeds_dir) if seeds_dir else None
+        # Single persistent in-memory connection shared across all steps so that
+        # seeded tables and intermediate outputs are visible to every local_run().
+        self._conn = duckdb.connect()
 
     def _seed_duckdb(self) -> None:
         """Pre-populate DuckDB with fixture data from the seeds/ directory.
@@ -54,10 +58,8 @@ class LocalRunner:
         if not self._seeds_dir or not self._seeds_dir.exists():
             return
 
-        import duckdb
-
         dataset = self._ctx.bq_dataset
-        duckdb.sql(f'CREATE SCHEMA IF NOT EXISTS "{dataset}"')
+        self._conn.sql(f'CREATE SCHEMA IF NOT EXISTS "{dataset}"')
 
         for seed_file in sorted(self._seeds_dir.iterdir()):
             if seed_file.suffix == ".parquet":
@@ -68,7 +70,7 @@ class LocalRunner:
                 continue
 
             table_name = seed_file.stem
-            duckdb.sql(
+            self._conn.sql(
                 f'CREATE OR REPLACE TABLE "{dataset}"."{table_name}" '
                 f"AS SELECT * FROM {reader}"
             )
@@ -85,11 +87,9 @@ class LocalRunner:
         if not hasattr(component, "output_table"):
             return
 
-        import duckdb
-
         dataset = self._ctx.bq_dataset
         table_name = component.output_table
-        duckdb.sql(
+        self._conn.sql(
             f'CREATE OR REPLACE TABLE "{dataset}"."{table_name}" '
             f"AS SELECT * FROM read_parquet('{result}')"
         )
@@ -127,7 +127,7 @@ class LocalRunner:
 
             print(f"[local] {step.name} ({step.component.__class__.__name__}) ...")
             try:
-                kwargs: dict[str, Any] = {"run_date": run_date}
+                kwargs: dict[str, Any] = {"run_date": run_date, "db_conn": self._conn}
                 # Wire the previous step's output as input to the next step
                 if prev_output is not None:
                     kwargs["input_path"] = prev_output
