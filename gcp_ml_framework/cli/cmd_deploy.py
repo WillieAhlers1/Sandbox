@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -16,7 +15,7 @@ deploy_app = typer.Typer(help="Deploy DAGs, feature schemas, and infrastructure.
 def deploy_dags(
     pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
     dags_dir: Path = typer.Option(Path("dags"), "--dags-dir"),
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c"),
+    framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
     """
@@ -61,8 +60,8 @@ def deploy_dags(
 @deploy_app.command("features")
 def deploy_features(
     schema_dir: Path = typer.Option(Path("feature_schemas"), "--schema-dir"),
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c"),
-    entities: Optional[list[str]] = typer.Argument(None, help="Entity names to deploy. Deploys all if omitted."),
+    framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
+    entities: list[str] | None = typer.Argument(None, help="Entity names to deploy. Deploys all if omitted."),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
     """
@@ -72,8 +71,8 @@ def deploy_features(
         gml deploy features          # deploy all schemas
         gml deploy features user item
     """
-    from gcp_ml_framework.feature_store.schema import load_entity_schemas
     from gcp_ml_framework.feature_store.client import FeatureStoreClient
+    from gcp_ml_framework.feature_store.schema import load_entity_schemas
 
     ctx = load_context(framework_yaml=framework_yaml)
     schemas = load_entity_schemas(schema_dir)

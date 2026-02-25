@@ -1,7 +1,5 @@
 """TrainModel — submit a Vertex AI Custom Training Job."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -63,9 +61,14 @@ class TrainModel(BaseComponent):
         ) -> str:
             """Returns GCS URI of the saved model artifact."""
             import json
+
             from google.cloud import aiplatform
 
-            aiplatform.init(project=project, location=region, staging_bucket=staging_bucket)
+            aiplatform.init(
+                project=project, location=region,
+                staging_bucket=staging_bucket,
+                experiment=experiment_name,
+            )
 
             args = json.loads(trainer_args) + [f"--model-output={model_output_uri}"]
             if dataset_uri:

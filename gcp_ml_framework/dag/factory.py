@@ -31,7 +31,7 @@ _DEFAULT_ARGS = {
 }
 
 
-def make_dag(pipeline_def: "PipelineDefinition", context: "MLContext"):
+def make_dag(pipeline_def: PipelineDefinition, context: MLContext):
     """
     Build and return an Airflow DAG from a PipelineDefinition.
 
@@ -75,7 +75,7 @@ class DAGFactory:
     """Static factory for DAG file generation (used by `gml deploy dags`)."""
 
     @staticmethod
-    def render_dag_file(pipeline_name: str, context: "MLContext") -> str:
+    def render_dag_file(pipeline_name: str, context: MLContext) -> str:
         """
         Render the Python source of an Airflow DAG file for the given pipeline.
 

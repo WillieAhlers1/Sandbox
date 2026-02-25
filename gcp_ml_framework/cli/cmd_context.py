@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -14,8 +13,8 @@ context_app = typer.Typer(help="Show context and resolved resource names.")
 
 @context_app.command("show")
 def show(
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to framework.yaml"),
-    branch: Optional[str] = typer.Option(None, "--branch", "-b", help="Override git branch"),
+    framework_yaml: Path | None = typer.Option(None, "--config", "-c", help="Path to framework.yaml"),
+    branch: str | None = typer.Option(None, "--branch", "-b", help="Override git branch"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """

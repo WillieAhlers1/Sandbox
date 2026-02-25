@@ -15,11 +15,13 @@ def bq_to_duckdb(sql: str) -> str:
     """Rewrite common BigQuery SQL idioms to DuckDB-compatible equivalents.
 
     Transformations applied (in order):
-    1. Backtick identifiers ``\`schema.table\``` → ``"schema"."table"``
+    1. Backtick identifiers `` `schema.table` `` → ``"schema"."table"``
     2. ``DATE_SUB(expr, INTERVAL n unit)`` → ``(CAST(expr AS DATE) - INTERVAL n unit)``
     3. ``DATE_ADD(expr, INTERVAL n unit)`` → ``(CAST(expr AS DATE) + INTERVAL n unit)``
     4. ``SAFE_DIVIDE(a, b)`` → ``(CASE WHEN (b) = 0 THEN NULL ELSE (a) / (b) END)``
     5. ``LOG1P(x)`` → ``LN(1 + (x))``
+    6. ``CAST(... AS FLOAT64)`` → ``CAST(... AS DOUBLE)``
+    7. ``CURRENT_TIMESTAMP()`` → ``now()``
     """
 
     # 1. Backtick-quoted identifiers → double-quoted, splitting on dots
@@ -57,6 +59,22 @@ def bq_to_duckdb(sql: str) -> str:
     sql = re.sub(
         rf"LOG1P\(\s*({_EXPR})\s*\)",
         r"LN(1 + (\1))",
+        sql,
+        flags=re.IGNORECASE,
+    )
+
+    # 6. CAST(... AS FLOAT64) → CAST(... AS DOUBLE)
+    sql = re.sub(
+        r"\bAS\s+FLOAT64\b",
+        "AS DOUBLE",
+        sql,
+        flags=re.IGNORECASE,
+    )
+
+    # 7. CURRENT_TIMESTAMP() → now()
+    sql = re.sub(
+        r"CURRENT_TIMESTAMP\(\s*\)",
+        "now()",
         sql,
         flags=re.IGNORECASE,
     )

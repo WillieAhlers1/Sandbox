@@ -1,7 +1,5 @@
 """WriteFeatures — sync a BQ table into the Vertex AI Feature Store online store."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +27,7 @@ class WriteFeatures(BaseComponent):
     feature_group: str
     entity_id_column: str = "entity_id"
     feature_time_column: str = "feature_timestamp"
+    feature_ids: list[str] = field(default_factory=list)  # empty = all features in entity type
     bq_source_table: str | None = None  # defaults to the transform output_table
     component_name: str = "write_features"
     config: ComponentConfig = field(default_factory=ComponentConfig)
@@ -50,7 +49,11 @@ class WriteFeatures(BaseComponent):
             bq_source_table: str,
             entity_id_column: str,
             feature_time_column: str,
+            feature_ids: str = "[]",
         ) -> None:
+            import json
+            import time
+
             from google.cloud import aiplatform
 
             aiplatform.init(project=project, location=region)
@@ -60,13 +63,44 @@ class WriteFeatures(BaseComponent):
                 location=region,
             )
             entity_type = fs.get_entity_type(entity_type_id=entity)
-            entity_type.ingest_from_bq(
-                feature_ids=None,
-                feature_time=feature_time_column,
-                entity_id_field=entity_id_column,
-                bq_source_uri=f"bq://{bq_source_table}",
-                sync=True,
+            ids = json.loads(feature_ids) or None
+            # Use the low-level gRPC client directly to call ImportFeatureValues.
+            # The high-level SDK has a known bug where ingest_from_bq(sync=True)
+            # raises GoogleAPICallError("Unexpected state") even on success.
+            from google.cloud.aiplatform_v1 import FeaturestoreServiceClient
+            from google.cloud.aiplatform_v1.types import featurestore_service
+
+            api_endpoint = f"{region}-aiplatform.googleapis.com"
+            client = FeaturestoreServiceClient(
+                client_options={"api_endpoint": api_endpoint},
             )
+            et_resource = entity_type.resource_name
+            feature_specs = [
+                featurestore_service.ImportFeatureValuesRequest.FeatureSpec(id=fid)
+                for fid in (ids or [])
+            ]
+            request = featurestore_service.ImportFeatureValuesRequest(
+                entity_type=et_resource,
+                bigquery_source={"input_uri": f"bq://{bq_source_table}"},
+                entity_id_field=entity_id_column,
+                feature_specs=feature_specs,
+                feature_time_field=feature_time_column,
+            )
+            operation = client.import_feature_values(request=request)
+            # Don't call operation.result() — that triggers the SDK bug.
+            # Instead, poll the LRO manually via the operations client.
+            op_name = operation.operation.name
+            print(f"Import LRO started: {op_name}")
+            ops_client = client.transport.operations_client
+            for _ in range(60):
+                time.sleep(10)
+                op = ops_client.get_operation(op_name)
+                if op.done:
+                    if op.HasField("error") and op.error.code != 0:
+                        raise RuntimeError(f"Import failed: {op.error.message}")
+                    print("Import completed successfully.")
+                    return
+            raise RuntimeError("Import LRO did not complete within 10 minutes")
 
         return write_features
 
@@ -79,7 +113,7 @@ class WriteFeatures(BaseComponent):
             print(f"[local] WriteFeatures: {len(df)} rows for entity={self.entity!r}, "
                   f"feature_group={self.feature_group!r}")
         else:
-            print(f"[local] WriteFeatures: no input path provided, skipping.")
+            print("[local] WriteFeatures: no input path provided, skipping.")
 
 
 @dataclass
@@ -117,6 +151,7 @@ class ReadFeatures(BaseComponent):
         ) -> str:
             """Returns GCS URI of the exported feature Parquet."""
             import json
+
             from google.cloud import bigquery
 
             ids = json.loads(feature_ids)
@@ -124,12 +159,12 @@ class ReadFeatures(BaseComponent):
             client = bigquery.Client(project=project)
             table = f"{project}.{dataset}.feat_{entity}_{feature_group}"
             sql = f"SELECT entity_id, {cols} FROM `{table}`"
-            out_uri = f"{gcs_prefix}features/{entity}_{feature_group}/*.parquet"
-            extract_cfg = bigquery.ExtractJobConfig(destination_format="PARQUET")
             df = client.query(sql).to_dataframe()
             # In KFP, we write to GCS via pandas
-            import tempfile, os
-            import pyarrow as pa, pyarrow.parquet as pq
+            import tempfile
+
+            import pyarrow as pa
+            import pyarrow.parquet as pq
             tmp = tempfile.mktemp(suffix=".parquet")
             pq.write_table(pa.Table.from_pandas(df), tmp)
             from google.cloud import storage
@@ -142,8 +177,10 @@ class ReadFeatures(BaseComponent):
         return read_features
 
     def local_run(self, context: "MLContext", **kwargs: Any) -> str:
+        import os
+        import tempfile
+
         import pandas as pd
-        import tempfile, os
 
         df = pd.DataFrame(columns=self.feature_ids or ["entity_id", "feature_placeholder"])
         out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tempfile
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -27,8 +26,8 @@ class VertexPipelineOperator:
         self,
         task_id: str,
         pipeline_name: str,
-        context: "MLContext",
-        pipeline_def: "PipelineDefinition",
+        context: MLContext,
+        pipeline_def: PipelineDefinition,
         enable_caching: bool = True,
         sync: bool = True,
         **kwargs: Any,

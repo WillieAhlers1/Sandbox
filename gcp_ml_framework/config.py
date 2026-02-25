@@ -11,7 +11,7 @@ required GCP resource identifiers.
 from __future__ import annotations
 
 import os
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from gcp_ml_framework.naming import get_git_branch
 
 
-class GitState(str, Enum):
+class GitState(StrEnum):
     """The resolved environment driven by git branch/tag state."""
 
     DEV = "dev"
@@ -117,7 +117,7 @@ class FrameworkConfig(BaseSettings):
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 
     @model_validator(mode="after")
-    def _validate_projects(self) -> "FrameworkConfig":
+    def _validate_projects(self) -> FrameworkConfig:
         state = _resolve_git_state(self.branch)
         # Only require the relevant project ID to be set.
         required = {

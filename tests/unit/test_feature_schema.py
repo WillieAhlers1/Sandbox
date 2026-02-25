@@ -9,11 +9,10 @@ import yaml
 from gcp_ml_framework.feature_store.schema import (
     EntitySchema,
     FeatureType,
+    _parse_entity_schema,
     load_entity_schema,
     load_entity_schemas,
-    _parse_entity_schema,
 )
-
 
 SAMPLE_YAML = textwrap.dedent("""\
     entity: user

@@ -1,7 +1,5 @@
 """BigQueryExtract — run a SQL query and export results to GCS as Parquet."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -52,6 +50,7 @@ class BigQueryExtract(BaseComponent):
             output_table: str,
             gcs_prefix: str,
             write_disposition: str,
+            run_date: str = "",
         ) -> str:
             """Returns the GCS URI of the exported Parquet files."""
             from google.cloud import bigquery
@@ -62,7 +61,7 @@ class BigQueryExtract(BaseComponent):
                 destination=full_table,
                 write_disposition=write_disposition,
             )
-            rendered_query = query.format(bq_dataset=dataset, gcs_prefix=gcs_prefix)
+            rendered_query = query.format(bq_dataset=dataset, gcs_prefix=gcs_prefix, run_date=run_date)
             client.query(rendered_query, job_config=job_config).result()
 
             output_uri = f"{gcs_prefix}extracts/{output_table}/*.parquet"
@@ -74,9 +73,10 @@ class BigQueryExtract(BaseComponent):
 
     def local_run(self, context: "MLContext", run_date: str = "", **kwargs: Any) -> str:
         """Run the BQ query locally using DuckDB and write Parquet to a temp dir."""
-        import duckdb
-        import tempfile
         import os
+        import tempfile
+
+        import duckdb
 
         # Use the shared connection from LocalRunner so seeded tables are visible.
         # Fall back to a fresh connection when called outside the runner (e.g. tests).

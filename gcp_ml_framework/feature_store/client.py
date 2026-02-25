@@ -11,7 +11,7 @@ Feature views are branch-namespaced to prevent DEV contamination of PROD.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
@@ -34,7 +34,7 @@ class FeatureStoreClient:
         client.get_online_features(entity="user", entity_ids=["u1", "u2"], feature_ids=["session_count_7d"])
     """
 
-    def __init__(self, context: "MLContext") -> None:
+    def __init__(self, context: MLContext) -> None:
         self._ctx = context
         self._project = context.gcp_project
         self._region = context.region
@@ -70,13 +70,15 @@ class FeatureStoreClient:
                 location=self._region,
             )
 
-    def ensure_entity(self, schema: "EntitySchema") -> Any:
+    # The Feature Store API uses DOUBLE, not FLOAT64.
+    _VALUE_TYPE_MAP: dict[str, str] = {"FLOAT64": "DOUBLE"}
+
+    def ensure_entity(self, schema: EntitySchema) -> Any:
         """
         Create the entity type and all its features if they don't exist.
 
         Idempotent — safe to call on every deployment.
         """
-        from google.cloud import aiplatform  # type: ignore[import]
 
         fs = self.ensure_feature_store()
 
@@ -91,9 +93,10 @@ class FeatureStoreClient:
         existing_features = {f.name for f in entity_type.list_features()}
         for feature_def in schema.all_features():
             if feature_def.name not in existing_features:
+                api_type = self._VALUE_TYPE_MAP.get(feature_def.type.value, feature_def.type.value)
                 entity_type.create_feature(
                     feature_id=feature_def.name,
-                    value_type=feature_def.type.value,
+                    value_type=api_type,
                     description=feature_def.description,
                 )
 
@@ -112,10 +115,9 @@ class FeatureStoreClient:
 
         The feature view ID encodes the branch so DEV writes never overwrite PROD.
         """
-        from google.cloud import aiplatform  # type: ignore[import]
 
         fs = self.ensure_feature_store()
-        view_id = self._naming.feature_view_id(entity, feature_group)
+        _view_id = self._naming.feature_view_id(entity, feature_group)  # noqa: F841
 
         try:
             return fs.get_entity_type(entity_type_id=entity)
@@ -156,13 +158,8 @@ class FeatureStoreClient:
 
     def trigger_sync(self, entity: str, feature_group: str) -> None:
         """Manually trigger a BigQuery → Bigtable online-store sync for a feature view."""
-        from google.cloud import aiplatform  # type: ignore[import]
 
         self._init_aiplatform()
-        view_id = self._naming.feature_view_id(entity, feature_group)
+        _view_id = self._naming.feature_view_id(entity, feature_group)
         # Sync API depends on Feature Store version; log intent here
-        print(f"[FeatureStoreClient] Triggering sync for view: {view_id}")
-
-
-# Type stub for Any used in type hints
-from typing import Any
+        print(f"[FeatureStoreClient] Triggering sync for view: {_view_id}")

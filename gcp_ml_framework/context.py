@@ -43,7 +43,7 @@ class MLContext:
     raw_branch: str = field(compare=False)
 
     @classmethod
-    def from_config(cls, cfg: FrameworkConfig) -> "MLContext":
+    def from_config(cls, cfg: FrameworkConfig) -> MLContext:
         naming = NamingConvention(
             team=cfg.team,
             project=cfg.project,

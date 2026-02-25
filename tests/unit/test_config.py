@@ -1,12 +1,12 @@
 """Unit tests for config.py — layered config and environment resolution."""
 
 import pytest
+
 from gcp_ml_framework.config import (
     FrameworkConfig,
     GCPConfig,
     GitState,
     _resolve_git_state,
-    load_config,
 )
 
 
@@ -66,7 +66,7 @@ class TestFrameworkConfig:
         assert cfg.active_gcp_project == "prod"
 
     def test_missing_project_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             FrameworkConfig(
                 team="t",
                 project="p",

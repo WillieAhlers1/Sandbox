@@ -5,13 +5,13 @@ This is the reference pipeline for the GCP ML Framework.
 Edit this file to change the pipeline topology — no DAG code required.
 """
 
-from gcp_ml_framework.pipeline.builder import PipelineBuilder
+from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
 from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-from gcp_ml_framework.components.transformation.bq_transform import BQTransform
-from gcp_ml_framework.components.feature_store.write_features import WriteFeatures, ReadFeatures
-from gcp_ml_framework.components.ml.train import TrainModel
-from gcp_ml_framework.components.ml.evaluate import EvaluateModel
 from gcp_ml_framework.components.ml.deploy import DeployModel
+from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+from gcp_ml_framework.components.ml.train import TrainModel
+from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+from gcp_ml_framework.pipeline.builder import PipelineBuilder
 
 pipeline = (
     PipelineBuilder(
@@ -45,12 +45,15 @@ pipeline = (
                 SELECT
                     user_id,
                     session_count_7d,
+                    session_count_30d,
+                    CAST(total_purchases_30d AS FLOAT64) AS total_purchases_30d,
                     SAFE_DIVIDE(session_count_7d, NULLIF(session_count_30d, 0)) AS session_trend,
-                    LOG1P(total_purchases_30d) AS log_purchases_30d,
+                    LN(1 + total_purchases_30d) AS log_purchases_30d,
                     days_since_last_login,
                     support_tickets_90d,
                     avg_session_duration_s,
-                    label
+                    label,
+                    CURRENT_TIMESTAMP() AS feature_timestamp
                 FROM `{bq_dataset}.churn_training_raw`
                 WHERE user_id IS NOT NULL
             """,
@@ -64,6 +67,14 @@ pipeline = (
             feature_group="behavioral",
             entity_id_column="user_id",
             feature_time_column="feature_timestamp",
+            feature_ids=[
+                "session_count_7d",
+                "session_count_30d",
+                "total_purchases_30d",
+                "days_since_last_login",
+                "support_tickets_90d",
+                "avg_session_duration_s",
+            ],
         ),
         name="write_user_features",
     )
@@ -90,11 +101,11 @@ pipeline = (
     .deploy(
         DeployModel(
             endpoint_name="churn-classifier",
-            serving_container_image="{artifact_registry}/churn-serving:latest",
+            serving_container_image="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-5:latest",
             machine_type="n1-standard-2",
             min_replica_count=1,
-            max_replica_count=5,
-            traffic_split={"new": 10, "current": 90},   # canary: 10% traffic to new model
+            max_replica_count=3,
+            traffic_split={"new": 100},
         ),
         name="deploy_churn_model",
     )

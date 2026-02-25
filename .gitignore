@@ -1,11 +1,119 @@
-.env
+# ========================
+# Python
+# ========================
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+
+# ========================
+# Distribution / Packaging
+# ========================
+dist/
+build/
+*.egg-info/
+*.egg
+*.whl
+sdist/
+
+# ========================
+# Virtual Environments
+# ========================
+.venv/
+venv/
+env/
+ENV/
+
+# ========================
+# UV / Poetry
+# ========================
+.uv/
+# Keep uv.lock and poetry.lock tracked
+
+# ========================
+# Testing
+# ========================
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+
+# ========================
+# Linting / Type Checking
+# ========================
 .mypy_cache/
 .ruff_cache/
-.pytest_cache/
-dist/
-*.egg-info/
+.dmypy.json
+dmypy.json
+
+# ========================
+# IDE / Editor
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ========================
+# OS Files
+# ========================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ========================
+# Environment / Secrets
+# ========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.json
+!feature_schemas/*.json
+!package.json
+credentials/
+service-account*.json
+gcloud/
+
+# ========================
+# GCP / Vertex AI / KFP
+# ========================
 compiled_pipelines/
-.uv/
+*.pipeline.yaml
+pipeline_output/
+
+# ========================
+# Cloud Composer DAGs (auto-generated)
+# ========================
 dags/*.py
+!dags/_base.py
+
+# ========================
+# DuckDB (local stubs)
+# ========================
+*.duckdb
+*.duckdb.wal
+
+# ========================
+# Jupyter Notebooks
+# ========================
+.ipynb_checkpoints/
+
+# ========================
+# Local Development Artifacts
+# ========================
+local_output/
+tmp/
+*.log
+*.parquet
+*.csv
+!pipelines/*/seeds/*.csv

@@ -1,7 +1,7 @@
 """Unit tests for secrets/client.py — LocalSecretClient and resolve_dict."""
 
-import os
 import pytest
+
 from gcp_ml_framework.secrets.client import LocalSecretClient, make_secret_client
 
 

@@ -1,6 +1,5 @@
 """Unit tests for context.py — MLContext construction and properties."""
 
-import pytest
 from gcp_ml_framework.config import GitState
 from gcp_ml_framework.context import MLContext
 

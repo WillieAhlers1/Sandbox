@@ -1,7 +1,5 @@
 """DeployModel — upload a model to Vertex AI Model Registry and deploy to an Endpoint."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +58,7 @@ class DeployModel(BaseComponent):
         ) -> str:
             """Returns the Endpoint resource name."""
             import json
+
             from google.cloud import aiplatform
 
             aiplatform.init(project=project, location=region)

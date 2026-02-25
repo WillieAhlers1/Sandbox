@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
-from gcp_ml_framework.cli._helpers import console, load_context
+from gcp_ml_framework.cli._helpers import console
 
 promote_app = typer.Typer(help="Promote validated STAGE artifacts to PROD.")
 
@@ -18,7 +17,7 @@ def promote(
     to_branch: str = typer.Option("prod", "--to", help="Target environment ('prod')"),
     tag: str = typer.Option(..., "--tag", help="Release tag (e.g. v1.2.3)"),
     pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c"),
+    framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
     dry_run: bool = typer.Option(False, "--dry-run"),
 ) -> None:
     """

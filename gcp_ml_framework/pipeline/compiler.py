@@ -5,8 +5,6 @@ The compiled YAML is what gets submitted to Vertex AI Pipelines and stored in GC
 for artifact promotion (STAGE → PROD copies the YAML, never recompiles).
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,7 +22,7 @@ class PipelineCompiler:
     steps, then invokes kfp.compiler.Compiler() to produce the YAML artifact.
     """
 
-    def __init__(self, output_dir: Path | str = "compiled_pipelines") -> None:
+    def __init__(self, output_dir: "Path | str" = "compiled_pipelines") -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -40,7 +38,6 @@ class PipelineCompiler:
         """
         try:
             import kfp.compiler as kfp_compiler
-            from kfp import dsl
         except ImportError as exc:
             raise ImportError(
                 "kfp is required for compilation. Install with: pip install kfp>=2.7"
@@ -61,12 +58,14 @@ class PipelineCompiler:
 
         Each step's component.as_kfp_component() provides the KFP function.
         Steps are wired in sequence using .after() for dependency ordering.
+        Cross-step data flow is wired via prev_task.output.
         """
         from kfp import dsl
 
         steps = pipeline_def.steps
         pipeline_root = context.naming.gcs_pipeline_root(pipeline_def.name)
         ctx_params = self._build_context_params(context, pipeline_def)
+        derived_params = self._build_derived_params(context, pipeline_def, steps)
 
         @dsl.pipeline(
             name=pipeline_def.name,
@@ -75,13 +74,40 @@ class PipelineCompiler:
         )
         def _pipeline(run_date: str = ""):
             prev_task = None
+            last_dataset_output = None  # output from data-producing steps (ingest/transform)
+            last_model_output = None    # output from train step
             for step in steps:
                 component_fn = step.component.as_kfp_component()
-                params = {**ctx_params, **self._step_params(step, ctx_params, run_date)}
+                step_extra = derived_params.get(step.name, {})
+                all_params = {
+                    **ctx_params,
+                    **self._step_params(step, ctx_params, run_date),
+                    **step_extra,
+                }
+                # Only pass params the component actually accepts
+                accepted = set(component_fn.component_spec.inputs or {})
+                params = {k: v for k, v in all_params.items() if k in accepted}
+
+                # Wire cross-step data flow from tracked outputs
+                if last_dataset_output is not None:
+                    for key in ("dataset_uri", "eval_dataset_uri", "bq_source_table"):
+                        if key in accepted and key not in params:
+                            params[key] = last_dataset_output
+                if last_model_output is not None and "model_uri" in accepted and "model_uri" not in params:
+                    params["model_uri"] = last_model_output
+
                 task = component_fn(**params)
                 if prev_task is not None:
                     task.after(prev_task)
                 prev_task = task
+
+                # Track output — train steps produce model outputs, others produce datasets
+                if component_fn.component_spec.outputs:
+                    is_train = hasattr(step.component, "trainer_image")
+                    if is_train:
+                        last_model_output = task.output
+                    else:
+                        last_dataset_output = task.output
 
         return _pipeline
 
@@ -94,25 +120,70 @@ class PipelineCompiler:
             "feature_store_id": context.feature_store_id,
             "staging_bucket": context.naming.gcs_bucket,
             "experiment_name": context.naming.vertex_experiment(pipeline_def.name),
+            "artifact_registry": context.naming.artifact_registry_repo(
+                context.artifact_registry_host, context.gcp_project,
+            ),
         }
+
+    def _build_derived_params(
+        self, context: "MLContext", pipeline_def: "PipelineDefinition", steps: list
+    ) -> dict:
+        """Compute per-step derived params that aren't simple dataclass fields."""
+        derived: dict[str, dict] = {}
+        for step in steps:
+            comp = step.component
+            extra: dict = {}
+
+            # WriteFeatures / ReadFeatures: need feature_view_id
+            if hasattr(comp, "entity") and hasattr(comp, "feature_group"):
+                extra["feature_view_id"] = context.naming.feature_view_id(
+                    comp.entity, comp.feature_group
+                )
+
+            # TrainModel: needs job_name and model_output_uri
+            if hasattr(comp, "trainer_image"):
+                extra["job_name"] = context.naming.vertex_training_job_name(pipeline_def.name)
+                extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
+
+            # DeployModel: needs model_display_name and endpoint_display_name
+            if hasattr(comp, "endpoint_name"):
+                extra["model_display_name"] = context.naming.vertex_model_name(pipeline_def.name)
+                extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
+                    comp.endpoint_name
+                )
+
+            if extra:
+                derived[step.name] = extra
+        return derived
 
     def _step_params(self, step, ctx_params: dict, run_date: str) -> dict:
         """Extract component-specific params from the component dataclass fields."""
-        from dataclasses import asdict, fields
         import dataclasses
+        from dataclasses import fields
 
         component = step.component
         extra: dict = {}
 
-        # Pull dataclass fields (excluding component_name and config)
+        # Pull dataclass fields (excluding component_name, config, and None values)
         if dataclasses.is_dataclass(component):
             for f in fields(component):
                 if f.name in ("component_name", "config"):
                     continue
                 val = getattr(component, f.name)
+                if val is None:
+                    continue
                 if isinstance(val, (list, dict)):
                     extra[f.name] = json.dumps(val)
                 else:
                     extra[f.name] = val
+
+        extra["run_date"] = run_date
+
+        # Resolve {artifact_registry} placeholder in string values
+        ar = ctx_params.get("artifact_registry", "")
+        if ar:
+            for k, v in extra.items():
+                if isinstance(v, str) and "{artifact_registry}" in v:
+                    extra[k] = v.replace("{artifact_registry}", ar)
 
         return extra
