@@ -7,9 +7,10 @@ VertexRunner  — submits a compiled KFP YAML to Vertex AI Pipelines.
 
 from __future__ import annotations
 
-import duckdb
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import duckdb
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
@@ -42,7 +43,7 @@ class LocalRunner:
        SQL transforms can reference it by name.
     """
 
-    def __init__(self, context: "MLContext", seeds_dir: Path | None = None) -> None:
+    def __init__(self, context: MLContext, seeds_dir: Path | None = None) -> None:
         self._ctx = context
         self._seeds_dir = Path(seeds_dir) if seeds_dir else None
         # Single persistent in-memory connection shared across all steps so that
@@ -95,7 +96,7 @@ class LocalRunner:
         )
         print(f"[local]   registered  {dataset}.{table_name}")
 
-    def print_plan(self, pipeline_def: "PipelineDefinition") -> None:
+    def print_plan(self, pipeline_def: PipelineDefinition) -> None:
         print(f"\nPipeline: {pipeline_def.name!r}  (schedule={pipeline_def.schedule!r})")
         print(f"{'Step':<30} {'Stage':<20} {'Component'}")
         print("-" * 70)
@@ -105,7 +106,7 @@ class LocalRunner:
 
     def run(
         self,
-        pipeline_def: "PipelineDefinition",
+        pipeline_def: PipelineDefinition,
         run_date: str = "",
         dry_run: bool = False,
     ) -> dict[str, Any]:
@@ -149,7 +150,7 @@ class VertexRunner:
     Submit a compiled KFP pipeline YAML to Vertex AI Pipelines.
     """
 
-    def __init__(self, context: "MLContext") -> None:
+    def __init__(self, context: MLContext) -> None:
         self._ctx = context
 
     def submit(

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from gcp_ml_framework.config import FrameworkConfig, load_config
+from gcp_ml_framework.config import load_config
 from gcp_ml_framework.context import MLContext
 
 console = Console()
@@ -17,9 +16,9 @@ err_console = Console(stderr=True)
 
 
 def load_context(
-    framework_yaml: Optional[Path] = None,
-    pipeline_yaml: Optional[Path] = None,
-    branch: Optional[str] = None,
+    framework_yaml: Path | None = None,
+    pipeline_yaml: Path | None = None,
+    branch: str | None = None,
 ) -> MLContext:
     """Load config and build MLContext. Prints a friendly error on failure."""
     try:

@@ -70,7 +70,7 @@ class WriteFeatures(BaseComponent):
 
         return write_features
 
-    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> None:
+    def local_run(self, context: MLContext, input_path: str = "", **kwargs: Any) -> None:
         """In local mode, log feature write without touching Feature Store."""
         import pandas as pd
 
@@ -79,7 +79,7 @@ class WriteFeatures(BaseComponent):
             print(f"[local] WriteFeatures: {len(df)} rows for entity={self.entity!r}, "
                   f"feature_group={self.feature_group!r}")
         else:
-            print(f"[local] WriteFeatures: no input path provided, skipping.")
+            print("[local] WriteFeatures: no input path provided, skipping.")
 
 
 @dataclass
@@ -117,6 +117,7 @@ class ReadFeatures(BaseComponent):
         ) -> str:
             """Returns GCS URI of the exported feature Parquet."""
             import json
+
             from google.cloud import bigquery
 
             ids = json.loads(feature_ids)
@@ -124,12 +125,12 @@ class ReadFeatures(BaseComponent):
             client = bigquery.Client(project=project)
             table = f"{project}.{dataset}.feat_{entity}_{feature_group}"
             sql = f"SELECT entity_id, {cols} FROM `{table}`"
-            out_uri = f"{gcs_prefix}features/{entity}_{feature_group}/*.parquet"
-            extract_cfg = bigquery.ExtractJobConfig(destination_format="PARQUET")
             df = client.query(sql).to_dataframe()
             # In KFP, we write to GCS via pandas
-            import tempfile, os
-            import pyarrow as pa, pyarrow.parquet as pq
+            import tempfile
+
+            import pyarrow as pa
+            import pyarrow.parquet as pq
             tmp = tempfile.mktemp(suffix=".parquet")
             pq.write_table(pa.Table.from_pandas(df), tmp)
             from google.cloud import storage
@@ -141,9 +142,11 @@ class ReadFeatures(BaseComponent):
 
         return read_features
 
-    def local_run(self, context: "MLContext", **kwargs: Any) -> str:
+    def local_run(self, context: MLContext, **kwargs: Any) -> str:
+        import os
+        import tempfile
+
         import pandas as pd
-        import tempfile, os
 
         df = pd.DataFrame(columns=self.feature_ids or ["entity_id", "feature_placeholder"])
         out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")

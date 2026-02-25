@@ -72,11 +72,12 @@ class BigQueryExtract(BaseComponent):
 
         return bigquery_extract
 
-    def local_run(self, context: "MLContext", run_date: str = "", **kwargs: Any) -> str:
+    def local_run(self, context: MLContext, run_date: str = "", **kwargs: Any) -> str:
         """Run the BQ query locally using DuckDB and write Parquet to a temp dir."""
-        import duckdb
-        import tempfile
         import os
+        import tempfile
+
+        import duckdb
 
         # Use the shared connection from LocalRunner so seeded tables are visible.
         # Fall back to a fresh connection when called outside the runner (e.g. tests).

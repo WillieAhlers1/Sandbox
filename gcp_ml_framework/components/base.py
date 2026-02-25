@@ -15,8 +15,9 @@ The actual execution logic lives inside the KFP component function body.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
@@ -56,7 +57,7 @@ class BaseComponent(ABC):
         ...
 
     @abstractmethod
-    def local_run(self, context: "MLContext", **kwargs: Any) -> Any:
+    def local_run(self, context: MLContext, **kwargs: Any) -> Any:
         """
         Execute this component locally without GCP access.
 
@@ -65,7 +66,7 @@ class BaseComponent(ABC):
         """
         ...
 
-    def as_airflow_operator(self, context: "MLContext", dag: Any) -> Any:
+    def as_airflow_operator(self, context: MLContext, dag: Any) -> Any:
         """
         Return an Airflow operator for this component.
 

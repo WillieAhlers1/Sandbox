@@ -60,6 +60,7 @@ class DeployModel(BaseComponent):
         ) -> str:
             """Returns the Endpoint resource name."""
             import json
+
             from google.cloud import aiplatform
 
             aiplatform.init(project=project, location=region)
@@ -97,7 +98,7 @@ class DeployModel(BaseComponent):
 
     def local_run(
         self,
-        context: "MLContext",
+        context: MLContext,
         model_path: str = "",
         **kwargs: Any,
     ) -> str:

@@ -1,7 +1,8 @@
 """Unit tests for naming.py — namespace resolution and sanitization."""
 
 import pytest
-from gcp_ml_framework.naming import NamingConvention, _slugify, _bq_safe
+
+from gcp_ml_framework.naming import NamingConvention, _bq_safe, _slugify
 
 
 class TestSlugify:

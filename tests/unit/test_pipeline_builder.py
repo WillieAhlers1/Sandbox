@@ -1,13 +1,14 @@
 """Unit tests for pipeline/builder.py — PipelineBuilder DSL."""
 
 import pytest
-from gcp_ml_framework.pipeline.builder import PipelineBuilder, PipelineDefinition
-from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+
 from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
-from gcp_ml_framework.components.ml.train import TrainModel
-from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
 from gcp_ml_framework.components.ml.deploy import DeployModel
+from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+from gcp_ml_framework.components.ml.train import TrainModel
+from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+from gcp_ml_framework.pipeline.builder import PipelineBuilder, PipelineDefinition
 
 
 @pytest.fixture

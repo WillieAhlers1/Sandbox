@@ -30,8 +30,8 @@ class PipelineCompiler:
 
     def compile(
         self,
-        pipeline_def: "PipelineDefinition",
-        context: "MLContext",
+        pipeline_def: PipelineDefinition,
+        context: MLContext,
     ) -> Path:
         """
         Compile the pipeline to a KFP YAML file.
@@ -40,7 +40,6 @@ class PipelineCompiler:
         """
         try:
             import kfp.compiler as kfp_compiler
-            from kfp import dsl
         except ImportError as exc:
             raise ImportError(
                 "kfp is required for compilation. Install with: pip install kfp>=2.7"
@@ -55,7 +54,7 @@ class PipelineCompiler:
         )
         return output_path
 
-    def _build_kfp_pipeline(self, pipeline_def: "PipelineDefinition", context: "MLContext"):
+    def _build_kfp_pipeline(self, pipeline_def: PipelineDefinition, context: MLContext):
         """
         Dynamically construct a @dsl.pipeline decorated function from the steps.
 
@@ -85,7 +84,7 @@ class PipelineCompiler:
 
         return _pipeline
 
-    def _build_context_params(self, context: "MLContext", pipeline_def: "PipelineDefinition") -> dict:
+    def _build_context_params(self, context: MLContext, pipeline_def: PipelineDefinition) -> dict:
         return {
             "project": context.gcp_project,
             "region": context.region,
@@ -98,8 +97,8 @@ class PipelineCompiler:
 
     def _step_params(self, step, ctx_params: dict, run_date: str) -> dict:
         """Extract component-specific params from the component dataclass fields."""
-        from dataclasses import asdict, fields
         import dataclasses
+        from dataclasses import fields
 
         component = step.component
         extra: dict = {}

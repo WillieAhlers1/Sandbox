@@ -297,9 +297,9 @@ def init_project(
 
     console.print(f"\n[bold green]Project scaffolded at {root}[/bold green]\n")
     console.print("Next steps:")
-    console.print(f"  1. Edit [cyan]framework.yaml[/cyan] — add your Composer env name")
+    console.print("  1. Edit [cyan]framework.yaml[/cyan] — add your Composer env name")
     console.print(f"  2. Run [cyan]gml init pipeline {project}[/cyan] to add a pipeline")
-    console.print(f"  3. Run [cyan]gml context show[/cyan] to verify your setup\n")
+    console.print("  3. Run [cyan]gml context show[/cyan] to verify your setup\n")
 
 
 @init_app.command("pipeline")

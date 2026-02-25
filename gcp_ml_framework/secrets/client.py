@@ -16,7 +16,6 @@ independent secret values under the same logical key name.
 
 from __future__ import annotations
 
-import functools
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -38,7 +37,7 @@ class SecretManagerClient:
         # fetches secret "dsci-churn-pred-main-db-password" from Secret Manager
     """
 
-    def __init__(self, context: "MLContext") -> None:
+    def __init__(self, context: MLContext) -> None:
         self._context = context
         self._project = context.secret_project_id
         self._prefix = context.secret_prefix
@@ -123,7 +122,7 @@ class LocalSecretClient:
     Falls back to an empty string with a warning if not set.
     """
 
-    def __init__(self, context: "MLContext") -> None:
+    def __init__(self, context: MLContext) -> None:
         self._context = context
 
     def get(self, key: str) -> str:
@@ -164,7 +163,7 @@ class LocalSecretClient:
         pass
 
 
-def make_secret_client(context: "MLContext", local: bool = False):
+def make_secret_client(context: MLContext, local: bool = False):
     """Factory: returns LocalSecretClient in local mode, SecretManagerClient otherwise."""
     if local:
         return LocalSecretClient(context)

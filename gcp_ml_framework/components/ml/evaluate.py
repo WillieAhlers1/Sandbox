@@ -55,8 +55,9 @@ class EvaluateModel(BaseComponent):
             """Returns JSON string of computed metric values. Raises on gate failure."""
             import json
             import pickle
+
             import pandas as pd
-            from sklearn.metrics import roc_auc_score, f1_score
+            from sklearn.metrics import f1_score, roc_auc_score
 
             metric_names = json.loads(metrics)
             gate_thresholds = json.loads(gate)
@@ -91,7 +92,7 @@ class EvaluateModel(BaseComponent):
 
     def local_run(
         self,
-        context: "MLContext",
+        context: MLContext,
         model_path: str = "",
         eval_dataset_path: str = "",
         **kwargs: Any,

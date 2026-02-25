@@ -31,7 +31,7 @@ class PipelineStep:
     """A single step in the pipeline, wrapping a component and its position."""
 
     name: str
-    component: "BaseComponent"
+    component: BaseComponent
     stage: str  # 'ingest' | 'transform' | 'write_features' | 'train' | 'evaluate' | 'deploy'
 
 
@@ -80,40 +80,40 @@ class PipelineBuilder:
         self._tags = tags or []
         self._steps: list[PipelineStep] = []
 
-    def _add(self, stage: str, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def _add(self, stage: str, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         step_name = name or f"{stage}_{len(self._steps)}"
         self._steps.append(PipelineStep(name=step_name, component=component, stage=stage))
         return self
 
-    def ingest(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def ingest(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a data ingestion step (BigQueryExtract, GCSExtract, etc.)."""
         return self._add("ingest", component, name)
 
-    def transform(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def transform(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a data transformation step (BQTransform, PandasTransform)."""
         return self._add("transform", component, name)
 
-    def write_features(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def write_features(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a Feature Store write step."""
         return self._add("write_features", component, name)
 
-    def read_features(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def read_features(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a Feature Store read step."""
         return self._add("read_features", component, name)
 
-    def train(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def train(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a model training step."""
         return self._add("train", component, name)
 
-    def evaluate(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def evaluate(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a model evaluation + gating step."""
         return self._add("evaluate", component, name)
 
-    def deploy(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def deploy(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a model deployment step."""
         return self._add("deploy", component, name)
 
-    def step(self, component: "BaseComponent", name: str | None = None) -> "PipelineBuilder":
+    def step(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
         """Add a custom step not covered by the named methods above."""
         return self._add("custom", component, name)
 

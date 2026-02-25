@@ -1,15 +1,12 @@
-"""gml run — run pipelines locally or on Vertex AI."""
+"""gml run — run pipelines locally, on Vertex AI, or compile only."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
 from gcp_ml_framework.cli._helpers import console, err_console, load_context
-
-run_app = typer.Typer(help="Run pipelines locally or on Vertex AI.")
 
 
 def _load_pipeline(pipeline_dir: Path):
@@ -28,22 +25,68 @@ def _load_pipeline(pipeline_dir: Path):
     return mod.pipeline
 
 
-@run_app.command("local")
-def run_local(
-    pipeline_name: str = typer.Argument(..., help="Pipeline directory name under pipelines/"),
+def run(
+    pipeline_name: str = typer.Argument("", help="Pipeline directory name under pipelines/"),
+    local: bool = typer.Option(False, "--local", help="Run locally using DuckDB/pandas stubs"),
+    vertex: bool = typer.Option(False, "--vertex", help="Compile and submit to Vertex AI Pipelines"),
+    compile_only: bool = typer.Option(
+        False, "--compile-only", help="Compile to KFP YAML without submitting (for CI)"
+    ),
     pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c"),
+    framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print execution plan without running"),
+    sync: bool = typer.Option(False, "--sync", help="Block until the Vertex pipeline run completes"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable KFP step caching"),
+    all_pipelines: bool = typer.Option(False, "--all", help="Run all pipelines in pipelines/"),
+    output_dir: Path = typer.Option(
+        Path("compiled_pipelines"), "--out", help="Output dir for compiled YAML"
+    ),
 ) -> None:
     """
-    Run a pipeline locally using DuckDB/pandas stubs instead of GCP services.
+    Run a pipeline locally, on Vertex AI, or compile to YAML.
 
-    Useful for rapid iteration and unit testing without GCP access.
+    Defaults to --local if no mode flag is given.
 
-    Example:
-        gml run local churn_prediction
-        gml run local churn_prediction --dry-run
+    Examples:\n
+        gml run example_churn --local\n
+        gml run example_churn --local --dry-run\n
+        gml run example_churn --vertex --sync\n
+        gml run --vertex --all\n
+        gml run --compile-only --all\n
+        gml run example_churn --compile-only --out /tmp/compiled\n
     """
+    # Validate mutually exclusive flags
+    mode_count = sum([local, vertex, compile_only])
+    if mode_count > 1:
+        err_console.print(
+            "[red]Error:[/red] --local, --vertex, and --compile-only are mutually exclusive."
+        )
+        raise typer.Exit(1)
+
+    # Default to --local if no flag given
+    if mode_count == 0:
+        local = True
+
+    # Validate pipeline_name is given unless --all is used
+    if not pipeline_name and not all_pipelines:
+        err_console.print("[red]Error:[/red] Provide a pipeline name or use --all.")
+        raise typer.Exit(1)
+
+    if local:
+        _run_local(pipeline_name, pipelines_dir, framework_yaml, dry_run)
+    elif vertex:
+        _run_vertex(pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines)
+    elif compile_only:
+        _run_compile(pipeline_name, pipelines_dir, framework_yaml, output_dir, all_pipelines)
+
+
+def _run_local(
+    pipeline_name: str,
+    pipelines_dir: Path,
+    framework_yaml: Path | None,
+    dry_run: bool,
+) -> None:
+    """Run a pipeline locally using DuckDB/pandas stubs."""
     from gcp_ml_framework.pipeline.runner import LocalRunner
 
     pipeline_dir = pipelines_dir / pipeline_name
@@ -63,22 +106,15 @@ def run_local(
         console.print("[green]Done.[/green]")
 
 
-@run_app.command("vertex")
-def run_vertex(
-    pipeline_name: str = typer.Argument(..., help="Pipeline directory name under pipelines/"),
-    pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c"),
-    sync: bool = typer.Option(False, "--sync", help="Block until the pipeline run completes"),
-    no_cache: bool = typer.Option(False, "--no-cache", help="Disable KFP step caching"),
-    all_pipelines: bool = typer.Option(False, "--all", help="Run all pipelines in pipelines/"),
+def _run_vertex(
+    pipeline_name: str,
+    pipelines_dir: Path,
+    framework_yaml: Path | None,
+    sync: bool,
+    no_cache: bool,
+    all_pipelines: bool,
 ) -> None:
-    """
-    Compile and submit a pipeline to Vertex AI Pipelines.
-
-    Example:
-        gml run vertex churn_prediction --sync
-        gml run vertex --all
-    """
+    """Compile and submit a pipeline to Vertex AI Pipelines."""
     from gcp_ml_framework.pipeline.compiler import PipelineCompiler
     from gcp_ml_framework.pipeline.runner import VertexRunner
 
@@ -105,21 +141,14 @@ def run_vertex(
         console.print(f"[green]Submitted:[/green] {job.resource_name}")
 
 
-@run_app.command("compile")
-def run_compile(
-    pipeline_name: str = typer.Argument("", help="Pipeline to compile. Omit for --all."),
-    pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c"),
-    output_dir: Path = typer.Option(Path("compiled_pipelines"), "--out"),
-    all_pipelines: bool = typer.Option(False, "--all"),
+def _run_compile(
+    pipeline_name: str,
+    pipelines_dir: Path,
+    framework_yaml: Path | None,
+    output_dir: Path,
+    all_pipelines: bool,
 ) -> None:
-    """
-    Compile pipeline(s) to KFP YAML without submitting. Used in CI for validation.
-
-    Example:
-        gml run compile --all
-        gml run compile churn_prediction --out /tmp/compiled
-    """
+    """Compile pipeline(s) to KFP YAML without submitting."""
     from gcp_ml_framework.pipeline.compiler import PipelineCompiler
 
     ctx = load_context(framework_yaml=framework_yaml)

@@ -85,10 +85,11 @@ class BQTransform(BaseComponent):
 
         return bq_transform
 
-    def local_run(self, context: "MLContext", run_date: str = "", **kwargs: Any) -> str:
-        import duckdb
-        import tempfile
+    def local_run(self, context: MLContext, run_date: str = "", **kwargs: Any) -> str:
         import os
+        import tempfile
+
+        import duckdb
 
         # Use the shared connection from LocalRunner so intermediate tables are visible.
         # Fall back to a fresh connection when called outside the runner (e.g. tests).
@@ -129,10 +130,11 @@ class PandasTransform(BaseComponent):
             "PandasTransform is a local-only stub. Use BQTransform for production."
         )
 
-    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> str:
-        import pandas as pd
-        import tempfile
+    def local_run(self, context: MLContext, input_path: str = "", **kwargs: Any) -> str:
         import os
+        import tempfile
+
+        import pandas as pd
 
         df = pd.read_parquet(input_path) if input_path else pd.DataFrame()
         result = self.transform_fn(df, context)

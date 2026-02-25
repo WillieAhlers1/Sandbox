@@ -5,13 +5,13 @@ This is the reference pipeline for the GCP ML Framework.
 Edit this file to change the pipeline topology — no DAG code required.
 """
 
-from gcp_ml_framework.pipeline.builder import PipelineBuilder
+from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
 from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-from gcp_ml_framework.components.transformation.bq_transform import BQTransform
-from gcp_ml_framework.components.feature_store.write_features import WriteFeatures, ReadFeatures
-from gcp_ml_framework.components.ml.train import TrainModel
-from gcp_ml_framework.components.ml.evaluate import EvaluateModel
 from gcp_ml_framework.components.ml.deploy import DeployModel
+from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+from gcp_ml_framework.components.ml.train import TrainModel
+from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+from gcp_ml_framework.pipeline.builder import PipelineBuilder
 
 pipeline = (
     PipelineBuilder(

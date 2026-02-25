@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -15,7 +14,7 @@ teardown_app = typer.Typer(help="Delete ephemeral DEV resources for a branch nam
 @teardown_app.command()
 def teardown(
     branch: str = typer.Option(..., "--branch", "-b", help="Git branch whose resources to delete"),
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c"),
+    framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
     confirm: bool = typer.Option(False, "--confirm", help="Skip interactive confirmation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="List resources that would be deleted"),
 ) -> None:
@@ -65,8 +64,8 @@ def teardown(
             console.print("Aborted.")
             raise typer.Exit(0)
 
-    from gcp_ml_framework.utils.gcs import delete_gcs_prefix
     from gcp_ml_framework.utils.bq import delete_bq_dataset
+    from gcp_ml_framework.utils.gcs import delete_gcs_prefix
 
     # Delete GCS prefix
     console.print("Deleting GCS objects...")

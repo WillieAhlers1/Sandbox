@@ -20,13 +20,13 @@ YAML format:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import yaml
 
 
-class FeatureType(str, Enum):
+class FeatureType(StrEnum):
     INT64 = "INT64"
     FLOAT64 = "FLOAT64"
     STRING = "STRING"

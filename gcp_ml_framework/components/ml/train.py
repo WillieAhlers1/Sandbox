@@ -63,6 +63,7 @@ class TrainModel(BaseComponent):
         ) -> str:
             """Returns GCS URI of the saved model artifact."""
             import json
+
             from google.cloud import aiplatform
 
             aiplatform.init(project=project, location=region, staging_bucket=staging_bucket)
@@ -92,7 +93,7 @@ class TrainModel(BaseComponent):
 
         return train_model
 
-    def local_run(self, context: "MLContext", dataset_path: str = "", **kwargs: Any) -> str:
+    def local_run(self, context: MLContext, dataset_path: str = "", **kwargs: Any) -> str:
         """Simulate training locally — writes a placeholder model artifact."""
         import json
         import os
