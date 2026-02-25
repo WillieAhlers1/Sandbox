@@ -126,6 +126,10 @@ def _run_vertex(
         else [pipeline_name]
     )
 
+    import datetime
+
+    run_date = datetime.date.today().isoformat()
+
     for name in targets:
         pipeline_dir = pipelines_dir / name
         pipeline_def = _load_pipeline(pipeline_dir)
@@ -135,6 +139,7 @@ def _run_vertex(
         job = runner.submit(
             compiled_path=compiled_path,
             pipeline_name=name,
+            parameter_values={"run_date": run_date},
             enable_caching=not no_cache,
             sync=sync,
         )

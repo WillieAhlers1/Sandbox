@@ -46,7 +46,7 @@ pipeline = (
                     user_id,
                     session_count_7d,
                     SAFE_DIVIDE(session_count_7d, NULLIF(session_count_30d, 0)) AS session_trend,
-                    LOG1P(total_purchases_30d) AS log_purchases_30d,
+                    LN(1 + total_purchases_30d) AS log_purchases_30d,
                     days_since_last_login,
                     support_tickets_90d,
                     avg_session_duration_s,

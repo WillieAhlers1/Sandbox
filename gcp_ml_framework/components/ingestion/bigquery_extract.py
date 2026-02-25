@@ -50,6 +50,7 @@ class BigQueryExtract(BaseComponent):
             output_table: str,
             gcs_prefix: str,
             write_disposition: str,
+            run_date: str = "",
         ) -> str:
             """Returns the GCS URI of the exported Parquet files."""
             from google.cloud import bigquery
@@ -60,7 +61,7 @@ class BigQueryExtract(BaseComponent):
                 destination=full_table,
                 write_disposition=write_disposition,
             )
-            rendered_query = query.format(bq_dataset=dataset, gcs_prefix=gcs_prefix)
+            rendered_query = query.format(bq_dataset=dataset, gcs_prefix=gcs_prefix, run_date=run_date)
             client.query(rendered_query, job_config=job_config).result()
 
             output_uri = f"{gcs_prefix}extracts/{output_table}/*.parquet"

@@ -167,4 +167,5 @@ class PipelineCompiler:
                 else:
                     extra[f.name] = val
 
+        extra["run_date"] = run_date
         return extra
