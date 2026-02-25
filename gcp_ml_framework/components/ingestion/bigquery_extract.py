@@ -78,6 +78,10 @@ class BigQueryExtract(BaseComponent):
         import tempfile
         import os
 
+        # Use the shared connection from LocalRunner so seeded tables are visible.
+        # Fall back to a fresh connection when called outside the runner (e.g. tests).
+        conn: duckdb.DuckDBPyConnection = kwargs.get("db_conn") or duckdb.connect()
+
         rendered = self.query.format(
             bq_dataset=context.bq_dataset,
             gcs_prefix=context.gcs_prefix,
@@ -87,5 +91,5 @@ class BigQueryExtract(BaseComponent):
         rendered = rendered.replace("`", '"')
         out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")
         out_path = os.path.join(out_dir, "output.parquet")
-        duckdb.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
+        conn.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
         return out_path
