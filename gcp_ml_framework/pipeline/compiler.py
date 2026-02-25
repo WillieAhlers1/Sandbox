@@ -113,6 +113,9 @@ class PipelineCompiler:
             "feature_store_id": context.feature_store_id,
             "staging_bucket": context.naming.gcs_bucket,
             "experiment_name": context.naming.vertex_experiment(pipeline_def.name),
+            "artifact_registry": context.naming.artifact_registry_repo(
+                context.artifact_registry_host, context.gcp_project,
+            ),
         }
 
     def _build_derived_params(
@@ -168,4 +171,12 @@ class PipelineCompiler:
                     extra[f.name] = val
 
         extra["run_date"] = run_date
+
+        # Resolve {artifact_registry} placeholder in string values
+        ar = ctx_params.get("artifact_registry", "")
+        if ar:
+            for k, v in extra.items():
+                if isinstance(v, str) and "{artifact_registry}" in v:
+                    extra[k] = v.replace("{artifact_registry}", ar)
+
         return extra

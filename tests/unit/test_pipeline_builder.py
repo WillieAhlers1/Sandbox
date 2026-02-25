@@ -105,6 +105,75 @@ class TestPipelineBuilder:
         wf = WriteFeatures(entity="user", feature_group="behavioral")
         assert wf.feature_ids == []
 
+    def test_train_model_kfp_accepts_experiment_name(self):
+        """TrainModel KFP component must accept experiment_name parameter."""
+        tm = TrainModel(trainer_image="img:latest")
+        kfp_fn = tm.as_kfp_component()
+        accepted = set(kfp_fn.component_spec.inputs or {})
+        assert "experiment_name" in accepted
+
+    def test_train_model_kfp_creates_experiment(self):
+        """TrainModel KFP component must auto-create the experiment via aiplatform.init."""
+        tm = TrainModel(trainer_image="img:latest")
+        kfp_fn = tm.as_kfp_component()
+        # The inner function source is embedded in the component spec
+        source = kfp_fn.component_spec.implementation.container.command[-1]
+        # Verify aiplatform.init receives experiment= so it auto-creates
+        # (init with experiment= calls get_or_create internally)
+        assert "aiplatform.init(" in source
+        # Find the init call and verify it includes experiment=
+        init_idx = source.index("aiplatform.init(")
+        init_call = source[init_idx:source.index(")", init_idx) + 1]
+        assert "experiment=experiment_name" in init_call
+
+    def test_train_model_defaults(self):
+        """TrainModel dataclass defaults."""
+        tm = TrainModel(trainer_image="img:latest")
+        assert tm.machine_type == "n1-standard-4"
+        assert tm.accelerator_type == ""
+        assert tm.accelerator_count == 0
+        assert tm.trainer_args == []
+        assert tm.hyperparameters == {}
+
+
+class TestCompiler:
+    def test_artifact_registry_resolved_in_trainer_image(self, test_context):
+        """Compiler must resolve {artifact_registry} in trainer_image."""
+        from gcp_ml_framework.pipeline.compiler import PipelineCompiler
+
+        pipeline = (
+            PipelineBuilder(name="test-pipe", schedule="@daily")
+            .ingest(BigQueryExtract(query="SELECT 1", output_table="raw"))
+            .train(TrainModel(trainer_image="{artifact_registry}/my-trainer:latest"))
+            .build()
+        )
+        compiler = PipelineCompiler()
+        ctx_params = compiler._build_context_params(test_context, pipeline)
+        train_step = pipeline.steps[1]
+        step_params = compiler._step_params(train_step, ctx_params, run_date="2024-01-01")
+        assert "{artifact_registry}" not in step_params["trainer_image"]
+        assert "my-trainer:latest" in step_params["trainer_image"]
+
+    def test_artifact_registry_resolved_in_serving_image(self, test_context):
+        """Compiler must resolve {artifact_registry} in serving_container_image."""
+        from gcp_ml_framework.pipeline.compiler import PipelineCompiler
+
+        pipeline = (
+            PipelineBuilder(name="test-pipe", schedule="@daily")
+            .ingest(BigQueryExtract(query="SELECT 1", output_table="raw"))
+            .deploy(DeployModel(
+                endpoint_name="ep",
+                serving_container_image="{artifact_registry}/my-serving:latest",
+            ))
+            .build()
+        )
+        compiler = PipelineCompiler()
+        ctx_params = compiler._build_context_params(test_context, pipeline)
+        deploy_step = pipeline.steps[1]
+        step_params = compiler._step_params(deploy_step, ctx_params, run_date="2024-01-01")
+        assert "{artifact_registry}" not in step_params["serving_container_image"]
+        assert "my-serving:latest" in step_params["serving_container_image"]
+
 
 class TestLocalRunner:
     def test_print_plan(self, simple_pipeline, test_context, capsys):

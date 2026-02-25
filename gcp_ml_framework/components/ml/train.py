@@ -64,7 +64,11 @@ class TrainModel(BaseComponent):
 
             from google.cloud import aiplatform
 
-            aiplatform.init(project=project, location=region, staging_bucket=staging_bucket)
+            aiplatform.init(
+                project=project, location=region,
+                staging_bucket=staging_bucket,
+                experiment=experiment_name,
+            )
 
             args = json.loads(trainer_args) + [f"--model-output={model_output_uri}"]
             if dataset_uri:
