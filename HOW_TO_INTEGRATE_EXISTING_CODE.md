@@ -239,11 +239,13 @@ BigQuery with DuckDB and skips the Feature Store entirely:
 
 ```bash
 # Validate config and component wiring — executes nothing
-gml run local my_pipeline --dry-run
+gml run my_pipeline --local --dry-run
 
 # Full local run with DuckDB/pandas stubs
-gml run local my_pipeline
+gml run my_pipeline --local
 ```
+
+Note: `--local` is the default, so `gml run my_pipeline` works the same way.
 
 Iterate here until the pipeline runs end-to-end. This catches configuration errors and
 logic bugs without spending GCP compute or waiting for Vertex AI job queues.
@@ -263,10 +265,10 @@ Once local runs succeed, submit to Vertex AI against your DEV GCP project:
 
 ```bash
 # Async — submits the job and returns immediately
-gml run vertex my_pipeline
+gml run my_pipeline --vertex
 
 # Synchronous — waits for completion and streams logs (useful for debugging)
-gml run vertex my_pipeline --sync
+gml run my_pipeline --vertex --sync
 ```
 
 All resources are automatically scoped to your branch namespace. You cannot accidentally
@@ -280,7 +282,7 @@ Promotion is tied to git state — no manual steps required beyond merging and t
 
 ```bash
 # Merge your feature branch → main
-# CI automatically runs: gml deploy dags && gml run vertex ... on STAGING
+# CI automatically runs: gml deploy dags && gml run --vertex --all --sync on STAGING
 
 # Create a release tag to promote to PROD
 git tag v1.2.3
@@ -343,7 +345,7 @@ wins):
 Example: override the GCP region for a single run without editing any file:
 
 ```bash
-GML_GCP__REGION=europe-west1 gml run local my_pipeline
+GML_GCP__REGION=europe-west1 gml run my_pipeline --local
 ```
 
 ---

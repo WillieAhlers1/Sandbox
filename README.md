@@ -166,20 +166,22 @@ Resource Names
 No GCP access required. DuckDB and pandas replace BQ and GCS calls.
 
 ```bash
-gml run local churn_prediction
+gml run churn_prediction --local
 ```
 
 ```bash
 # Print the execution plan without running
-gml run local churn_prediction --dry-run
+gml run churn_prediction --local --dry-run
 ```
+
+Note: `--local` is the default — `gml run churn_prediction` works the same way.
 
 ### 7. Run on Vertex AI
 
 ```bash
-gml run vertex churn_prediction
-gml run vertex churn_prediction --sync       # wait for completion
-gml run vertex --all                         # run all pipelines
+gml run churn_prediction --vertex
+gml run churn_prediction --vertex --sync     # wait for completion
+gml run --vertex --all                       # run all pipelines
 ```
 
 ### 8. Deploy to Composer
@@ -295,9 +297,9 @@ gml init pipeline <name>               Add a pipeline to an existing project
 
 gml context show                       Show resolved namespace and resource names
 
-gml run local <pipeline>               Run pipeline locally (no GCP)
-gml run vertex <pipeline>              Compile and submit to Vertex AI
-gml run compile [--all]                Compile to KFP YAML only (CI validation)
+gml run <pipeline> --local             Run pipeline locally (no GCP, default)
+gml run <pipeline> --vertex            Compile and submit to Vertex AI
+gml run --compile-only [--all]         Compile to KFP YAML only (CI validation)
 
 gml deploy dags                        Generate and sync Airflow DAGs to Composer
 gml deploy features [entity ...]       Upsert Feature Store schemas
