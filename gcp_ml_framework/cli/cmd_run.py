@@ -41,6 +41,7 @@ def run(
     output_dir: Path = typer.Option(
         Path("compiled_pipelines"), "--out", help="Output dir for compiled YAML"
     ),
+    run_date: str = typer.Option("", "--run-date", help="Override run_date (default: today)"),
 ) -> None:
     """
     Run a pipeline locally, on Vertex AI, or compile to YAML.
@@ -75,7 +76,7 @@ def run(
     if local:
         _run_local(pipeline_name, pipelines_dir, framework_yaml, dry_run)
     elif vertex:
-        _run_vertex(pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines)
+        _run_vertex(pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines, run_date)
     elif compile_only:
         _run_compile(pipeline_name, pipelines_dir, framework_yaml, output_dir, all_pipelines)
 
@@ -113,6 +114,7 @@ def _run_vertex(
     sync: bool,
     no_cache: bool,
     all_pipelines: bool,
+    run_date_override: str = "",
 ) -> None:
     """Compile and submit a pipeline to Vertex AI Pipelines."""
     from gcp_ml_framework.pipeline.compiler import PipelineCompiler
@@ -128,7 +130,7 @@ def _run_vertex(
 
     import datetime
 
-    run_date = datetime.date.today().isoformat()
+    run_date = run_date_override or datetime.date.today().isoformat()
 
     for name in targets:
         pipeline_dir = pipelines_dir / name

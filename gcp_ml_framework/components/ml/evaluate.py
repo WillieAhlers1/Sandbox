@@ -36,9 +36,10 @@ class EvaluateModel(BaseComponent):
             base_image="python:3.11-slim",
             packages_to_install=[
                 "scikit-learn>=1.4",
+                "google-cloud-bigquery>=3.17",
+                "google-cloud-storage>=2.14",
                 "pandas>=2",
-                "pyarrow>=15",
-                "google-cloud-aiplatform>=1.49",
+                "db-dtypes>=1.2",
             ],
         )
         def evaluate_model(
@@ -53,27 +54,44 @@ class EvaluateModel(BaseComponent):
             """Returns JSON string of computed metric values. Raises on gate failure."""
             import json
             import pickle
+            import tempfile
 
-            import pandas as pd
+            from google.cloud import bigquery, storage
             from sklearn.metrics import f1_score, roc_auc_score
 
             metric_names = json.loads(metrics)
             gate_thresholds = json.loads(gate)
 
-            df = pd.read_parquet(eval_dataset_uri)
-            X, y = df.drop("label", axis=1), df["label"]
+            # Read eval dataset from BigQuery (eval_dataset_uri is a fully-qualified table)
+            bq_client = bigquery.Client(project=project)
+            df = bq_client.query(f"SELECT * FROM `{eval_dataset_uri}`").to_dataframe()
+            print(f"Loaded {len(df)} rows from {eval_dataset_uri}")
 
-            with open(f"{model_uri}/model.pkl", "rb") as f:
-                model = pickle.load(f)
+            X = df.drop(columns=["label", "user_id", "feature_timestamp"], errors="ignore")
+            y = df["label"]
 
+            # Download model.pkl from GCS to a local temp file
+            parts = model_uri.replace("gs://", "").split("/", 1)
+            bucket_name = parts[0]
+            blob_path = (parts[1] + "/model.pkl") if len(parts) > 1 else "model.pkl"
+            gcs_client = storage.Client(project=project)
+            blob = gcs_client.bucket(bucket_name).blob(blob_path)
+            with tempfile.NamedTemporaryFile(suffix=".pkl") as tmp:
+                blob.download_to_filename(tmp.name)
+                with open(tmp.name, "rb") as f:
+                    model = pickle.load(f)
+            print(f"Loaded model from {model_uri}/model.pkl")
+
+            # Compute real metrics
             computed: dict = {}
             proba = model.predict_proba(X)[:, 1] if hasattr(model, "predict_proba") else model.predict(X)
             preds = (proba > 0.5).astype(int)
 
             if "auc" in metric_names:
-                computed["auc"] = float(roc_auc_score(y, proba))
+                computed["auc"] = round(float(roc_auc_score(y, proba)), 4)
             if "f1" in metric_names:
-                computed["f1"] = float(f1_score(y, preds))
+                computed["f1"] = round(float(f1_score(y, preds)), 4)
+            print(f"Metrics: {computed}")
 
             # Apply gates
             failures = []

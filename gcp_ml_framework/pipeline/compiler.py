@@ -74,7 +74,8 @@ class PipelineCompiler:
         )
         def _pipeline(run_date: str = ""):
             prev_task = None
-            last_data_output = None  # output channel from last str-returning step
+            last_dataset_output = None  # output from data-producing steps (ingest/transform)
+            last_model_output = None    # output from train step
             for step in steps:
                 component_fn = step.component.as_kfp_component()
                 step_extra = derived_params.get(step.name, {})
@@ -87,20 +88,26 @@ class PipelineCompiler:
                 accepted = set(component_fn.component_spec.inputs or {})
                 params = {k: v for k, v in all_params.items() if k in accepted}
 
-                # Wire last data output for cross-step data flow
-                if last_data_output is not None:
-                    for key in ("dataset_uri", "eval_dataset_uri", "model_uri", "bq_source_table"):
+                # Wire cross-step data flow from tracked outputs
+                if last_dataset_output is not None:
+                    for key in ("dataset_uri", "eval_dataset_uri", "bq_source_table"):
                         if key in accepted and key not in params:
-                            params[key] = last_data_output
+                            params[key] = last_dataset_output
+                if last_model_output is not None and "model_uri" in accepted and "model_uri" not in params:
+                    params["model_uri"] = last_model_output
 
                 task = component_fn(**params)
                 if prev_task is not None:
                     task.after(prev_task)
                 prev_task = task
 
-                # Track output for data flow (only from components that return a value)
+                # Track output — train steps produce model outputs, others produce datasets
                 if component_fn.component_spec.outputs:
-                    last_data_output = task.output
+                    is_train = hasattr(step.component, "trainer_image")
+                    if is_train:
+                        last_model_output = task.output
+                    else:
+                        last_dataset_output = task.output
 
         return _pipeline
 

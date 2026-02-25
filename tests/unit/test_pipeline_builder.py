@@ -135,6 +135,32 @@ class TestPipelineBuilder:
         assert tm.trainer_args == []
         assert tm.hyperparameters == {}
 
+    def test_evaluate_model_reads_from_bq(self):
+        """EvaluateModel KFP component must read data from BigQuery, not parquet."""
+        em = EvaluateModel(gate={"auc": 0.75})
+        kfp_fn = em.as_kfp_component()
+        source = kfp_fn.component_spec.implementation.container.command[-1]
+        # Must use BigQuery client, not pd.read_parquet
+        assert "bigquery.Client" in source
+        assert "read_parquet" not in source
+
+    def test_evaluate_model_loads_pickle_from_gcs(self):
+        """EvaluateModel KFP component must download model.pkl from GCS and unpickle."""
+        em = EvaluateModel(gate={"auc": 0.75})
+        kfp_fn = em.as_kfp_component()
+        source = kfp_fn.component_spec.implementation.container.command[-1]
+        assert "model.pkl" in source
+        assert "pickle.load" in source
+        assert "storage.Client" in source
+
+    def test_evaluate_model_uses_sklearn_metrics(self):
+        """EvaluateModel KFP component must compute real metrics with sklearn."""
+        em = EvaluateModel(gate={"auc": 0.75})
+        kfp_fn = em.as_kfp_component()
+        source = kfp_fn.component_spec.implementation.container.command[-1]
+        assert "roc_auc_score" in source
+        assert "f1_score" in source
+
 
 class TestCompiler:
     def test_artifact_registry_resolved_in_trainer_image(self, test_context):
@@ -173,6 +199,51 @@ class TestCompiler:
         step_params = compiler._step_params(deploy_step, ctx_params, run_date="2024-01-01")
         assert "{artifact_registry}" not in step_params["serving_container_image"]
         assert "my-serving:latest" in step_params["serving_container_image"]
+
+
+    def test_evaluate_receives_dataset_not_model_uri(self, test_context):
+        """evaluate-model's eval_dataset_uri must come from transform, not train."""
+        import tempfile
+
+        from gcp_ml_framework.pipeline.compiler import PipelineCompiler
+
+        pipeline = (
+            PipelineBuilder(name="test-pipe", schedule="@daily")
+            .ingest(BigQueryExtract(query="SELECT 1", output_table="raw"))
+            .transform(BQTransform(sql="SELECT * FROM raw", output_table="features"))
+            .train(TrainModel(trainer_image="img:latest"))
+            .evaluate(EvaluateModel(gate={"auc": 0.75}))
+            .build()
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            compiler = PipelineCompiler(output_dir=tmpdir)
+            yaml_path = compiler.compile(pipeline, test_context)
+            yaml_content = yaml_path.read_text()
+
+        # eval_dataset_uri should reference bq-transform's output, not train-model's
+        # In KFP YAML, cross-step wiring uses taskOutputParameter references
+        # The evaluate step should NOT have eval_dataset_uri pointing to train-model
+        assert "eval_dataset_uri" in yaml_content
+        # Find the evaluate-model task's inputs section
+        import yaml as pyyaml
+
+        compiled = pyyaml.safe_load(yaml_content)
+        root = compiled.get("root", compiled)
+        dag = root.get("dag", {})
+        tasks = dag.get("tasks", {})
+        eval_task = tasks.get("evaluate-model", {})
+        eval_inputs = eval_task.get("inputs", {}).get("parameters", {})
+        # eval_dataset_uri should reference bq-transform output
+        eval_ds = eval_inputs.get("eval_dataset_uri", {})
+        eval_ds_ref = eval_ds.get("taskOutputParameter", {})
+        assert eval_ds_ref.get("producerTask") == "bq-transform", (
+            f"eval_dataset_uri should come from bq-transform, got {eval_ds_ref}"
+        )
+        # model_uri should reference train-model output
+        model_ref = eval_inputs.get("model_uri", {}).get("taskOutputParameter", {})
+        assert model_ref.get("producerTask") == "train-model", (
+            f"model_uri should come from train-model, got {model_ref}"
+        )
 
 
 class TestLocalRunner:
