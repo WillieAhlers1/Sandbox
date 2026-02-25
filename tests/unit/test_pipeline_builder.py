@@ -294,6 +294,22 @@ class TestCompiler:
             f"Expected pre-built sklearn container, got {image}"
         )
 
+    def test_serving_container_sklearn_version_gte_1_5(self):
+        """Serving container must use sklearn >= 1.5 for numpy 2.x pickle compatibility."""
+        from pipelines.example_churn.pipeline import pipeline
+
+        deploy_step = [s for s in pipeline.steps if s.stage == "deploy"][0]
+        image = deploy_step.component.serving_container_image
+        # Extract version from image name like sklearn-cpu.1-5:latest
+        import re
+
+        match = re.search(r"sklearn-cpu\.(\d+)-(\d+)", image)
+        assert match, f"Could not parse sklearn version from {image}"
+        major, minor = int(match.group(1)), int(match.group(2))
+        assert (major, minor) >= (1, 5), (
+            f"Serving container sklearn {major}.{minor} < 1.5; numpy 2.x pickles will fail"
+        )
+
 
 class TestLocalRunner:
     def test_print_plan(self, simple_pipeline, test_context, capsys):

@@ -101,7 +101,7 @@ pipeline = (
     .deploy(
         DeployModel(
             endpoint_name="churn-classifier",
-            serving_container_image="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest",
+            serving_container_image="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-5:latest",
             machine_type="n1-standard-2",
             min_replica_count=1,
             max_replica_count=3,
