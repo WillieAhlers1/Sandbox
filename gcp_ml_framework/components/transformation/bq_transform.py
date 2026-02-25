@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+
+def _bq_to_duckdb(sql: str) -> str:
+    """Translate BigQuery backtick identifiers to DuckDB double-quote identifiers.
+
+    See bigquery_extract._bq_to_duckdb for full explanation.
+    """
+    return re.sub(
+        r"`([^`]+)`",
+        lambda m: ".".join(f'"{p}"' for p in m.group(1).split(".")),
+        sql,
+    )
 
 from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
 
@@ -100,8 +113,7 @@ class BQTransform(BaseComponent):
             gcs_prefix=context.gcs_prefix,
             run_date=run_date or "2024-01-01",
         )
-        # DuckDB uses ANSI double-quote identifier quoting; BigQuery uses backticks.
-        rendered = rendered.replace("`", '"')
+        rendered = _bq_to_duckdb(rendered)
         out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")
         out_path = os.path.join(out_dir, f"{self.output_table}.parquet")
         conn.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
