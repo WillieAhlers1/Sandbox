@@ -70,6 +70,9 @@ class FeatureStoreClient:
                 location=self._region,
             )
 
+    # The Feature Store API uses DOUBLE, not FLOAT64.
+    _VALUE_TYPE_MAP: dict[str, str] = {"FLOAT64": "DOUBLE"}
+
     def ensure_entity(self, schema: EntitySchema) -> Any:
         """
         Create the entity type and all its features if they don't exist.
@@ -90,9 +93,10 @@ class FeatureStoreClient:
         existing_features = {f.name for f in entity_type.list_features()}
         for feature_def in schema.all_features():
             if feature_def.name not in existing_features:
+                api_type = self._VALUE_TYPE_MAP.get(feature_def.type.value, feature_def.type.value)
                 entity_type.create_feature(
                     feature_id=feature_def.name,
-                    value_type=feature_def.type.value,
+                    value_type=api_type,
                     description=feature_def.description,
                 )
 

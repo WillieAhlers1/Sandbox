@@ -45,12 +45,15 @@ pipeline = (
                 SELECT
                     user_id,
                     session_count_7d,
+                    session_count_30d,
+                    CAST(total_purchases_30d AS FLOAT64) AS total_purchases_30d,
                     SAFE_DIVIDE(session_count_7d, NULLIF(session_count_30d, 0)) AS session_trend,
                     LN(1 + total_purchases_30d) AS log_purchases_30d,
                     days_since_last_login,
                     support_tickets_90d,
                     avg_session_duration_s,
-                    label
+                    label,
+                    CURRENT_TIMESTAMP() AS feature_timestamp
                 FROM `{bq_dataset}.churn_training_raw`
                 WHERE user_id IS NOT NULL
             """,
@@ -64,6 +67,14 @@ pipeline = (
             feature_group="behavioral",
             entity_id_column="user_id",
             feature_time_column="feature_timestamp",
+            feature_ids=[
+                "session_count_7d",
+                "session_count_30d",
+                "total_purchases_30d",
+                "days_since_last_login",
+                "support_tickets_90d",
+                "avg_session_duration_s",
+            ],
         ),
         name="write_user_features",
     )

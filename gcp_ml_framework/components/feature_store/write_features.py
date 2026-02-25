@@ -27,6 +27,7 @@ class WriteFeatures(BaseComponent):
     feature_group: str
     entity_id_column: str = "entity_id"
     feature_time_column: str = "feature_timestamp"
+    feature_ids: list[str] = field(default_factory=list)  # empty = all features in entity type
     bq_source_table: str | None = None  # defaults to the transform output_table
     component_name: str = "write_features"
     config: ComponentConfig = field(default_factory=ComponentConfig)
@@ -48,7 +49,11 @@ class WriteFeatures(BaseComponent):
             bq_source_table: str,
             entity_id_column: str,
             feature_time_column: str,
+            feature_ids: str = "[]",
         ) -> None:
+            import json
+            import time
+
             from google.cloud import aiplatform
 
             aiplatform.init(project=project, location=region)
@@ -58,13 +63,44 @@ class WriteFeatures(BaseComponent):
                 location=region,
             )
             entity_type = fs.get_entity_type(entity_type_id=entity)
-            entity_type.ingest_from_bq(
-                feature_ids=None,
-                feature_time=feature_time_column,
-                entity_id_field=entity_id_column,
-                bq_source_uri=f"bq://{bq_source_table}",
-                sync=True,
+            ids = json.loads(feature_ids) or None
+            # Use the low-level gRPC client directly to call ImportFeatureValues.
+            # The high-level SDK has a known bug where ingest_from_bq(sync=True)
+            # raises GoogleAPICallError("Unexpected state") even on success.
+            from google.cloud.aiplatform_v1 import FeaturestoreServiceClient
+            from google.cloud.aiplatform_v1.types import featurestore_service
+
+            api_endpoint = f"{region}-aiplatform.googleapis.com"
+            client = FeaturestoreServiceClient(
+                client_options={"api_endpoint": api_endpoint},
             )
+            et_resource = entity_type.resource_name
+            feature_specs = [
+                featurestore_service.ImportFeatureValuesRequest.FeatureSpec(id=fid)
+                for fid in (ids or [])
+            ]
+            request = featurestore_service.ImportFeatureValuesRequest(
+                entity_type=et_resource,
+                bigquery_source={"input_uri": f"bq://{bq_source_table}"},
+                entity_id_field=entity_id_column,
+                feature_specs=feature_specs,
+                feature_time_field=feature_time_column,
+            )
+            operation = client.import_feature_values(request=request)
+            # Don't call operation.result() — that triggers the SDK bug.
+            # Instead, poll the LRO manually via the operations client.
+            op_name = operation.operation.name
+            print(f"Import LRO started: {op_name}")
+            ops_client = client.transport.operations_client
+            for _ in range(60):
+                time.sleep(10)
+                op = ops_client.get_operation(op_name)
+                if op.done:
+                    if op.HasField("error") and op.error.code != 0:
+                        raise RuntimeError(f"Import failed: {op.error.message}")
+                    print("Import completed successfully.")
+                    return
+            raise RuntimeError("Import LRO did not complete within 10 minutes")
 
         return write_features
 

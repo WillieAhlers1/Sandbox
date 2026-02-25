@@ -94,6 +94,17 @@ class TestPipelineBuilder:
         )
         assert len(pipeline.steps) == 3
 
+    def test_write_features_with_feature_ids(self):
+        """WriteFeatures should accept explicit feature_ids list."""
+        ids = ["session_count_7d", "days_since_last_login"]
+        wf = WriteFeatures(entity="user", feature_group="behavioral", feature_ids=ids)
+        assert wf.feature_ids == ids
+
+    def test_write_features_default_feature_ids(self):
+        """WriteFeatures feature_ids defaults to empty list."""
+        wf = WriteFeatures(entity="user", feature_group="behavioral")
+        assert wf.feature_ids == []
+
 
 class TestLocalRunner:
     def test_print_plan(self, simple_pipeline, test_context, capsys):

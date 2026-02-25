@@ -173,7 +173,7 @@ class NamingConvention:
     @cached_property
     def feature_store_id(self) -> str:
         """One Vertex AI Feature Store per team+project (shared across branches)."""
-        return f"{self.team}-{self.project}"
+        return f"{_bq_safe(self.team)}_{_bq_safe(self.project)}"
 
     def feature_view_id(self, entity: str, feature_group: str) -> str:
         """Feature view is branch-namespaced to prevent contamination."""
