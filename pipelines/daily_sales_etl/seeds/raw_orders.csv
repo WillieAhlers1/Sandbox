@@ -1,0 +1,9 @@
+order_id,customer_id,product_category,order_amount,order_date,region
+ORD001,CUST01,Electronics,299.99,2026-03-01,US-West
+ORD002,CUST02,Clothing,59.99,2026-03-01,US-East
+ORD003,CUST01,Electronics,149.99,2026-03-01,US-West
+ORD004,CUST03,Home,89.99,2026-03-01,EU-West
+ORD005,CUST04,Clothing,39.99,2026-03-01,US-East
+ORD006,CUST02,Electronics,599.99,2026-03-01,US-West
+ORD007,CUST05,Home,199.99,2026-03-01,EU-West
+ORD008,CUST06,Clothing,79.99,2026-03-01,US-East

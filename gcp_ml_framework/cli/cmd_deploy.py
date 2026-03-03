@@ -27,27 +27,27 @@ def deploy_dags(
         gml deploy dags
         gml deploy dags --dry-run
     """
-    from gcp_ml_framework.dag.factory import DAGFactory
+    from gcp_ml_framework.dag.factory import discover_and_render
     from gcp_ml_framework.utils.gcs import upload_file
 
     ctx = load_context(framework_yaml=framework_yaml)
     dags_dir.mkdir(exist_ok=True)
 
-    pipelines = [
+    # Discover pipelines: directories with dag.py or pipeline.py
+    pipeline_dirs = [
         p for p in pipelines_dir.iterdir()
-        if p.is_dir() and (p / "pipeline.py").exists()
+        if p.is_dir() and ((p / "dag.py").exists() or (p / "pipeline.py").exists())
     ]
-    if not pipelines:
+    if not pipeline_dirs:
         console.print("[yellow]No pipelines found.[/yellow]")
         return
 
-    for pipeline_dir in pipelines:
-        pipeline_name = pipeline_dir.name
-        dag_filename = f"{ctx.naming.dag_id(pipeline_name)}.py"
+    for pipeline_dir in pipeline_dirs:
+        dag_filename, dag_content = discover_and_render(pipeline_dir, ctx)
         dag_path = dags_dir / dag_filename
-        dag_content = DAGFactory.render_dag_file(pipeline_name, ctx)
         dag_path.write_text(dag_content)
-        console.print(f"[dim]Generated:[/dim] {dag_path}")
+        source = "dag.py" if (pipeline_dir / "dag.py").exists() else "pipeline.py"
+        console.print(f"[dim]Generated ({source}):[/dim] {dag_path}")
 
         if not dry_run and ctx.composer_env:
             gcs_dest = ctx.naming.gcs_dag_sync_path(dag_filename)
