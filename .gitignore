@@ -109,6 +109,11 @@ dags/*.py
 .ipynb_checkpoints/
 
 # ========================
+# Claude Code
+# ========================
+CLAUDE.md
+
+# ========================
 # Local Development Artifacts
 # ========================
 local_output/
