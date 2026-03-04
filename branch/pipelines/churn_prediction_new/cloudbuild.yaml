@@ -1,0 +1,34 @@
+# Cloud Build configuration for Docker image building
+
+steps:
+  # Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_TRAINER_IMAGE}'
+      - '-f'
+      - 'pipelines/churn_prediction_new/trainer/Dockerfile'
+      - 'pipelines/churn_prediction_new'
+
+  # Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_TRAINER_IMAGE}'
+
+  # Run tests (optional)
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'run'
+      - '--rm'
+      - '${_TRAINER_IMAGE}'
+      - '--help'
+
+images:
+  - '${_TRAINER_IMAGE}'
+
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+

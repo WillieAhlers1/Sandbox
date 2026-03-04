@@ -1,0 +1,13 @@
+team: dsci
+project: churn_prediction
+gcp:
+  dev_project_id: prj-0n-dta-pt-ai-sandbox
+  staging_project_id: prj-0n-dta-pt-ai-sandbox
+  prod_project_id: prj-0n-dta-pt-ai-sandbox
+  region: us-east4
+  composer_env: ml-composer-env             # fill in your Composer env name
+  artifact_registry_host: us-east4-docker.pkg.dev
+  service_account_email: gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
+
+secrets:
+  secret_prefix:             # defaults to namespace token; override only if needed
