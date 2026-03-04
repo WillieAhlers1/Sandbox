@@ -1,5 +1,0 @@
-# Pipeline-level config overrides for example_churn.
-# Merged on top of framework.yaml. Only override what differs.
-
-feature_store:
-  sync_schedule: "0 */6 * * *"   # sync features every 6 hours
