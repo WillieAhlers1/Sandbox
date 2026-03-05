@@ -1,0 +1,6 @@
+project_id   = "gcp-gap-demo-dev"
+region       = "us-central1"
+team         = "dsci"
+project_name = "examplechurn"
+environment  = "dev"
+github_repo  = ""
