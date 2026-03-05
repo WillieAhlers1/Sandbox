@@ -174,9 +174,9 @@ class TestRecommendationEngineE2E:
         mod = _load_module("_e2e_reco2", self.pipeline_dir / "dag.py")
         task_names = {t.name for t in mod.dag.tasks}
         assert task_names == {
-            "extract_interactions",
-            "run_feature_pipeline",
-            "run_training_pipeline",
+            "extract_data",
+            "compute_features",
+            "train_model",
             "notify",
         }
 
@@ -188,6 +188,9 @@ class TestRecommendationEngineE2E:
             t for t in mod.dag.tasks if isinstance(t.task, VertexPipelineTask)
         ]
         assert len(vertex_tasks) == 2
+        # Pipelines are embedded inline (pipeline object, not just name)
+        for vt in vertex_tasks:
+            assert vt.task.pipeline is not None
         pipeline_names = {t.task.pipeline_name for t in vertex_tasks}
         assert pipeline_names == {"reco_features", "reco_training"}
 
@@ -215,15 +218,6 @@ class TestRecommendationEngineE2E:
         assert seeds.exists()
         assert (seeds / "raw_interactions.csv").exists()
 
-    def test_sub_pipelines_importable(self):
-        reco_features = _load_module(
-            "_e2e_reco_feat", PIPELINES_DIR / "reco_features" / "pipeline.py"
-        )
-        assert hasattr(reco_features, "pipeline")
-        reco_training = _load_module(
-            "_e2e_reco_train", PIPELINES_DIR / "reco_training" / "pipeline.py"
-        )
-        assert hasattr(reco_training, "pipeline")
 
 
 # ── Generated DAGs: Parse + No Framework Imports ─────────────────────────────
@@ -255,8 +249,6 @@ class TestGeneratedDAGs:
                 dag_file.write_text(dag_content)
                 self.dag_files[pipeline_path.name] = dag_file
             except Exception:
-                # Some sub-pipelines (reco_features, reco_training) are compiled
-                # as part of their parent DAG
                 pass
 
     def test_generated_dags_exist(self):

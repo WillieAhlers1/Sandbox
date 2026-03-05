@@ -156,7 +156,17 @@ class DAGLocalRunner:
         pipeline_name = task.pipeline_name
         print(f"[dag-local]   Running Vertex pipeline '{pipeline_name}' locally...")
 
-        # Try to find and load the pipeline definition
+        from gcp_ml_framework.pipeline.runner import LocalRunner
+
+        # Prefer the inline pipeline object (no directory lookup needed)
+        if task.pipeline is not None:
+            runner = LocalRunner(self._ctx, seeds_dir=None)
+            # Share the DuckDB connection so tables from the DAG are visible
+            runner._conn = self._conn
+            runner.run(task.pipeline, run_date=run_date)
+            return f"vertex_pipeline:{pipeline_name}:completed"
+
+        # Fallback: discover pipeline.py by name on disk
         pipelines_root = Path("pipelines")
         if self._pipeline_dir:
             pipelines_root = self._pipeline_dir.parent
@@ -176,14 +186,11 @@ class DAGLocalRunner:
             spec.loader.exec_module(mod)  # type: ignore[union-attr]
             pipeline_def = mod.pipeline
 
-            from gcp_ml_framework.pipeline.runner import LocalRunner
-
             seeds_dir = pipeline_dir / "seeds"
             runner = LocalRunner(
                 self._ctx,
                 seeds_dir=seeds_dir if seeds_dir.exists() else None,
             )
-            # Share the DuckDB connection so tables from the DAG are visible
             runner._conn = self._conn
             runner.run(pipeline_def, run_date=run_date)
             return f"vertex_pipeline:{pipeline_name}:completed"

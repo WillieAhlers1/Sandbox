@@ -15,7 +15,7 @@ from gcp_ml_framework.dag.tasks.vertex_pipeline import VertexPipelineTask
 def etl_dag_def():
     return (
         DAGBuilder(
-            name="daily_sales_etl",
+            name="test_etl",
             schedule="30 7 * * *",
             description="Daily sales ETL",
             tags=["etl", "sales"],
@@ -74,7 +74,7 @@ class TestDAGCompiler:
     def test_render_contains_dag_id(self, etl_dag_def, test_context):
         compiler = DAGCompiler()
         source = compiler.render(etl_dag_def, test_context)
-        expected_dag_id = test_context.naming.dag_id("daily_sales_etl")
+        expected_dag_id = test_context.naming.dag_id("test_etl")
         assert expected_dag_id in source
 
     def test_render_contains_schedule(self, etl_dag_def, test_context):
@@ -131,7 +131,7 @@ class TestDAGCompiler:
     def test_compile_filename(self, etl_dag_def, test_context, tmp_path):
         compiler = DAGCompiler(output_dir=tmp_path)
         path = compiler.compile(etl_dag_def, test_context)
-        expected = test_context.naming.dag_id("daily_sales_etl") + ".py"
+        expected = test_context.naming.dag_id("test_etl") + ".py"
         assert path.name == expected
 
     def test_render_ml_dag_contains_vertex_operator(self, ml_dag_def, test_context):
