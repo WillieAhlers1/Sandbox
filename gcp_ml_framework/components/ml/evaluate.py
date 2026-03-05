@@ -102,6 +102,12 @@ class EvaluateModel(BaseComponent):
             if failures:
                 raise ValueError(f"Model failed evaluation gates: {', '.join(failures)}")
 
+            # Log metrics to Vertex AI Experiments
+            from google.cloud import aiplatform
+            aiplatform.init(project=project, location=region, experiment=experiment_name)
+            aiplatform.log_metrics(computed)
+            print(f"Logged metrics to experiment '{experiment_name}': {computed}")
+
             return json.dumps(computed)
 
         return evaluate_model

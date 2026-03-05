@@ -700,12 +700,12 @@ def test_ensure_feature_view_connects_to_online_store():
 
 ### Phase 3 Definition of Done
 
-- [ ] `feature_store/client.py` uses v2 APIs (FeatureGroup, FeatureView, FeatureOnlineStore)
-- [ ] `WriteFeatures` is metadata-only (no gRPC, no LRO, no 10-minute wait)
-- [ ] `ReadFeatures.local_run()` returns actual data from DuckDB (not empty DataFrame)
-- [ ] `TrainModel` writes to versioned GCS paths (`{pipeline}/{run_id}/model.pkl`)
-- [ ] `EvaluateModel` KFP component calls `aiplatform.log_metrics()`
-- [ ] All tests pass: `uv run pytest tests/unit/ -v`
+- [x] `feature_store/client.py` uses v2 APIs (FeatureGroup, FeatureView, FeatureOnlineStore)
+- [x] `WriteFeatures` is metadata-only (no gRPC, no LRO, no 10-minute wait)
+- [x] `ReadFeatures.local_run()` returns actual data from DuckDB (not empty DataFrame)
+- [x] `TrainModel` writes to versioned GCS paths (`{pipeline}/{run_id}/model.pkl`)
+- [x] `EvaluateModel` KFP component calls `aiplatform.log_metrics()`
+- [x] All tests pass: `uv run pytest tests/unit/ -v`
 
 **GCP verification** (requires GCP access):
 ```bash

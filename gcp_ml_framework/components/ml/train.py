@@ -74,6 +74,7 @@ class TrainModel(BaseComponent):
             trainer_args: str,  # JSON list
             hyperparameters: str,  # JSON dict
             model_output_uri: str,
+            run_id: str = "",
             dataset_uri: str = "",
         ) -> str:
             """Returns GCS URI of the saved model artifact."""
@@ -87,7 +88,12 @@ class TrainModel(BaseComponent):
                 experiment=experiment_name,
             )
 
-            args = json.loads(trainer_args) + [f"--model-output={model_output_uri}"]
+            # Use versioned model output path if run_id is provided
+            versioned_uri = model_output_uri
+            if run_id:
+                versioned_uri = f"{model_output_uri.rstrip('/')}/{run_id}"
+
+            args = json.loads(trainer_args) + [f"--model-output={versioned_uri}"]
             if dataset_uri:
                 args.append(f"--dataset-path={dataset_uri}")
             for k, v in json.loads(hyperparameters).items():
@@ -118,11 +124,25 @@ class TrainModel(BaseComponent):
         import os
         import tempfile
 
+        pipeline_name = kwargs.get("pipeline_name", "unnamed")
+        run_id = kwargs.get("run_id", "local")
+
         print(f"[local] TrainModel: image={self.trainer_image!r}, machine={self.machine_type!r}")
         print(f"[local] TrainModel: hyperparameters={self.hyperparameters}")
-        out_dir = tempfile.mkdtemp(prefix="gml_model_")
+        print(f"[local] TrainModel: pipeline={pipeline_name}, run_id={run_id}")
+
+        # Use versioned output path: {pipeline_name}/{run_id}/
+        base_dir = tempfile.mkdtemp(prefix="gml_model_")
+        out_dir = os.path.join(base_dir, pipeline_name, run_id)
+        os.makedirs(out_dir, exist_ok=True)
+
         # Write a placeholder model file
         model_path = os.path.join(out_dir, "model.json")
         with open(model_path, "w") as f:
-            json.dump({"framework": "placeholder", "hyperparameters": self.hyperparameters}, f)
+            json.dump({
+                "framework": "placeholder",
+                "hyperparameters": self.hyperparameters,
+                "pipeline_name": pipeline_name,
+                "run_id": run_id,
+            }, f)
         return out_dir
