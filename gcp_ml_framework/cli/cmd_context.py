@@ -46,7 +46,7 @@ def show(
     print_kv_table("GCP", {
         "project": ctx.gcp_project,
         "region": ctx.region,
-        "composer_env": ctx.composer_env or "(not configured)",
+        "composer_dags_path": str(ctx.composer_dags_path) if ctx.composer_dags_path else "(not configured)",
     })
     console.print()
     print_kv_table("Resource Names", {
