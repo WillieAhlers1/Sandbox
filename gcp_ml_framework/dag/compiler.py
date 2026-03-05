@@ -4,6 +4,8 @@ DAGCompiler — compiles a DAGDefinition to an Airflow DAG Python file.
 The generated file is self-contained: it imports Airflow operators directly,
 resolves framework template variables at compile time, and preserves Airflow
 Jinja macros ({{ ds }}) for runtime resolution.
+
+Generated DAGs have ZERO gcp_ml_framework imports.
 """
 
 from __future__ import annotations
@@ -66,7 +68,7 @@ Namespace: {context.namespace}
 GCP project: {context.gcp_project}
 
 DO NOT EDIT MANUALLY.
-Regenerate with: gml deploy dags
+Regenerate with: gml compile
 """
 from datetime import datetime, timedelta
 
@@ -171,38 +173,33 @@ with DAG(
     def _render_vertex_pipeline(
         self, name: str, task: VertexPipelineTask, context: MLContext
     ) -> tuple[str, set[str]]:
+        """Generate a self-contained CreatePipelineJobOperator.
+
+        The generated code references a pre-compiled KFP YAML at its GCS path.
+        No gcp_ml_framework imports are needed at Airflow parse time.
+        """
         imports = {
-            "import sys",
-            "from pathlib import Path",
-            "from gcp_ml_framework.dag.operators import VertexPipelineOperator",
-            "from gcp_ml_framework.config import load_config",
-            "from gcp_ml_framework.context import MLContext as _MLContext",
+            "from airflow.providers.google.cloud.operators.vertex_ai.pipeline_job import CreatePipelineJobOperator",
         }
 
-        code = f"""# Load pipeline definition for: {task.pipeline_name}
-_repo_root = Path(__file__).parent.parent
-if str(_repo_root) not in sys.path:
-    sys.path.insert(0, str(_repo_root))
+        pipeline_name = task.pipeline_name
+        template_path = (
+            f"gs://{context.naming.gcs_bucket}/{context.naming.branch}"
+            f"/pipelines/{pipeline_name}/pipeline.yaml"
+        )
+        pipeline_root = (
+            f"gs://{context.naming.gcs_bucket}/{context.naming.branch}"
+            f"/pipeline_runs/{pipeline_name}/"
+        )
 
-import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location(
-    "_pipeline_{task.pipeline_name}",
-    _repo_root / "pipelines" / "{task.pipeline_name}" / "pipeline.py",
-)
-_mod = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-_pipeline_def_{name} = _mod.pipeline
-
-_cfg = load_config(framework_yaml=_repo_root / "framework.yaml")
-_ctx = _MLContext.from_config(_cfg)
-
-{name} = VertexPipelineOperator(
+        code = f"""{name} = CreatePipelineJobOperator(
     task_id="{name}",
-    pipeline_name="{task.pipeline_name}",
-    context=_ctx,
-    pipeline_def=_pipeline_def_{name},
+    project_id="{context.gcp_project}",
+    region="{context.region}",
+    display_name="{pipeline_name}_{{{{{{ ds_nodash }}}}}}",
+    template_path="{template_path}",
+    pipeline_root="{pipeline_root}",
     enable_caching={task.enable_caching!r},
-    sync={task.sync!r},
 )"""
         return code, imports
 

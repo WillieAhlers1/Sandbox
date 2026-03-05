@@ -112,10 +112,6 @@ class NamingConvention:
     def gcs_model_path(self, model_name: str, version: str = "latest") -> str:
         return self.gcs_path("models", model_name, version)
 
-    def gcs_dag_sync_path(self, dag_filename: str) -> str:
-        """Path in the Composer GCS bucket where the DAG file is synced."""
-        return f"gs://{self.namespace}-composer/dags/{dag_filename}"
-
     # ── BigQuery ──────────────────────────────────────────────────────────────
 
     @cached_property
@@ -184,9 +180,6 @@ class NamingConvention:
     def dag_id(self, pipeline_name: str) -> str:
         """Double-underscore separator for human readability."""
         return f"{self.namespace_bq}__{_bq_safe(pipeline_name)}"
-
-    def composer_environment_name(self) -> str:
-        return f"{self.namespace}-composer"
 
     # ── Secret Manager ────────────────────────────────────────────────────────
 

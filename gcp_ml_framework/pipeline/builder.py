@@ -90,7 +90,7 @@ class PipelineBuilder:
         return self._add("ingest", component, name)
 
     def transform(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:
-        """Add a data transformation step (BQTransform, PandasTransform)."""
+        """Add a data transformation step (BQTransform)."""
         return self._add("transform", component, name)
 
     def write_features(self, component: BaseComponent, name: str | None = None) -> PipelineBuilder:

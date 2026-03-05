@@ -60,7 +60,7 @@ class GCPConfig(BaseModel):
     staging_project_id: str = ""
     prod_project_id: str = ""
     region: str = "us-central1"
-    composer_env: str | None = None
+    composer_dags_path: dict[str, str] = Field(default_factory=dict)
     artifact_registry_host: str = "us-central1-docker.pkg.dev"
     service_account_email: str | None = None
 

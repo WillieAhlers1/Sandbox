@@ -30,7 +30,7 @@ class DeployModel(BaseComponent):
 
     endpoint_name: str
     serving_container_image: str = ""
-    machine_type: str = "n1-standard-2"
+    machine_type: str = "n2-standard-2"
     min_replica_count: int = 1
     max_replica_count: int = 3
     traffic_split: dict[str, int] = field(default_factory=lambda: {"new": 100})

@@ -129,7 +129,7 @@ class TestPipelineBuilder:
     def test_train_model_defaults(self):
         """TrainModel dataclass defaults."""
         tm = TrainModel(trainer_image="img:latest")
-        assert tm.machine_type == "n1-standard-4"
+        assert tm.machine_type == "n2-standard-4"
         assert tm.accelerator_type == ""
         assert tm.accelerator_count == 0
         assert tm.trainer_args == []

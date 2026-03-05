@@ -33,7 +33,7 @@ class MLContext:
     gcp_project: str
     region: str
     git_state: GitState
-    composer_env: str | None
+    composer_dags_path: dict[str, str]
     artifact_registry_host: str
     service_account_email: str | None
     feature_store_online_node_count: int
@@ -57,7 +57,7 @@ class MLContext:
             gcp_project=gcp_project,
             region=cfg.gcp.region,
             git_state=cfg.git_state,
-            composer_env=cfg.gcp.composer_env,
+            composer_dags_path=cfg.gcp.composer_dags_path,
             artifact_registry_host=cfg.gcp.artifact_registry_host,
             service_account_email=cfg.gcp.service_account_email,
             feature_store_online_node_count=cfg.feature_store.online_serving_fixed_node_count,
@@ -107,5 +107,5 @@ class MLContext:
             "bq_dataset": self.bq_dataset,
             "feature_store_id": self.feature_store_id,
             "secret_prefix": self.secret_prefix,
-            "composer_env": self.composer_env or "(not configured)",
+            "composer_dags_path": str(self.composer_dags_path) if self.composer_dags_path else "(not configured)",
         }

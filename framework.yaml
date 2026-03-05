@@ -11,7 +11,10 @@ gcp:
   staging_project_id: gcp-gap-demo-staging
   prod_project_id: gcp-gap-demo-prod
   region: us-central1
-  composer_env:
+  composer_dags_path:
+    dev: ""      # Fill in after Terraform provisions Composer
+    staging: ""
+    prod: ""
   artifact_registry_host: us-central1-docker.pkg.dev
 
 secrets:

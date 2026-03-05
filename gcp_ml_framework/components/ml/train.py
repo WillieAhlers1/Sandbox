@@ -23,13 +23,13 @@ class TrainModel(BaseComponent):
     Example:
         TrainModel(
             trainer_image="us-central1-docker.pkg.dev/my-proj/trainers/churn:latest",
-            machine_type="n1-standard-8",
+            machine_type="n2-standard-8",
             hyperparameters={"learning_rate": 0.01, "max_depth": 6},
         )
     """
 
     trainer_image: str
-    machine_type: str = "n1-standard-4"
+    machine_type: str = "n2-standard-4"
     accelerator_type: str = ""
     accelerator_count: int = 0
     trainer_args: list[str] = field(default_factory=list)

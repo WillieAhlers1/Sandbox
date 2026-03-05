@@ -16,8 +16,9 @@ class VertexPipelineTask(BaseTask):
     """
     Submit a Vertex AI Pipeline as a Composer task.
 
-    Wraps the existing VertexPipelineOperator. The pipeline is identified
-    by name — the framework discovers, compiles, and submits it.
+    The DAG compiler generates a self-contained CreatePipelineJobOperator
+    referencing the compiled KFP YAML at its GCS path. No framework imports
+    are needed at Airflow parse time.
     """
 
     task_type: str = field(default="vertex_pipeline", init=False)
@@ -35,28 +36,8 @@ class VertexPipelineTask(BaseTask):
         return errors
 
     def as_airflow_operator(self, context: MLContext, dag: Any, task_id: str) -> Any:
-        import importlib.util
-        from pathlib import Path
-
-        from gcp_ml_framework.dag.operators import VertexPipelineOperator
-
-        # Look for pipeline.py relative to the dag file's repo root
-        # In Composer, repo root is one level up from dags/
-        repo_root = Path(dag.fileloc).parent.parent if dag else Path(".")
-        pipeline_path = repo_root / "pipelines" / self.pipeline_name / "pipeline.py"
-
-        spec = importlib.util.spec_from_file_location(
-            f"_pipeline_{self.pipeline_name}", pipeline_path,
-        )
-        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
-        pipeline_def = mod.pipeline
-
-        return VertexPipelineOperator(
-            task_id=task_id,
-            pipeline_name=self.pipeline_name,
-            context=context,
-            pipeline_def=pipeline_def,
-            enable_caching=self.enable_caching,
-            sync=self.sync,
+        """Not used directly — the DAG compiler generates operator code."""
+        raise NotImplementedError(
+            "VertexPipelineTask does not create operators directly. "
+            "The DAG compiler generates self-contained CreatePipelineJobOperator code."
         )

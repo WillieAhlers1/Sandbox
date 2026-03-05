@@ -113,11 +113,10 @@ class EvaluateModel(BaseComponent):
         eval_dataset_path: str = "",
         **kwargs: Any,
     ) -> dict[str, float]:
-        """Return synthetic metric values locally (no real model evaluation)."""
-        import random
-
-        computed = {m: round(random.uniform(0.75, 0.95), 4) for m in self.metrics}
-        print(f"[local] EvaluateModel: metrics={computed}")
+        """Return deterministic placeholder metric values locally."""
+        _placeholder = {"auc": 0.50, "f1": 0.50, "accuracy": 0.50, "precision": 0.50, "recall": 0.50}
+        computed = {m: _placeholder.get(m, 0.50) for m in self.metrics}
+        print(f"[local] EvaluateModel: metrics={computed} (placeholder — no model loaded)")
 
         failures = [
             f"{m}={v:.4f} < {self.gate[m]}"

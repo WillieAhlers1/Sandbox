@@ -137,8 +137,10 @@ class TestDAGCompiler:
     def test_render_ml_dag_contains_vertex_operator(self, ml_dag_def, test_context):
         compiler = DAGCompiler()
         source = compiler.render(ml_dag_def, test_context)
-        assert "VertexPipelineOperator" in source
+        assert "CreatePipelineJobOperator" in source
         assert "churn_prediction" in source
+        # Self-contained: no framework imports
+        assert "gcp_ml_framework" not in source
 
     def test_render_parallel_deps(self, test_context):
         dag_def = (

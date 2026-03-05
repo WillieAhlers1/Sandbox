@@ -106,37 +106,3 @@ class BQTransform(BaseComponent):
         out_path = os.path.join(out_dir, f"{self.output_table}.parquet")
         conn.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
         return out_path
-
-
-@dataclass
-class PandasTransform(BaseComponent):
-    """
-    Apply a Python function transformation (local only, used by LocalRunner stubs).
-
-    Not submitted to Vertex AI — maps to a BQTransform for production runs.
-    Useful for rapid local iteration where you don't need BigQuery.
-    """
-
-    transform_fn: Any  # callable(df: pd.DataFrame, ctx: MLContext) -> pd.DataFrame
-    output_table: str
-    input_table: str = ""
-    component_name: str = "pandas_transform"
-    config: ComponentConfig = field(default_factory=ComponentConfig)
-
-    def as_kfp_component(self):
-        raise NotImplementedError(
-            "PandasTransform is a local-only stub. Use BQTransform for production."
-        )
-
-    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> str:
-        import os
-        import tempfile
-
-        import pandas as pd
-
-        df = pd.read_parquet(input_path) if input_path else pd.DataFrame()
-        result = self.transform_fn(df, context)
-        out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")
-        out_path = os.path.join(out_dir, f"{self.output_table}.parquet")
-        result.to_parquet(out_path, index=False)
-        return out_path

@@ -150,7 +150,7 @@ name = "aiohttp-cors"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohttp", marker = "python_full_version < '3.13'" },
+    { name = "aiohttp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6f/6d/d89e846a5444b3d5eb8985a6ddb0daef3774928e1bfbce8e84ec97b0ffa7/aiohttp_cors-0.8.1.tar.gz", hash = "sha256:ccacf9cb84b64939ea15f859a146af1f662a6b1d68175754a07315e305fb1403", size = 38626, upload-time = "2025-03-31T14:16:20.048Z" }
 wheels = [
@@ -352,7 +352,7 @@ wheels = [
 
 [[package]]
 name = "apache-airflow-providers-common-sql"
-version = "1.31.0"
+version = "1.32.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-airflow" },
@@ -361,14 +361,14 @@ dependencies = [
     { name = "more-itertools" },
     { name = "sqlparse" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4b/25/0f2ee4fe1e4619a356854855be95b800e34af997d715f23aed2ff12b37e8/apache_airflow_providers_common_sql-1.31.0.tar.gz", hash = "sha256:c873a3d6f78999405d07568ee7f68823133c843420cf391e049ff24512fb3822", size = 107657, upload-time = "2026-02-14T13:23:23.559Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ea/1f/9fa029cdc6c0204df43798f5ec95b7d0e62067609adb50611002451145b8/apache_airflow_providers_common_sql-1.32.0.tar.gz", hash = "sha256:631bd9bf7fcec817eeb8fd19804f194a9c61762e4f4b7ec41674c9da7e1021bd", size = 114337, upload-time = "2026-03-02T21:05:56Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/c3/bbc56c980ac27dce5907121a8f84e3631cee016c0e0584fa43c0126d3952/apache_airflow_providers_common_sql-1.31.0-py3-none-any.whl", hash = "sha256:9a3403f3db6a862e8cb4adec10bfd33af82e694dfe33f09be40c9ecaa6533a7c", size = 68188, upload-time = "2026-02-14T13:22:40.84Z" },
+    { url = "https://files.pythonhosted.org/packages/72/dc/9560263fc80693b90fa4fd45a42afeb3df9b2f03ace8d4045f4a6ea72a74/apache_airflow_providers_common_sql-1.32.0-py3-none-any.whl", hash = "sha256:d9386e12c8f057a3a4538b88acf0c4f5b56879ce7a6677154eef884cc5adcd15", size = 74979, upload-time = "2026-03-02T20:52:10.904Z" },
 ]
 
 [[package]]
 name = "apache-airflow-providers-google"
-version = "19.5.0"
+version = "20.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "apache-airflow" },
@@ -392,7 +392,7 @@ dependencies = [
     { name = "google-cloud-batch" },
     { name = "google-cloud-bigquery" },
     { name = "google-cloud-bigquery-datatransfer" },
-    { name = "google-cloud-bigquery-storage", marker = "python_full_version < '3.13'" },
+    { name = "google-cloud-bigquery-storage" },
     { name = "google-cloud-bigtable" },
     { name = "google-cloud-build" },
     { name = "google-cloud-compute" },
@@ -436,15 +436,15 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyopenssl" },
     { name = "python-slugify" },
-    { name = "ray", extra = ["default"], marker = "python_full_version < '3.13'" },
+    { name = "ray", extra = ["default"] },
     { name = "sqlalchemy-bigquery" },
     { name = "sqlalchemy-spanner" },
     { name = "tenacity" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ad/91/52557773c66dc81fcc12aff1c234aeb036741010807463ce8747efd6fe63/apache_airflow_providers_google-19.5.0.tar.gz", hash = "sha256:b1d0bcb40959ec466bb98f88bc8fb71c7976012588cf499073db3852645ff28c", size = 2104926, upload-time = "2026-02-02T15:37:25.677Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/e1/9ada076deca71ec3cb77485696292a04733807d6d6e4ef25563c647c4707/apache_airflow_providers_google-20.0.0.tar.gz", hash = "sha256:a787d5056f284351d50d270ecf8e4e4980214ab877fc4f747b1ea9e297dda3e5", size = 2130904, upload-time = "2026-03-02T21:06:02.363Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/56/c41bd808eb2a47cd34a73a74c746c64ca0b600270d9c263bcb1094b44c94/apache_airflow_providers_google-19.5.0-py3-none-any.whl", hash = "sha256:5ddc1d9227f3d1b7d4374c77472840b83f617a8a7980b3f1f2cce8397611b36a", size = 1062051, upload-time = "2026-02-02T15:36:49.791Z" },
+    { url = "https://files.pythonhosted.org/packages/61/dd/7ee8e34bdc5907f4573bfa6cc15c6056b85d92db06f7bf4f052d81f18403/apache_airflow_providers_google-20.0.0-py3-none-any.whl", hash = "sha256:809f571b62eb66f454ce3956a540184c2277ba33f778a30ae29b233d80c01fbc", size = 1077444, upload-time = "2026-03-02T20:52:18.973Z" },
 ]
 
 [[package]]
@@ -777,7 +777,7 @@ name = "colorful"
 version = "0.5.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "python_full_version < '3.13' and sys_platform == 'win32'" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/82/31/109ef4bedeb32b4202e02ddb133162457adc4eb890a9ed9c05c9dd126ed0/colorful-0.5.8.tar.gz", hash = "sha256:bb16502b198be2f1c42ba3c52c703d5f651d826076817185f0294c1a549a7445", size = 209361, upload-time = "2025-10-29T11:53:21.663Z" }
 wheels = [
@@ -1415,25 +1415,25 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apache-airflow", specifier = ">=2.8" },
-    { name = "apache-airflow-providers-google", specifier = ">=19.5.0" },
-    { name = "duckdb", specifier = ">=0.10" },
-    { name = "google-cloud-aiplatform", specifier = ">=1.49" },
-    { name = "google-cloud-bigquery", specifier = ">=3.17" },
-    { name = "google-cloud-secret-manager", specifier = ">=2.20" },
-    { name = "google-cloud-storage", specifier = ">=2.16" },
-    { name = "kfp", specifier = ">=2.7,<3" },
+    { name = "apache-airflow", specifier = ">=2.10" },
+    { name = "apache-airflow-providers-google", specifier = ">=20.0" },
+    { name = "duckdb", specifier = ">=1.1" },
+    { name = "google-cloud-aiplatform", specifier = ">=1.136" },
+    { name = "google-cloud-bigquery", specifier = ">=3.25" },
+    { name = "google-cloud-secret-manager", specifier = ">=2.21" },
+    { name = "google-cloud-storage", specifier = ">=2.18" },
+    { name = "kfp", specifier = ">=2.15,<3" },
     { name = "mypy", marker = "extra == 'dev'" },
-    { name = "pandas", specifier = ">=2.1" },
-    { name = "pyarrow", specifier = ">=15" },
-    { name = "pydantic", specifier = ">=2.6" },
-    { name = "pydantic-settings", specifier = ">=2.2" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "pyarrow", specifier = ">=18" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "typer", specifier = ">=0.12" },
+    { name = "typer", specifier = ">=0.15" },
 ]
 provides-extras = ["dev"]
 
@@ -1733,11 +1733,11 @@ name = "google-cloud-bigquery-storage"
 version = "2.36.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "google-api-core", extra = ["grpc"], marker = "python_full_version < '3.13'" },
-    { name = "google-auth", marker = "python_full_version < '3.13'" },
-    { name = "grpcio", marker = "python_full_version < '3.13'" },
-    { name = "proto-plus", marker = "python_full_version < '3.13'" },
-    { name = "protobuf", marker = "python_full_version < '3.13'" },
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e0/fa/877e0059349369be38a64586b135c59ceadb87d0386084043d8c440ef929/google_cloud_bigquery_storage-2.36.2.tar.gz", hash = "sha256:ad49d8c09ad6cd82da4efe596fcfcdbc1458bf05b93915e3c5c00f1e700ae128", size = 308672, upload-time = "2026-02-19T16:03:10.544Z" }
 wheels = [
@@ -3830,9 +3830,9 @@ name = "opencensus"
 version = "0.11.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "google-api-core", marker = "python_full_version < '3.13'" },
-    { name = "opencensus-context", marker = "python_full_version < '3.13'" },
-    { name = "six", marker = "python_full_version < '3.13'" },
+    { name = "google-api-core" },
+    { name = "opencensus-context" },
+    { name = "six" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/15/a7/a46dcffa1b63084f9f17fe3c8cb20724c4c8f91009fd0b2cfdb27d5d2b35/opencensus-0.11.4.tar.gz", hash = "sha256:cbef87d8b8773064ab60e5c2a1ced58bbaa38a6d052c41aec224958ce544eff2", size = 64966, upload-time = "2024-01-03T18:04:07.085Z" }
 wheels = [
@@ -3927,9 +3927,9 @@ name = "opentelemetry-exporter-prometheus"
 version = "0.60b1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "opentelemetry-api", marker = "python_full_version < '3.13'" },
-    { name = "opentelemetry-sdk", marker = "python_full_version < '3.13'" },
-    { name = "prometheus-client", marker = "python_full_version < '3.13'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/14/39/7dafa6fff210737267bed35a8855b6ac7399b9e582b8cf1f25f842517012/opentelemetry_exporter_prometheus-0.60b1.tar.gz", hash = "sha256:a4011b46906323f71724649d301b4dc188aaa068852e814f4df38cc76eac616b", size = 14976, upload-time = "2025-12-11T13:32:42.944Z" }
 wheels = [
@@ -4687,8 +4687,8 @@ name = "python-discovery"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "filelock", marker = "python_full_version < '3.13'" },
-    { name = "platformdirs", marker = "python_full_version < '3.13'" },
+    { name = "filelock" },
+    { name = "platformdirs" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/82/bb/93a3e83bdf9322c7e21cafd092e56a4a17c4d8ef4277b6eb01af1a540a6f/python_discovery-1.1.0.tar.gz", hash = "sha256:447941ba1aed8cc2ab7ee3cb91be5fc137c5bdbb05b7e6ea62fbdcb66e50b268", size = 55674, upload-time = "2026-02-26T09:42:49.668Z" }
 wheels = [
@@ -4818,14 +4818,14 @@ name = "ray"
 version = "2.54.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "python_full_version < '3.13'" },
-    { name = "filelock", marker = "python_full_version < '3.13'" },
-    { name = "jsonschema", marker = "python_full_version < '3.13'" },
-    { name = "msgpack", marker = "python_full_version < '3.13'" },
-    { name = "packaging", marker = "python_full_version < '3.13'" },
-    { name = "protobuf", marker = "python_full_version < '3.13'" },
-    { name = "pyyaml", marker = "python_full_version < '3.13'" },
-    { name = "requests", marker = "python_full_version < '3.13'" },
+    { name = "click" },
+    { name = "filelock" },
+    { name = "jsonschema" },
+    { name = "msgpack" },
+    { name = "packaging" },
+    { name = "protobuf" },
+    { name = "pyyaml" },
+    { name = "requests" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/08/58/6209b2231947f3c8df09ce1436f1c76c4a11fcafd57c8def852dcbb6d8ef/ray-2.54.0-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:8e39dd56b47a0a1820d5a5a54385bbe54d1d67e1093736d12d8ed4e99d0fa455", size = 70098998, upload-time = "2026-02-18T04:04:58.801Z" },
@@ -4843,20 +4843,20 @@ wheels = [
 
 [package.optional-dependencies]
 default = [
-    { name = "aiohttp", marker = "python_full_version < '3.13'" },
-    { name = "aiohttp-cors", marker = "python_full_version < '3.13'" },
-    { name = "colorful", marker = "python_full_version < '3.13'" },
-    { name = "grpcio", marker = "python_full_version < '3.13'" },
-    { name = "opencensus", marker = "python_full_version < '3.13'" },
-    { name = "opentelemetry-exporter-prometheus", marker = "python_full_version < '3.13'" },
-    { name = "opentelemetry-proto", marker = "python_full_version < '3.13'" },
-    { name = "opentelemetry-sdk", marker = "python_full_version < '3.13'" },
-    { name = "prometheus-client", marker = "python_full_version < '3.13'" },
-    { name = "py-spy", marker = "python_full_version < '3.13'" },
-    { name = "pydantic", marker = "python_full_version < '3.13'" },
-    { name = "requests", marker = "python_full_version < '3.13'" },
-    { name = "smart-open", marker = "python_full_version < '3.13'" },
-    { name = "virtualenv", marker = "python_full_version < '3.13'" },
+    { name = "aiohttp" },
+    { name = "aiohttp-cors" },
+    { name = "colorful" },
+    { name = "grpcio" },
+    { name = "opencensus" },
+    { name = "opentelemetry-exporter-prometheus" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
+    { name = "py-spy" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "smart-open" },
+    { name = "virtualenv" },
 ]
 
 [[package]]
@@ -5434,7 +5434,7 @@ name = "smart-open"
 version = "7.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "wrapt", marker = "python_full_version < '3.13'" },
+    { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e8/be/a66598b305763861a9ab15ff0f2fbc44e47b1ce7a776797337a4eef37c66/smart_open-7.5.1.tar.gz", hash = "sha256:3f08e16827c4733699e6b2cc40328a3568f900cb12ad9a3ad233ba6c872d9fe7", size = 54034, upload-time = "2026-02-23T11:01:28.979Z" }
 wheels = [
@@ -5965,10 +5965,10 @@ name = "virtualenv"
 version = "21.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "distlib", marker = "python_full_version < '3.13'" },
-    { name = "filelock", marker = "python_full_version < '3.13'" },
-    { name = "platformdirs", marker = "python_full_version < '3.13'" },
-    { name = "python-discovery", marker = "python_full_version < '3.13'" },
+    { name = "distlib" },
+    { name = "filelock" },
+    { name = "platformdirs" },
+    { name = "python-discovery" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2f/c9/18d4b36606d6091844daa3bd93cf7dc78e6f5da21d9f21d06c221104b684/virtualenv-21.1.0.tar.gz", hash = "sha256:1990a0188c8f16b6b9cf65c9183049007375b26aad415514d377ccacf1e4fb44", size = 5840471, upload-time = "2026-02-27T08:49:29.702Z" }
 wheels = [
