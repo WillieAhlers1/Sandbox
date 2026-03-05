@@ -1,0 +1,4 @@
+schedule: "0 4 * * *"
+tags:
+  - ml
+  - recommendations

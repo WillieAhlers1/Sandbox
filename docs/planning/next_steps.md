@@ -380,17 +380,17 @@ Run `uv lock` after updating.
 
 ### Phase 1 Definition of Done
 
-- [ ] `grep -r "as_airflow_operator" gcp_ml_framework/components/` returns zero hits
-- [ ] `grep -r "PandasTransform" .` returns zero hits
-- [ ] `grep -r "composer_environment_name\|gcs_dag_sync_path" .` returns zero hits
-- [ ] `grep -r "n1-standard" gcp_ml_framework/` returns zero hits
-- [ ] `gml compile --help` works
-- [ ] `gml deploy --help` works (single command, no subcommands)
-- [ ] `gml promote` does not exist (`gml --help` shows no promote)
-- [ ] `gml run --help` does NOT show `--compile-only`
-- [ ] `EvaluateModel().local_run(ctx)` returns deterministic results (not random)
-- [ ] `uv run pytest tests/unit/ -v` — all tests pass (old + new)
-- [ ] Generated DAG files contain zero `gcp_ml_framework` imports (verify by compiling the existing `daily_sales_etl` example)
+- [x] `grep -r "as_airflow_operator" gcp_ml_framework/components/` returns zero hits
+- [x] `grep -r "PandasTransform" .` returns zero hits
+- [x] `grep -r "composer_environment_name\|gcs_dag_sync_path" .` returns zero hits
+- [x] `grep -r "n1-standard" gcp_ml_framework/` returns zero hits
+- [x] `gml compile --help` works
+- [x] `gml deploy --help` works (single command, no subcommands)
+- [x] `gml promote` does not exist (`gml --help` shows no promote)
+- [x] `gml run --help` does NOT show `--compile-only`
+- [x] `EvaluateModel().local_run(ctx)` returns deterministic results (not random)
+- [x] `uv run pytest tests/unit/ -v` — all tests pass (202 pass, old + 35 new)
+- [x] Generated DAG files contain zero `gcp_ml_framework` imports (uses CreatePipelineJobOperator)
 
 **Local verification**:
 ```bash
@@ -618,15 +618,15 @@ def test_reco_engine_local_run():
 
 ### Phase 2 Definition of Done
 
-- [ ] `docker/base/base-python/Dockerfile` and `docker/base/base-ml/Dockerfile` exist
-- [ ] `scripts/docker_build.sh` auto-generates Dockerfiles for pipelines with `trainer/`
-- [ ] `TrainModel()` works without explicit `trainer_image`
-- [ ] `gml compile --all` compiles all 3 use cases without error
-- [ ] `gml run churn_prediction --local` completes successfully
-- [ ] `gml run sales_analytics --local` completes successfully (8 tasks, non-linear)
-- [ ] `gml run recommendation_engine --local` completes successfully (DAG + 2 Vertex pipelines)
-- [ ] All generated DAG files contain zero `gcp_ml_framework` imports
-- [ ] All new and existing tests pass: `uv run pytest tests/unit/ -v`
+- [x] `docker/base/base-python/Dockerfile` and `docker/base/base-ml/Dockerfile` exist
+- [x] `scripts/docker_build.sh` auto-generates Dockerfiles for pipelines with `trainer/`
+- [x] `TrainModel()` works without explicit `trainer_image`
+- [x] `gml compile --all` compiles all 3 use cases without error
+- [x] `gml run churn_prediction --local` completes successfully
+- [x] `gml run sales_analytics --local` completes successfully (8 tasks, non-linear)
+- [x] `gml run recommendation_engine --local` completes successfully (DAG + 2 Vertex pipelines)
+- [x] All generated DAG files contain zero `gcp_ml_framework` imports
+- [x] All new and existing tests pass: `uv run pytest tests/unit/ -v`
 
 **Local verification**:
 ```bash

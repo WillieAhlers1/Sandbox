@@ -71,6 +71,22 @@ def run(
         _run_vertex(pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines, run_date)
 
 
+def _load_dag(pipeline_dir: Path):
+    """Import a dag.py and return its DAGDefinition."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("_dag", pipeline_dir / "dag.py")
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(f"No dag.py found in {pipeline_dir}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_dag"] = mod
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    if not hasattr(mod, "dag"):
+        raise AttributeError(f"{pipeline_dir}/dag.py must define a `dag` variable")
+    return mod.dag
+
+
 def _run_local(
     pipeline_name: str,
     pipelines_dir: Path,
@@ -78,23 +94,48 @@ def _run_local(
     dry_run: bool,
 ) -> None:
     """Run a pipeline locally using DuckDB/pandas stubs."""
-    from gcp_ml_framework.pipeline.runner import LocalRunner
-
     pipeline_dir = pipelines_dir / pipeline_name
     ctx = load_context(
         framework_yaml=framework_yaml,
         pipeline_yaml=pipeline_dir / "config.yaml" if (pipeline_dir / "config.yaml").exists() else None,
     )
-    pipeline_def = _load_pipeline(pipeline_dir)
 
     seeds_dir = pipeline_dir / "seeds"
-    runner = LocalRunner(ctx, seeds_dir=seeds_dir if seeds_dir.exists() else None)
-    if dry_run:
-        runner.print_plan(pipeline_def)
+
+    if (pipeline_dir / "dag.py").exists():
+        # Use DAG local runner
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        dag_def = _load_dag(pipeline_dir)
+        runner = DAGLocalRunner(
+            ctx,
+            seeds_dir=seeds_dir if seeds_dir.exists() else None,
+            pipeline_dir=pipeline_dir,
+        )
+        if dry_run:
+            for task in dag_def.topological_order():
+                console.print(f"[dim][dry-run][/dim] {task.name} ({task.task.task_type})")
+        else:
+            console.print(f"[cyan]Running {pipeline_name!r} DAG locally...[/cyan]")
+            runner.run(dag_def)
+            console.print("[green]Done.[/green]")
+    elif (pipeline_dir / "pipeline.py").exists():
+        # Use pipeline local runner (existing)
+        from gcp_ml_framework.pipeline.runner import LocalRunner
+
+        pipeline_def = _load_pipeline(pipeline_dir)
+        runner = LocalRunner(ctx, seeds_dir=seeds_dir if seeds_dir.exists() else None)
+        if dry_run:
+            runner.print_plan(pipeline_def)
+        else:
+            console.print(f"[cyan]Running {pipeline_name!r} locally...[/cyan]")
+            runner.run(pipeline_def)
+            console.print("[green]Done.[/green]")
     else:
-        console.print(f"[cyan]Running {pipeline_name!r} locally...[/cyan]")
-        runner.run(pipeline_def)
-        console.print("[green]Done.[/green]")
+        err_console.print(
+            f"[red]Error:[/red] {pipeline_name}/ has neither pipeline.py nor dag.py."
+        )
+        raise typer.Exit(1)
 
 
 def _run_vertex(

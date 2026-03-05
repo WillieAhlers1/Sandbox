@@ -26,8 +26,9 @@ from gcp_ml_framework.dag.tasks.vertex_pipeline import VertexPipelineTask
 class DAGCompiler:
     """Compiles a DAGDefinition to an Airflow-compatible Python file."""
 
-    def __init__(self, output_dir: Path | str = "dags") -> None:
+    def __init__(self, output_dir: Path | str = "dags", pipeline_dir: Path | None = None) -> None:
         self.output_dir = Path(output_dir)
+        self._pipeline_dir = Path(pipeline_dir) if pipeline_dir else None
 
     def compile(self, dag_def: DAGDefinition, context: MLContext) -> Path:
         """Compile the DAG to an Airflow Python file. Returns the file path."""
@@ -123,7 +124,7 @@ with DAG(
         imports = {
             "from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator",
         }
-        resolved_sql = task.resolve_sql(context)
+        resolved_sql = task.resolve_sql(context, pipeline_dir=self._pipeline_dir)
         # Escape backslashes and triple-quote-breaking sequences
         sql_escaped = resolved_sql.replace("\\", "\\\\")
 

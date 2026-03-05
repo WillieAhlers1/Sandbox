@@ -87,7 +87,7 @@ def _compile_pipeline(
     # Auto-wrap in a DAG file
     from gcp_ml_framework.dag.factory import auto_wrap_pipeline_dag
 
-    dag_path = auto_wrap_pipeline_dag(pipeline_name, ctx, dags_dir)
+    dag_path = auto_wrap_pipeline_dag(pipeline_def, ctx, dags_dir)
     console.print(f"[green]Generated DAG:[/green] {dag_path}")
 
 

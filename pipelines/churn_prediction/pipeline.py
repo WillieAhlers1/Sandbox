@@ -1,7 +1,7 @@
 """
-Example churn prediction pipeline.
+Churn prediction pipeline.
 
-This is the reference pipeline for the GCP ML Framework.
+Weekly churn model training and deployment pipeline.
 Edit this file to change the pipeline topology — no DAG code required.
 """
 
@@ -80,8 +80,7 @@ pipeline = (
     )
     .train(
         TrainModel(
-            trainer_image="{artifact_registry}/churn-trainer:latest",
-            machine_type="n1-standard-8",
+            machine_type="n2-standard-8",
             hyperparameters={
                 "learning_rate": 0.05,
                 "max_depth": 6,
@@ -102,7 +101,7 @@ pipeline = (
         DeployModel(
             endpoint_name="churn-classifier",
             serving_container_image="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-5:latest",
-            machine_type="n1-standard-2",
+            machine_type="n2-standard-2",
             min_replica_count=1,
             max_replica_count=3,
             traffic_split={"new": 100},

@@ -71,6 +71,23 @@ def make_dag(pipeline_def: PipelineDefinition, context: MLContext):
     return dag
 
 
+def auto_wrap_pipeline_dag(
+    pipeline_def: PipelineDefinition, context: MLContext, dags_dir: Path | str = "dags"
+) -> Path:
+    """
+    Auto-generate and write a DAG file for a PipelineBuilder pipeline.
+
+    Returns the written file path.
+    """
+    dags_dir = Path(dags_dir)
+    dags_dir.mkdir(parents=True, exist_ok=True)
+    dag_id = context.naming.dag_id(pipeline_def.name)
+    content = auto_dag_for_pipeline(pipeline_def, context)
+    output_path = dags_dir / f"{dag_id}.py"
+    output_path.write_text(content)
+    return output_path
+
+
 def auto_dag_for_pipeline(pipeline_def: PipelineDefinition, context: MLContext) -> str:
     """
     Auto-generate a DAG file for a PipelineBuilder pipeline that has no custom dag.py.
@@ -99,11 +116,13 @@ def auto_dag_for_pipeline(pipeline_def: PipelineDefinition, context: MLContext) 
     return compiler.render(dag_def, context)
 
 
-def render_dag_from_definition(dag_def, context: MLContext) -> str:
+def render_dag_from_definition(
+    dag_def, context: MLContext, pipeline_dir: Path | None = None
+) -> str:
     """Render a DAGDefinition (from dag.py) to an Airflow DAG file."""
     from gcp_ml_framework.dag.compiler import DAGCompiler
 
-    compiler = DAGCompiler()
+    compiler = DAGCompiler(pipeline_dir=pipeline_dir)
     return compiler.render(dag_def, context)
 
 
@@ -129,7 +148,7 @@ def discover_and_render(
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
         dag_def = mod.dag
         dag_id = context.naming.dag_id(dag_def.name)
-        content = render_dag_from_definition(dag_def, context)
+        content = render_dag_from_definition(dag_def, context, pipeline_dir=pipeline_dir)
         return f"{dag_id}.py", content
 
     if pipeline_py.exists():

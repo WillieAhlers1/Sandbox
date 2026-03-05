@@ -28,7 +28,7 @@ class TrainModel(BaseComponent):
         )
     """
 
-    trainer_image: str
+    trainer_image: str = ""
     machine_type: str = "n2-standard-4"
     accelerator_type: str = ""
     accelerator_count: int = 0
@@ -36,6 +36,23 @@ class TrainModel(BaseComponent):
     hyperparameters: dict[str, Any] = field(default_factory=dict)
     component_name: str = "train_model"
     config: ComponentConfig = field(default_factory=ComponentConfig)
+
+    def resolve_image_uri(self, pipeline_name: str, context: "MLContext") -> str:
+        """Resolve the trainer image URI.
+
+        If trainer_image is set, return it as-is.
+        Otherwise, derive from the pipeline name and context.
+        """
+        if self.trainer_image:
+            return self.trainer_image
+        from gcp_ml_framework.naming import _slugify
+
+        image_name = _slugify(pipeline_name) + "-trainer"
+        return context.naming.image_uri(
+            registry_host=context.artifact_registry_host,
+            gcp_project=context.gcp_project,
+            image_name=image_name,
+        )
 
     def as_kfp_component(self):
         from kfp import dsl  # type: ignore[import]
