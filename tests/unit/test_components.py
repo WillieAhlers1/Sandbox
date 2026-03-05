@@ -317,6 +317,18 @@ class TestTrainModel:
         uri = comp.resolve_image_uri("churn_prediction", test_context)
         assert "churn-prediction-trainer" in uri
 
+    def test_resolve_image_uri_with_pipeline_dir(self, test_context):
+        """pipeline_dir name is used instead of pipeline_name for image derivation."""
+        from pathlib import Path
+
+        comp = TrainModel()
+        uri = comp.resolve_image_uri(
+            "reco_training", test_context,
+            pipeline_dir=Path("pipelines/recommendation_engine"),
+        )
+        assert "recommendation-engine-trainer" in uri
+        assert "reco-training" not in uri
+
 
 # ── EvaluateModel ─────────────────────────────────────────────────────────────
 

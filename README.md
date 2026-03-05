@@ -129,7 +129,7 @@ Every component implements `as_kfp_component()` (for Vertex AI) and `local_run()
 gml init project <team> <project>      Scaffold a new project with framework.yaml, CI/CD, schemas
 gml init pipeline <name>               Add a pipeline directory with template files
 gml context show [--branch] [--json]   Show resolved namespace, GCP project, resource names
-gml run <pipeline> [--local|--vertex]  Run locally (default) or submit to Vertex AI
+gml run <pipeline> [--local|--vertex]  Run locally (default) or use as a DEBUG submit to Vertex AI
 gml compile <pipeline> [--all]         Compile to KFP YAML + Airflow DAG files
 gml deploy <pipeline> [--all]          Compile + upload DAGs, YAMLs, feature schemas
 gml teardown --branch <branch>         Delete ephemeral DEV resources (GCS, BQ)
@@ -137,14 +137,13 @@ gml teardown --branch <branch>         Delete ephemeral DEV resources (GCS, BQ)
 
 ## Example Pipelines
 
-The repo ships with 4 working pipelines demonstrating different patterns:
+The repo ships with 3 working pipelines demonstrating different patterns:
 
 | Pipeline | Type | Pattern | Description |
 |---|---|---|---|
-| `churn_prediction` | PipelineBuilder | Full ML loop | Ingest → Transform → Features → Train → Evaluate (gate) → Deploy |
-| `daily_sales_etl` | DAGBuilder | Simple ETL | Extract → Transform → Notify (3 tasks, linear) |
+| `churn_prediction` | PipelineBuilder | Pure ML | Ingest → Transform → Features → Train → Evaluate (gate) → Deploy |
 | `sales_analytics` | DAGBuilder | Fan-out/fan-in | 3 parallel extractions → 3 aggregations → report → notify (8 tasks) |
-| `recommendation_engine` | DAGBuilder | Hybrid ML | BQ extraction → 2 parallel Vertex pipelines → notify |
+| `recommendation_engine` | DAGBuilder | Hybrid ML | BQ extraction → 2 inline Vertex pipelines (features + training) → notify |
 
 All include seed data for local testing with `gml run <name> --local`.
 
@@ -169,7 +168,7 @@ terraform init && terraform plan -var-file=terraform.tfvars
 ## Testing
 
 ```bash
-uv run pytest tests/ -v              # 359 tests, all passing
+uv run pytest tests/ -v              # 360 tests, all passing
 uv run pytest tests/unit/            # Unit tests only
 uv run pytest tests/integration/     # E2E integration tests
 uv run ruff check .                  # Lint
@@ -177,13 +176,13 @@ uv run ruff check .                  # Lint
 
 | Test Suite | Tests | Coverage |
 |---|---|---|
-| Unit — Components | 44 | All 8 components: defaults, local_run(), as_kfp_component() |
+| Unit — Components | 45 | All 8 components: defaults, local_run(), as_kfp_component() |
 | Unit — CLI | 22 | All 6 CLI commands with typer CliRunner |
 | Unit — Config/Context/Naming | 45 | Config layering, git state, namespace resolution |
 | Unit — DAG Builder/Compiler/Tasks | 67 | DSL, topological sort, compilation, task types |
 | Unit — Pipeline Builder/Compiler | 28 | PipelineBuilder DSL, KFP compilation |
 | Unit — Feature Store/Secrets/SQL | 27 | Schema parsing, v2 API, secrets, BQ→DuckDB compat |
-| Unit — Phase regression | 102 | Phase 1-3 specific regression tests |
+| Unit — Phase regression | 103 | Phase 1-3 specific regression tests |
 | Integration — E2E | 24 | Full compile + local run for all 4 pipelines |
 
 ## Config System
@@ -245,12 +244,9 @@ Secrets use `!secret key` references, resolved from GCP Secret Manager in cloud 
 │   └── utils/                          #   GCS, BQ, SQL compat, logging helpers
 │
 ├── pipelines/                          #   User-defined pipelines
-│   ├── churn_prediction/               #     ML pipeline (pipeline.py + seeds + trainer)
-│   ├── daily_sales_etl/                #     Simple ETL DAG (dag.py + seeds)
+│   ├── churn_prediction/               #     Pure ML pipeline (pipeline.py + seeds + trainer)
 │   ├── sales_analytics/                #     Fan-out/fan-in DAG (dag.py + 7 SQL files + seeds)
-│   ├── recommendation_engine/          #     Hybrid DAG (dag.py + trainer + seeds)
-│   ├── reco_features/                  #     Sub-pipeline for reco engine (pipeline.py)
-│   └── reco_training/                  #     Sub-pipeline for reco engine (pipeline.py)
+│   └── recommendation_engine/          #     Hybrid DAG (dag.py + 2 inline Vertex pipelines + trainer + seeds)
 │
 ├── feature_schemas/                    #   Entity feature definitions (YAML)
 │   ├── user.yaml                       #     9 features (behavioral + demographic)
@@ -262,7 +258,7 @@ Secrets use `!secret key` references, resolved from GCP Secret Manager in cloud 
 │
 ├── docker/base/                        #   Base Docker images (python, ML)
 ├── scripts/                            #   bootstrap.sh, docker_build.sh
-├── tests/                              #   359 tests (16 unit + 1 integration file)
+├── tests/                              #   360 tests (16 unit + 1 integration file)
 │
 └── docs/                               #   Documentation
     ├── architecture/plan.md            #     System design + naming conventions

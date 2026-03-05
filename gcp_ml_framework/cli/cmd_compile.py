@@ -10,11 +10,17 @@ from gcp_ml_framework.cli._helpers import console, err_console, load_context
 
 
 def compile_cmd(
-    name: str = typer.Argument("", help="Pipeline/DAG name to compile (directory name under pipelines/)"),
+    name: str = typer.Argument(
+        "", help="Pipeline/DAG name to compile (directory name under pipelines/)"
+    ),
     all_pipelines: bool = typer.Option(False, "--all", help="Compile all pipelines"),
     pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
-    output_dir: Path = typer.Option(Path("compiled_pipelines"), "--out", help="Output dir for compiled YAML"),
-    dags_dir: Path = typer.Option(Path("dags"), "--dags-dir", help="Output dir for generated DAG files"),
+    output_dir: Path = typer.Option(
+        Path("compiled_pipelines"), "--out", help="Output dir for compiled YAML"
+    ),
+    dags_dir: Path = typer.Option(
+        Path("dags"), "--dags-dir", help="Output dir for generated DAG files"
+    ),
     framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
 ) -> None:
     """
@@ -45,8 +51,7 @@ def compile_cmd(
 
         if has_pipeline_py and has_dag_py:
             err_console.print(
-                f"[red]Error:[/red] {pipeline_name}/ has both pipeline.py and dag.py. "
-                "Use only one."
+                f"[red]Error:[/red] {pipeline_name}/ has both pipeline.py and dag.py. Use only one."
             )
             raise typer.Exit(1)
 
@@ -81,7 +86,7 @@ def _compile_pipeline(
 
     pipeline_def = _load_pipeline(pipeline_dir)
     compiler = PipelineCompiler(output_dir=output_dir)
-    yaml_path = compiler.compile(pipeline_def, ctx)
+    yaml_path = compiler.compile(pipeline_def, ctx, pipeline_dir=pipeline_dir)
     console.print(f"[green]Compiled KFP YAML:[/green] {yaml_path}")
 
     # Auto-wrap in a DAG file
@@ -114,15 +119,24 @@ def _compile_embedded_vertex_pipelines(pipeline_dir: Path, ctx, output_dir: Path
 
     for dag_task in dag_def.tasks:
         if isinstance(dag_task.task, VertexPipelineTask) and dag_task.task.pipeline_name:
-            vp_name = dag_task.task.pipeline_name
-            vp_dir = pipeline_dir.parent / vp_name
-            if (vp_dir / "pipeline.py").exists():
+            # Inline pipeline object takes priority over disk discovery
+            if dag_task.task.pipeline is not None:
                 from gcp_ml_framework.pipeline.compiler import PipelineCompiler
 
-                pipeline_def = _load_pipeline(vp_dir)
                 compiler = PipelineCompiler(output_dir=output_dir)
-                yaml_path = compiler.compile(pipeline_def, ctx)
+                # Use the parent pipeline_dir (where trainer/ lives)
+                yaml_path = compiler.compile(dag_task.task.pipeline, ctx, pipeline_dir=pipeline_dir)
                 console.print(f"[green]Compiled embedded pipeline:[/green] {yaml_path}")
+            else:
+                vp_name = dag_task.task.pipeline_name
+                vp_dir = pipeline_dir.parent / vp_name
+                if (vp_dir / "pipeline.py").exists():
+                    from gcp_ml_framework.pipeline.compiler import PipelineCompiler
+
+                    pipeline_def = _load_pipeline(vp_dir)
+                    compiler = PipelineCompiler(output_dir=output_dir)
+                    yaml_path = compiler.compile(pipeline_def, ctx, pipeline_dir=vp_dir)
+                    console.print(f"[green]Compiled embedded pipeline:[/green] {yaml_path}")
 
 
 def _load_pipeline(pipeline_dir: Path):

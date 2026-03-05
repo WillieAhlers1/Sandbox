@@ -642,11 +642,12 @@ trainer/
 
 ### 7.2 How TrainModel Resolves Images
 
-`TrainModel` does **not** require a `trainer_image` parameter. The framework derives it:
+`TrainModel` does **not** require a `trainer_image` parameter. The framework derives it from the pipeline's **directory name** (matching `docker_build.sh` convention). For inline pipelines defined inside a parent DAG, the parent directory name is used:
 
 ```python
-# Image name derived from pipeline name:
-#   pipeline name: "churn_prediction" → image: "churn-prediction-trainer"
+# Image name derived from pipeline directory name:
+#   directory: "pipelines/churn_prediction" → image: "churn-prediction-trainer"
+#   inline pipeline "reco_training" in "pipelines/recommendation_engine" → image: "recommendation-engine-trainer"
 #
 # Full URI resolved at compile time:
 #   {ar_host}/{project}/{namespace}/churn-prediction-trainer:{tag}

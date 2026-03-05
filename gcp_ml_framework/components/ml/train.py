@@ -1,6 +1,7 @@
 """TrainModel — submit a Vertex AI Custom Training Job."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
@@ -37,17 +38,21 @@ class TrainModel(BaseComponent):
     component_name: str = "train_model"
     config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def resolve_image_uri(self, pipeline_name: str, context: "MLContext") -> str:
+    def resolve_image_uri(
+        self, pipeline_name: str, context: "MLContext", pipeline_dir: "Path | None" = None
+    ) -> str:
         """Resolve the trainer image URI.
 
         If trainer_image is set, return it as-is.
-        Otherwise, derive from the pipeline name and context.
+        Otherwise, derive from the pipeline directory name (matching
+        ``docker_build.sh`` convention) or fall back to pipeline_name.
         """
         if self.trainer_image:
             return self.trainer_image
         from gcp_ml_framework.naming import _slugify
 
-        image_name = _slugify(pipeline_name) + "-trainer"
+        source_name = pipeline_dir.name if pipeline_dir else pipeline_name
+        image_name = _slugify(source_name) + "-trainer"
         return context.naming.image_uri(
             registry_host=context.artifact_registry_host,
             gcp_project=context.gcp_project,
@@ -83,7 +88,8 @@ class TrainModel(BaseComponent):
             from google.cloud import aiplatform
 
             aiplatform.init(
-                project=project, location=region,
+                project=project,
+                location=region,
                 staging_bucket=staging_bucket,
                 experiment=experiment_name,
             )
@@ -139,10 +145,13 @@ class TrainModel(BaseComponent):
         # Write a placeholder model file
         model_path = os.path.join(out_dir, "model.json")
         with open(model_path, "w") as f:
-            json.dump({
-                "framework": "placeholder",
-                "hyperparameters": self.hyperparameters,
-                "pipeline_name": pipeline_name,
-                "run_id": run_id,
-            }, f)
+            json.dump(
+                {
+                    "framework": "placeholder",
+                    "hyperparameters": self.hyperparameters,
+                    "pipeline_name": pipeline_name,
+                    "run_id": run_id,
+                },
+                f,
+            )
         return out_dir

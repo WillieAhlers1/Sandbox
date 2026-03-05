@@ -12,7 +12,7 @@ The key idea: your git branch determines your GCP namespace. Every resource — 
 
 **Codebase stats:**
 - 51 Python source files, ~4,700 lines of framework code
-- 19 test files, ~3,500 lines, 359 tests (all passing)
+- 19 test files, ~3,500 lines, 360 tests (all passing)
 - 4 working example pipelines with seed data
 - Full CLI with 6 command groups
 - 4 Terraform modules for infrastructure
@@ -118,22 +118,6 @@ dag.py -> DAGBuilder -> DAGDefinition
 
 **File:** `pipelines/{name}/dag.py`
 
-**Simple ETL** (from `pipelines/daily_sales_etl/dag.py`):
-
-```python
-from gcp_ml_framework.dag.builder import DAGBuilder
-from gcp_ml_framework.dag.tasks.bq_query import BQQueryTask
-from gcp_ml_framework.dag.tasks.email import EmailTask
-
-dag = (
-    DAGBuilder(name="daily_sales_etl", schedule="30 7 * * *", tags=["etl", "sales"])
-    .task(BQQueryTask(sql="SELECT ...", destination_table="staged_orders"), name="extract")
-    .task(BQQueryTask(sql="SELECT ...", destination_table="summary"), name="transform")
-    .task(EmailTask(to=["team@co.com"], subject="[{namespace}] ETL Complete"), name="notify")
-    .build()
-)
-```
-
 **Fan-out/fan-in** (from `pipelines/sales_analytics/dag.py`):
 
 ```python
@@ -164,16 +148,34 @@ dag = (
 **Hybrid (Vertex pipelines inside a DAG)** (from `pipelines/recommendation_engine/dag.py`):
 
 ```python
+# Inline pipeline definitions — no separate directories needed
+feature_pipeline = (
+    PipelineBuilder(name="reco_features")
+    .ingest(BigQueryExtract(query="SELECT ... FROM `{bq_dataset}.raw_interactions`", output_table="raw_interactions"))
+    .transform(BQTransform(sql="SELECT ...", output_table="reco_user_profiles"))
+    .write_features(WriteFeatures(entity="user", feature_group="behavioral"))
+    .build()
+)
+
+training_pipeline = (
+    PipelineBuilder(name="reco_training")
+    .ingest(BigQueryExtract(query="SELECT ... FROM `{bq_dataset}.raw_interactions`", output_table="reco_training_data"))
+    .train(TrainModel(machine_type="n2-standard-16", hyperparameters={"embedding_dim": 64}))
+    .evaluate(EvaluateModel(metrics=["ndcg@10"], gate={"ndcg@10": 0.35}))
+    .deploy(DeployModel(endpoint_name="reco-model"))
+    .build()
+)
+
 dag = (
-    DAGBuilder(name="recommendation_engine", schedule="0 4 * * *")
-    .task(BQQueryTask(sql_file="sql/extract_interactions.sql", destination_table="staged_interactions"),
-          name="extract_interactions", depends_on=[])
-    .task(VertexPipelineTask(pipeline_name="reco_features"),
-          name="run_feature_pipeline", depends_on=["extract_interactions"])
-    .task(VertexPipelineTask(pipeline_name="reco_training"),
-          name="run_training_pipeline", depends_on=["extract_interactions"])
+    DAGBuilder(name="recommendation_engine", schedule="0 2 * * *")
+    .task(BQQueryTask(sql_file="sql/extract_interactions.sql", destination_table="raw_interactions"),
+          name="extract_data", depends_on=[])
+    .task(VertexPipelineTask(pipeline=feature_pipeline),
+          name="compute_features", depends_on=["extract_data"])
+    .task(VertexPipelineTask(pipeline=training_pipeline),
+          name="train_model", depends_on=["compute_features"])
     .task(EmailTask(to=["ml-team@co.com"], subject="Reco engine complete"),
-          name="notify", depends_on=["run_feature_pipeline", "run_training_pipeline"])
+          name="notify", depends_on=["train_model"])
     .build()
 )
 ```
@@ -407,7 +409,7 @@ TrainModel(
 )
 ```
 
-**Auto image resolution:** If `trainer_image` is empty, derives from pipeline name: `{registry}/{pipeline_slug}-trainer:latest`.
+**Auto image resolution:** If `trainer_image` is empty, derives from the pipeline's **directory name** (matching the `docker_build.sh` convention): `{registry}/{dir_slug}-trainer:{tag}`. For inline pipelines defined inside a parent DAG's `dag.py`, the parent directory name is used. Falls back to the pipeline name if no directory context is available.
 
 **Model versioning:** Artifacts stored at `{gcs_prefix}/models/{pipeline_name}/{run_id}/`.
 
@@ -539,17 +541,7 @@ ingest_raw_events (BigQueryExtract)
 **Seed data:** `seeds/raw_user_events.csv` — 10 users with session counts, purchase data, and churn labels.
 **Trainer:** `trainer/train.py` — sklearn StandardScaler + LogisticRegression.
 
-### 2. `pipelines/daily_sales_etl/` — Simple ETL DAG (DAGBuilder)
-
-Daily extract, transform, notify. 3 tasks, linear.
-
-```
-extract_raw_orders (BQQueryTask) -> transform_daily_summary (BQQueryTask) -> notify_team (EmailTask)
-```
-
-**Seed data:** `seeds/raw_orders.csv` — 8 orders.
-
-### 3. `pipelines/sales_analytics/` — Fan-out/Fan-in (DAGBuilder)
+### 2. `pipelines/sales_analytics/` — Fan-out/Fan-in (DAGBuilder)
 
 8-task non-linear DAG with 3 parallel extraction branches that fan-in to a report.
 
@@ -562,23 +554,22 @@ extract_returns    -> agg_refunds   -+
 **Seed data:** 3 CSV files (orders, inventory, returns).
 **SQL files:** 7 SQL files in `sql/` directory.
 
-### 4. `pipelines/recommendation_engine/` — Hybrid DAG (DAGBuilder + Vertex)
+### 3. `pipelines/recommendation_engine/` — Hybrid DAG (DAGBuilder + Vertex)
 
-BQ extraction feeding 2 parallel Vertex AI pipelines, then notification.
+BQ extraction feeding 2 sequential Vertex AI pipelines (defined inline), then notification.
 
 ```
-extract_interactions -> run_feature_pipeline (VertexPipelineTask: reco_features)
-                     -> run_training_pipeline (VertexPipelineTask: reco_training)
-                                                                    -> notify
+extract_data -> compute_features (VertexPipelineTask: reco_features)
+             -> train_model (VertexPipelineTask: reco_training)
+                                                     -> notify
 ```
 
-**Sub-pipelines:** `reco_features/pipeline.py` (feature extraction) and `reco_training/pipeline.py` (model training with NMF collaborative filtering).
+**Inline pipelines:** `feature_pipeline` (feature extraction + WriteFeatures) and `training_pipeline` (training + evaluation gate + deploy) are defined as `PipelineDefinition` objects directly in `dag.py` — no separate directories needed.
 **Seed data:** `seeds/raw_interactions.csv`.
 
 **Try any pipeline locally:**
 ```bash
 uv run gml run churn_prediction --local
-uv run gml run daily_sales_etl --local
 uv run gml run sales_analytics --local
 uv run gml run recommendation_engine --local
 ```
@@ -598,7 +589,7 @@ The framework provides base Docker images and auto-generation:
 - Auto-generates a Dockerfile if one doesn't exist
 - Builds and optionally pushes to Artifact Registry
 
-**TrainModel auto-resolution:** If `trainer_image` is left empty, the framework auto-derives the image URI from the pipeline name using `{registry}/{pipeline_slug}-trainer:latest`.
+**TrainModel auto-resolution:** If `trainer_image` is left empty, the framework auto-derives the image URI from the pipeline's **directory name** (matching the `docker_build.sh` tagging convention): `{registry}/{dir_slug}-trainer:{tag}`. For inline pipelines, the parent DAG's directory name is used.
 
 ---
 
@@ -672,7 +663,7 @@ After provisioning, update `framework.yaml` with the Composer DAGs path from `te
 ## Running Tests
 
 ```bash
-# Run all 359 tests
+# Run all 360 tests
 uv run pytest tests/ -v
 
 # Unit tests only
@@ -698,7 +689,7 @@ uv run mypy gcp_ml_framework/
 
 | Test File | Tests | What It Covers |
 |---|---|---|
-| `test_components.py` | 44 | All 8 components: defaults, local_run() with DuckDB, as_kfp_component(), gate logic |
+| `test_components.py` | 45 | All 8 components: defaults, local_run() with DuckDB, as_kfp_component(), gate logic |
 | `test_cli.py` | 22 | All 6 CLI commands: init, context, compile, run, deploy, teardown |
 | `test_pipeline_builder.py` | 28 | PipelineBuilder DSL, step sequencing, KFP compilation, artifact registry resolution |
 | `test_dag_builder.py` | 23 | DAGBuilder DSL, depends_on, topological sort, cycle detection, validation |
@@ -711,7 +702,7 @@ uv run mypy gcp_ml_framework/
 | `test_secrets.py` | 7 | Secret resolution, env var fallback, `!secret` dict resolution |
 | `test_sql_compat.py` | 10 | BigQuery to DuckDB SQL translation (7 functions) |
 | `test_phase1.py` | 35 | Phase 1 regression: dead code removal, machine types, CLI structure |
-| `test_phase2.py` | 49 | Phase 2 regression: Docker, DAG runner, use cases, seed data |
+| `test_phase2.py` | 50 | Phase 2 regression: Docker, DAG runner, use cases, seed data |
 | `test_phase3.py` | 18 | Phase 3 regression: Feature Store v2, model versioning, experiments |
 | `test_e2e.py` (integration) | 24 | Full compile + local run for all 4 pipelines, generated DAG validation |
 

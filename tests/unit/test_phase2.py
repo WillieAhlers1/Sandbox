@@ -97,6 +97,16 @@ class TestTrainModelOptionalImage:
         assert "churn-prediction" in uri
         assert test_context.artifact_registry_host in uri
 
+    def test_resolve_image_uri_from_pipeline_dir(self, test_context):
+        """When pipeline_dir is provided, image name derives from dir name."""
+        tm = TrainModel()
+        uri = tm.resolve_image_uri(
+            "reco_training", test_context,
+            pipeline_dir=Path("pipelines/recommendation_engine"),
+        )
+        assert "recommendation-engine-trainer" in uri
+        assert "reco-training" not in uri
+
     def test_train_model_explicit_image_not_overridden(self, test_context):
         """Explicit trainer_image is returned as-is by resolve_image_uri."""
         tm = TrainModel(trainer_image="gcr.io/my-proj/custom:v1")
@@ -537,17 +547,17 @@ class TestRecommendationEngine:
         assert sql_dir.exists()
         assert (sql_dir / "extract_interactions.sql").exists()
 
-    def test_reco_vertex_pipeline_definitions_exist(self):
-        """Pipeline definitions referenced by VertexPipelineTasks must exist."""
+    def test_reco_vertex_pipeline_definitions_inline(self):
+        """VertexPipelineTasks must have inline pipeline objects (not separate dirs)."""
         from pipelines.recommendation_engine.dag import dag
 
         for t in dag.tasks:
             if isinstance(t.task, VertexPipelineTask):
-                # Check that the pipeline .py file exists
-                vp_name = t.task.pipeline_name
-                pipe_dir = Path("pipelines") / vp_name
-                assert (pipe_dir / "pipeline.py").exists(), (
-                    f"Pipeline {vp_name}/pipeline.py missing for VertexPipelineTask"
+                assert t.task.pipeline is not None, (
+                    f"VertexPipelineTask '{t.name}' should have an inline pipeline object"
+                )
+                assert t.task.pipeline_name, (
+                    f"pipeline_name should be derived from inline pipeline"
                 )
 
     def test_reco_local_run(self, test_context):

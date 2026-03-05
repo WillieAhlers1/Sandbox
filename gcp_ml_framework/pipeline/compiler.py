@@ -30,6 +30,7 @@ class PipelineCompiler:
         self,
         pipeline_def: "PipelineDefinition",
         context: "MLContext",
+        pipeline_dir: "Path | None" = None,
     ) -> Path:
         """
         Compile the pipeline to a KFP YAML file.
@@ -43,7 +44,7 @@ class PipelineCompiler:
                 "kfp is required for compilation. Install with: pip install kfp>=2.7"
             ) from exc
 
-        pipeline_fn = self._build_kfp_pipeline(pipeline_def, context)
+        pipeline_fn = self._build_kfp_pipeline(pipeline_def, context, pipeline_dir)
 
         output_path = self.output_dir / f"{pipeline_def.name}.yaml"
         kfp_compiler.Compiler().compile(
@@ -52,7 +53,12 @@ class PipelineCompiler:
         )
         return output_path
 
-    def _build_kfp_pipeline(self, pipeline_def: "PipelineDefinition", context: "MLContext"):
+    def _build_kfp_pipeline(
+        self,
+        pipeline_def: "PipelineDefinition",
+        context: "MLContext",
+        pipeline_dir: "Path | None" = None,
+    ):
         """
         Dynamically construct a @dsl.pipeline decorated function from the steps.
 
@@ -65,7 +71,7 @@ class PipelineCompiler:
         steps = pipeline_def.steps
         pipeline_root = context.naming.gcs_pipeline_root(pipeline_def.name)
         ctx_params = self._build_context_params(context, pipeline_def)
-        derived_params = self._build_derived_params(context, pipeline_def, steps)
+        derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir)
 
         @dsl.pipeline(
             name=pipeline_def.name,
@@ -75,7 +81,7 @@ class PipelineCompiler:
         def _pipeline(run_date: str = ""):
             prev_task = None
             last_dataset_output = None  # output from data-producing steps (ingest/transform)
-            last_model_output = None    # output from train step
+            last_model_output = None  # output from train step
             for step in steps:
                 component_fn = step.component.as_kfp_component()
                 step_extra = derived_params.get(step.name, {})
@@ -93,7 +99,11 @@ class PipelineCompiler:
                     for key in ("dataset_uri", "eval_dataset_uri", "bq_source_table"):
                         if key in accepted and key not in params:
                             params[key] = last_dataset_output
-                if last_model_output is not None and "model_uri" in accepted and "model_uri" not in params:
+                if (
+                    last_model_output is not None
+                    and "model_uri" in accepted
+                    and "model_uri" not in params
+                ):
                     params["model_uri"] = last_model_output
 
                 task = component_fn(**params)
@@ -111,7 +121,9 @@ class PipelineCompiler:
 
         return _pipeline
 
-    def _build_context_params(self, context: "MLContext", pipeline_def: "PipelineDefinition") -> dict:
+    def _build_context_params(
+        self, context: "MLContext", pipeline_def: "PipelineDefinition"
+    ) -> dict:
         return {
             "project": context.gcp_project,
             "region": context.region,
@@ -121,12 +133,17 @@ class PipelineCompiler:
             "staging_bucket": context.naming.gcs_bucket,
             "experiment_name": context.naming.vertex_experiment(pipeline_def.name),
             "artifact_registry": context.naming.artifact_registry_repo(
-                context.artifact_registry_host, context.gcp_project,
+                context.artifact_registry_host,
+                context.gcp_project,
             ),
         }
 
     def _build_derived_params(
-        self, context: "MLContext", pipeline_def: "PipelineDefinition", steps: list
+        self,
+        context: "MLContext",
+        pipeline_def: "PipelineDefinition",
+        steps: list,
+        pipeline_dir: "Path | None" = None,
     ) -> dict:
         """Compute per-step derived params that aren't simple dataclass fields."""
         derived: dict[str, dict] = {}
@@ -140,10 +157,13 @@ class PipelineCompiler:
                     comp.entity, comp.feature_group
                 )
 
-            # TrainModel: needs job_name and model_output_uri
+            # TrainModel: needs job_name, model_output_uri, and resolved trainer_image
             if hasattr(comp, "trainer_image"):
                 extra["job_name"] = context.naming.vertex_training_job_name(pipeline_def.name)
                 extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
+                extra["trainer_image"] = comp.resolve_image_uri(
+                    pipeline_def.name, context, pipeline_dir
+                )
 
             # DeployModel: needs model_display_name and endpoint_display_name
             if hasattr(comp, "endpoint_name"):

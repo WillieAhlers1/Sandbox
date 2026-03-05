@@ -78,7 +78,7 @@ google-cloud-storage>=2.14
 db-dtypes>=1.2
 ```
 
-**Or skip this step** — if you leave `trainer_image` empty in your `TrainModel`, the framework auto-generates a Dockerfile and derives the image URI from your pipeline name:
+**Or skip this step** — if you leave `trainer_image` empty in your `TrainModel`, the framework auto-generates a Dockerfile and derives the image URI from the pipeline's directory name (matching `docker_build.sh` convention):
 
 ```bash
 # Auto-build all trainer images
