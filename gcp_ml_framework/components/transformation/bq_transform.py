@@ -49,12 +49,15 @@ class BQTransform(BaseComponent):
             raise FileNotFoundError(f"SQL file not found: {path}")
         return path.read_text()
 
-    def as_kfp_component(self):
+    def as_kfp_component(self, base_image: str | None = None):
         from kfp import dsl  # type: ignore[import]
 
+        image = base_image or "python:3.11-slim"
+        pkgs = [] if base_image else ["google-cloud-bigquery>=3.17"]
+
         @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=["google-cloud-bigquery>=3.17"],
+            base_image=image,
+            packages_to_install=pkgs,
         )
         def bq_transform(
             project: str,

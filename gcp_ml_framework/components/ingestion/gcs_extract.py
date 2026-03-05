@@ -26,12 +26,15 @@ class GCSExtract(BaseComponent):
     component_name: str = "gcs_extract"
     config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def as_kfp_component(self):
+    def as_kfp_component(self, base_image: str | None = None):
         from kfp import dsl  # type: ignore[import]
 
+        image = base_image or "python:3.11-slim"
+        pkgs = [] if base_image else ["google-cloud-storage>=2.16"]
+
         @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=["google-cloud-storage>=2.16"],
+            base_image=image,
+            packages_to_install=pkgs,
         )
         def gcs_extract(
             source_uri: str,

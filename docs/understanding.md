@@ -12,7 +12,7 @@ The key idea: your git branch determines your GCP namespace. Every resource — 
 
 **Codebase stats:**
 - 51 Python source files, ~4,700 lines of framework code
-- 19 test files, ~3,500 lines, 360 tests (all passing)
+- 19 test files, ~3,500 lines, 371 tests (all passing)
 - 4 working example pipelines with seed data
 - Full CLI with 6 command groups
 - 4 Terraform modules for infrastructure
@@ -262,6 +262,15 @@ uv run gml run churn_prediction --vertex --sync       # wait for completion
 uv run gml run --vertex --all                         # run all pipelines
 uv run gml run churn_prediction --vertex --no-cache   # disable KFP step caching
 ```
+
+**Composer run (trigger an already-deployed DAG on Cloud Composer):**
+
+```bash
+uv run gml run sales_analytics --composer             # trigger DAG via Airflow REST API
+uv run gml run sales_analytics --composer --run-date 2026-01-15   # set logical date
+```
+
+Triggers the DAG on Cloud Composer via the Airflow REST API. Prints the Airflow UI link for monitoring. Requires the DAG to be already deployed (`gml deploy`).
 
 ### `gml compile` — Compile to Deployable Artifacts
 
@@ -663,7 +672,7 @@ After provisioning, update `framework.yaml` with the Composer DAGs path from `te
 ## Running Tests
 
 ```bash
-# Run all 360 tests
+# Run all 371 tests
 uv run pytest tests/ -v
 
 # Unit tests only
@@ -702,7 +711,7 @@ uv run mypy gcp_ml_framework/
 | `test_secrets.py` | 7 | Secret resolution, env var fallback, `!secret` dict resolution |
 | `test_sql_compat.py` | 10 | BigQuery to DuckDB SQL translation (7 functions) |
 | `test_phase1.py` | 35 | Phase 1 regression: dead code removal, machine types, CLI structure |
-| `test_phase2.py` | 50 | Phase 2 regression: Docker, DAG runner, use cases, seed data |
+| `test_phase2.py` | 59 | Phase 2 regression: Docker, DAG runner, use cases, seed data, Composer mode |
 | `test_phase3.py` | 18 | Phase 3 regression: Feature Store v2, model versioning, experiments |
 | `test_e2e.py` (integration) | 24 | Full compile + local run for all 4 pipelines, generated DAG validation |
 
@@ -722,6 +731,9 @@ uv run gml compile my_pipeline
 
 # "I want to test on real GCP"
 uv run gml run my_pipeline --vertex --sync
+
+# "I want to trigger an already-deployed DAG on Composer"
+uv run gml run my_pipeline --composer
 
 # "I want to generate Airflow DAGs"
 uv run gml compile --all

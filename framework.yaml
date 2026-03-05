@@ -12,11 +12,10 @@ gcp:
   prod_project_id: gcp-gap-demo-prod
   region: us-central1
   composer_dags_path:
-    dev: ""      # Fill in after Terraform provisions Composer
+    dev: "gs://us-central1-dsci-examplechu-8f740abc-bucket/dags"
     staging: ""
     prod: ""
   artifact_registry_host: us-central1-docker.pkg.dev
-
 secrets:
   # Secrets are referenced in config/pipeline code as: !secret <key-name>
   # They are resolved at runtime from GCP Secret Manager.

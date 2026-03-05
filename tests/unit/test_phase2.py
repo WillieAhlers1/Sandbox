@@ -64,10 +64,14 @@ class TestDockerAutoGeneration:
         import subprocess
 
         result = subprocess.run(
-            ["bash", "-c", f"""
+            [
+                "bash",
+                "-c",
+                f"""
                 source scripts/docker_build.sh
                 _generate_dockerfile "{trainer_dir}"
-            """],
+            """,
+            ],
             capture_output=True,
             text=True,
         )
@@ -77,6 +81,102 @@ class TestDockerAutoGeneration:
         content = generated.read_text()
         assert "base-ml" in content
         assert "requirements.txt" in content
+
+    def test_docker_build_generates_ar_base_image(self, tmp_path):
+        """When AR env vars are set, generated Dockerfile uses full AR path for base image."""
+        import subprocess
+
+        trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
+        trainer_dir.mkdir(parents=True)
+        (trainer_dir / "train.py").write_text("print('hello')")
+        (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
+
+        env = os.environ.copy()
+        env["AR_HOST"] = "us-central1-docker.pkg.dev"
+        env["GCP_PROJECT"] = "my-gcp-proj"
+        env["AR_REPO"] = "dsci-myproj"
+        env["BASE_IMAGE_TAG"] = "latest"
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source scripts/docker_build.sh && _generate_dockerfile "{trainer_dir}"',
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        content = (trainer_dir / "Dockerfile.generated").read_text()
+        assert "us-central1-docker.pkg.dev/my-gcp-proj/dsci-myproj/base-ml:latest" in content
+
+    def test_docker_build_local_fallback_without_ar_vars(self, tmp_path):
+        """Without AR env vars, generated Dockerfile uses local base-ml:latest."""
+        import subprocess
+
+        trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
+        trainer_dir.mkdir(parents=True)
+        (trainer_dir / "train.py").write_text("print('hello')")
+        (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
+
+        # Ensure AR vars are NOT set
+        env = os.environ.copy()
+        for var in ("AR_HOST", "GCP_PROJECT", "AR_REPO", "BASE_IMAGE_TAG"):
+            env.pop(var, None)
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source scripts/docker_build.sh && _generate_dockerfile "{trainer_dir}"',
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        content = (trainer_dir / "Dockerfile.generated").read_text()
+        assert content.startswith("FROM base-ml:latest")
+
+    def test_docker_build_tags_with_ar_path(self, tmp_path):
+        """When AR env vars are set, _build_image tags with full AR URI."""
+        import subprocess
+
+        trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
+        trainer_dir.mkdir(parents=True)
+        (trainer_dir / "train.py").write_text("print('hello')")
+        (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
+        # Pre-generate Dockerfile so _build_image doesn't need to
+        (trainer_dir / "Dockerfile.generated").write_text(
+            "FROM base-ml:latest\nCOPY train.py /app/train.py\n"
+        )
+
+        env = os.environ.copy()
+        env["AR_HOST"] = "us-central1-docker.pkg.dev"
+        env["GCP_PROJECT"] = "my-gcp-proj"
+        env["AR_REPO"] = "dsci-myproj"
+        env["IMAGE_TAG"] = "main-abc1234"
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"""
+                source scripts/docker_build.sh
+                # Mock docker so we don't need it installed
+                docker() {{ echo "DOCKER_CMD: $@"; }}
+                export -f docker
+                _build_image "test_pipe" "{trainer_dir}"
+                """,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        # Should tag with full AR path
+        assert "us-central1-docker.pkg.dev/my-gcp-proj/dsci-myproj/test-pipe-trainer:main-abc1234" in result.stdout
 
 
 class TestTrainModelOptionalImage:
@@ -101,7 +201,8 @@ class TestTrainModelOptionalImage:
         """When pipeline_dir is provided, image name derives from dir name."""
         tm = TrainModel()
         uri = tm.resolve_image_uri(
-            "reco_training", test_context,
+            "reco_training",
+            test_context,
             pipeline_dir=Path("pipelines/recommendation_engine"),
         )
         assert "recommendation-engine-trainer" in uri
@@ -152,7 +253,7 @@ class TestDAGLocalRunner:
             DAGBuilder(name="bq-test", schedule="@daily")
             .task(
                 BQQueryTask(
-                    sql="SELECT id, value * 2 AS doubled FROM \"{bq_dataset}\".\"raw_data\"",
+                    sql='SELECT id, value * 2 AS doubled FROM "{bq_dataset}"."raw_data"',
                     destination_table="doubled_data",
                 ),
                 name="double_it",
@@ -469,9 +570,7 @@ class TestSalesAnalytics:
 
         seeds_dir = Path("pipelines/sales_analytics/seeds")
         pipeline_dir = Path("pipelines/sales_analytics")
-        runner = DAGLocalRunner(
-            test_context, seeds_dir=seeds_dir, pipeline_dir=pipeline_dir
-        )
+        runner = DAGLocalRunner(test_context, seeds_dir=seeds_dir, pipeline_dir=pipeline_dir)
         outputs = runner.run(dag, run_date="2026-03-01")
         assert len(outputs) == 8
 
@@ -512,7 +611,9 @@ class TestRecommendationEngine:
         from gcp_ml_framework.dag.compiler import DAGCompiler
         from pipelines.recommendation_engine.dag import dag
 
-        compiler = DAGCompiler(output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine"))
+        compiler = DAGCompiler(
+            output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine")
+        )
         path = compiler.compile(dag, test_context)
         assert path.exists()
         ast.parse(path.read_text())
@@ -522,7 +623,9 @@ class TestRecommendationEngine:
         from gcp_ml_framework.dag.compiler import DAGCompiler
         from pipelines.recommendation_engine.dag import dag
 
-        compiler = DAGCompiler(output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine"))
+        compiler = DAGCompiler(
+            output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine")
+        )
         path = compiler.compile(dag, test_context)
         content = path.read_text()
         assert "gcp_ml_framework" not in content
@@ -556,9 +659,7 @@ class TestRecommendationEngine:
                 assert t.task.pipeline is not None, (
                     f"VertexPipelineTask '{t.name}' should have an inline pipeline object"
                 )
-                assert t.task.pipeline_name, (
-                    f"pipeline_name should be derived from inline pipeline"
-                )
+                assert t.task.pipeline_name, f"pipeline_name should be derived from inline pipeline"
 
     def test_reco_local_run(self, test_context):
         """Local run executes DAG including Vertex pipeline stubs."""
@@ -567,8 +668,112 @@ class TestRecommendationEngine:
 
         seeds_dir = Path("pipelines/recommendation_engine/seeds")
         pipeline_dir = Path("pipelines/recommendation_engine")
-        runner = DAGLocalRunner(
-            test_context, seeds_dir=seeds_dir, pipeline_dir=pipeline_dir
-        )
+        runner = DAGLocalRunner(test_context, seeds_dir=seeds_dir, pipeline_dir=pipeline_dir)
         outputs = runner.run(dag, run_date="2026-03-01")
         assert len(outputs) >= 4  # at least BQ + 2 Vertex + email
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.6 gml run --composer — trigger DAGs on Composer
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestComposerRunMode:
+    """TDD tests for gml run --composer."""
+
+    def test_composer_flag_exists_on_run_command(self):
+        """The run command must accept --composer flag."""
+        from gcp_ml_framework.cli.cmd_run import run
+        import inspect
+
+        sig = inspect.signature(run)
+        assert "composer" in sig.parameters, "--composer flag must exist on gml run"
+
+    def test_composer_mutually_exclusive_with_local(self):
+        """--composer and --local are mutually exclusive."""
+        from typer.testing import CliRunner
+        from gcp_ml_framework.cli.main import app
+
+        cli_runner = CliRunner()
+        result = cli_runner.invoke(app, ["run", "test", "--local", "--composer"])
+        assert result.exit_code != 0
+
+    def test_composer_mutually_exclusive_with_vertex(self):
+        """--composer and --vertex are mutually exclusive."""
+        from typer.testing import CliRunner
+        from gcp_ml_framework.cli.main import app
+
+        cli_runner = CliRunner()
+        result = cli_runner.invoke(app, ["run", "test", "--vertex", "--composer"])
+        assert result.exit_code != 0
+
+    def test_composer_runner_class_exists(self):
+        """ComposerRunner must exist in dag.runner module."""
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        assert ComposerRunner is not None
+
+    def test_composer_runner_trigger_method(self):
+        """ComposerRunner must have a trigger_dag method."""
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        assert hasattr(ComposerRunner, "trigger_dag")
+
+    def test_composer_runner_resolves_dag_id(self, test_context):
+        """ComposerRunner derives the correct DAG ID from pipeline name + context."""
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        runner = ComposerRunner(test_context)
+        dag_id = runner.resolve_dag_id("sales_analytics")
+        expected = test_context.naming.dag_id("sales_analytics")
+        assert dag_id == expected
+
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._get_airflow_uri")
+    def test_composer_runner_builds_airflow_api_url(self, mock_uri, test_context):
+        """ComposerRunner builds the correct Airflow REST API trigger URL."""
+        mock_uri.return_value = "https://fake-airflow.example.com"
+
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        runner = ComposerRunner(test_context)
+        dag_id = runner.resolve_dag_id("sales_analytics")
+        url = runner._build_trigger_url(dag_id)
+        assert "/api/v1/dags/" in url
+        assert dag_id in url
+        assert "/dagRuns" in url
+
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._get_airflow_uri")
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._trigger_dag_run")
+    def test_composer_runner_trigger_calls_api(self, mock_trigger, mock_uri, test_context):
+        """trigger_dag calls the Airflow API with the correct payload."""
+        mock_uri.return_value = "https://fake-airflow.example.com"
+        mock_trigger.return_value = {
+            "dag_run_id": "manual__2026-03-01",
+            "state": "queued",
+        }
+
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        runner = ComposerRunner(test_context)
+        result = runner.trigger_dag("sales_analytics", run_date="2026-03-01")
+        assert result["state"] == "queued"
+        mock_trigger.assert_called_once()
+
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._get_airflow_uri")
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._trigger_dag_run")
+    def test_composer_runner_uses_today_as_default_date(self, mock_trigger, mock_uri, test_context):
+        """When no run_date is given, defaults to today."""
+        mock_uri.return_value = "https://fake-airflow.example.com"
+        mock_trigger.return_value = {
+            "dag_run_id": "manual__today",
+            "state": "queued",
+        }
+
+        from gcp_ml_framework.dag.runner import ComposerRunner
+        import datetime
+
+        runner = ComposerRunner(test_context)
+        runner.trigger_dag("sales_analytics")
+        call_args = mock_trigger.call_args
+        # The logical_date should contain today's date
+        assert datetime.date.today().isoformat() in str(call_args)

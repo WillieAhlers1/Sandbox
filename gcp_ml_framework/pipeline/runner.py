@@ -186,7 +186,7 @@ class VertexRunner:
             parameter_values=parameter_values or {},
             enable_caching=enable_caching,
         )
-        job.submit(service_account=self._ctx.service_account_email)
+        job.submit(service_account=self._ctx.pipeline_service_account)
         if sync:
             job.wait()
         return job

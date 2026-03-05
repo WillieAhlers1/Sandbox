@@ -1,8 +1,11 @@
 """
-DAGLocalRunner — local execution engine for DAGBuilder-defined workflows.
+DAG runners — local execution and Composer triggering.
 
-Executes DAG tasks sequentially in topological order using DuckDB for
-BigQuery substitution and console printing for email tasks.
+DAGLocalRunner: executes DAG tasks sequentially in topological order using
+DuckDB for BigQuery substitution and console printing for email tasks.
+
+ComposerRunner: triggers an already-deployed DAG on Cloud Composer via the
+Airflow REST API.
 """
 
 from __future__ import annotations
@@ -57,8 +60,7 @@ class DAGLocalRunner:
 
             table_name = seed_file.stem
             self._conn.sql(
-                f'CREATE OR REPLACE TABLE "{dataset}"."{table_name}" '
-                f"AS SELECT * FROM {reader}"
+                f'CREATE OR REPLACE TABLE "{dataset}"."{table_name}" AS SELECT * FROM {reader}'
             )
             print(f"[dag-local]   seeded  {dataset}.{table_name}  ({seed_file.name})")
 
@@ -121,8 +123,7 @@ class DAGLocalRunner:
             dataset = self._ctx.bq_dataset
             self._conn.sql(f'CREATE SCHEMA IF NOT EXISTS "{dataset}"')
             self._conn.sql(
-                f'CREATE OR REPLACE TABLE "{dataset}"."{task.destination_table}" '
-                f"AS {sql}"
+                f'CREATE OR REPLACE TABLE "{dataset}"."{task.destination_table}" AS {sql}'
             )
             print(f"[dag-local]   wrote → {dataset}.{task.destination_table}")
             return f"{dataset}.{task.destination_table}"
@@ -178,9 +179,7 @@ class DAGLocalRunner:
             import importlib.util
             import sys
 
-            spec = importlib.util.spec_from_file_location(
-                f"_vp_{pipeline_name}", pipeline_py
-            )
+            spec = importlib.util.spec_from_file_location(f"_vp_{pipeline_name}", pipeline_py)
             mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
             sys.modules[f"_vp_{pipeline_name}"] = mod
             spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -197,3 +196,140 @@ class DAGLocalRunner:
 
         print(f"[dag-local]   (no pipeline.py found for '{pipeline_name}', skipping)")
         return f"vertex_pipeline:{pipeline_name}:skipped"
+
+
+class ComposerRunner:
+    """
+    Trigger an already-deployed DAG on Cloud Composer via the Airflow REST API.
+
+    Usage:
+        runner = ComposerRunner(context)
+        result = runner.trigger_dag("sales_analytics", run_date="2026-03-01")
+    """
+
+    def __init__(self, context: MLContext) -> None:
+        self._ctx = context
+        self._airflow_uri: str | None = None
+
+    def resolve_dag_id(self, pipeline_name: str) -> str:
+        """Derive the Composer DAG ID from the pipeline name and context."""
+        return self._ctx.naming.dag_id(pipeline_name)
+
+    def _get_airflow_uri(self) -> str:
+        """Discover the Airflow webserver URI from the Composer environment."""
+        if self._airflow_uri:
+            return self._airflow_uri
+
+        import subprocess
+
+        # Composer env name follows Terraform convention: {team}-{project}-{env}
+        # e.g. "dsci-examplechurn-dev"
+        env_suffix = self._ctx.git_state.value.lower()
+        env_name = f"{self._ctx.naming.team}-{self._ctx.naming.project}-{env_suffix}"
+        result = subprocess.run(
+            [
+                "gcloud",
+                "composer",
+                "environments",
+                "describe",
+                env_name,
+                "--location",
+                self._ctx.region,
+                "--project",
+                self._ctx.gcp_project,
+                "--format",
+                "value(config.airflowUri)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self._airflow_uri = result.stdout.strip()
+        return self._airflow_uri
+
+    def _build_trigger_url(self, dag_id: str) -> str:
+        """Build the Airflow REST API URL for triggering a DAG run."""
+        base = self._get_airflow_uri()
+        return f"{base}/api/v1/dags/{dag_id}/dagRuns"
+
+    def _trigger_dag_run(self, dag_id: str, logical_date: str) -> dict[str, Any]:
+        """Trigger a DAG run via gcloud composer CLI.
+
+        Uses `gcloud composer environments run ... dags trigger` which handles
+        authentication transparently for all credential types (user, SA, metadata).
+        """
+        import subprocess
+
+        env_suffix = self._ctx.git_state.value.lower()
+        env_name = f"{self._ctx.naming.team}-{self._ctx.naming.project}-{env_suffix}"
+
+        result = subprocess.run(
+            [
+                "gcloud",
+                "composer",
+                "environments",
+                "run",
+                env_name,
+                "--location",
+                self._ctx.region,
+                "--project",
+                self._ctx.gcp_project,
+                "dags",
+                "trigger",
+                "--",
+                dag_id,
+                "-e",
+                logical_date,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        # Parse the output for run info
+        output = result.stdout + result.stderr
+        return {
+            "dag_run_id": f"manual__{logical_date}",
+            "state": "queued",
+            "output": output.strip(),
+        }
+
+    def unpause_dag(self, dag_id: str) -> None:
+        """Unpause a DAG so the scheduler processes its task instances."""
+        import subprocess
+
+        env_suffix = self._ctx.git_state.value.lower()
+        env_name = f"{self._ctx.naming.team}-{self._ctx.naming.project}-{env_suffix}"
+
+        subprocess.run(
+            [
+                "gcloud",
+                "composer",
+                "environments",
+                "run",
+                env_name,
+                "--location",
+                self._ctx.region,
+                "--project",
+                self._ctx.gcp_project,
+                "dags",
+                "unpause",
+                "--",
+                dag_id,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        print(f"[composer] DAG '{dag_id}' unpaused")
+
+    def trigger_dag(self, pipeline_name: str, run_date: str = "") -> dict[str, Any]:
+        """Trigger a DAG run on Composer. Returns the Airflow API response."""
+        run_date = run_date or datetime.date.today().isoformat()
+        dag_id = self.resolve_dag_id(pipeline_name)
+
+        print(f"[composer] Triggering DAG '{dag_id}' for date {run_date}...")
+        result = self._trigger_dag_run(dag_id, run_date)
+        print(f"[composer] DAG run triggered: {result.get('dag_run_id', 'unknown')}")
+        print(f"[composer] State: {result.get('state', 'unknown')}")
+        return result

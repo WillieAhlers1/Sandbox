@@ -50,8 +50,15 @@ class BaseComponent(ABC):
     config: ComponentConfig = field(default_factory=ComponentConfig)  # type: ignore[assignment]
 
     @abstractmethod
-    def as_kfp_component(self) -> Callable:
-        """Return the @dsl.component-decorated KFP v2 function."""
+    def as_kfp_component(self, base_image: str | None = None) -> Callable:
+        """Return the @dsl.component-decorated KFP v2 function.
+
+        Args:
+            base_image: Pre-built Docker image with all dependencies installed.
+                When provided, the component uses this image and skips
+                packages_to_install. When None, falls back to python:3.11-slim
+                with runtime pip install (slower but requires no pre-built image).
+        """
         ...
 
     @abstractmethod

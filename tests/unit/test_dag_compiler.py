@@ -78,9 +78,10 @@ class TestDAGCompiler:
         assert expected_dag_id in source
 
     def test_render_contains_schedule(self, etl_dag_def, test_context):
+        """DEV context renders schedule=None (no auto-scheduling in DEV)."""
         compiler = DAGCompiler()
         source = compiler.render(etl_dag_def, test_context)
-        assert "30 7 * * *" in source
+        assert "schedule=None" in source
 
     def test_render_contains_task_ids(self, etl_dag_def, test_context):
         compiler = DAGCompiler()
@@ -163,3 +164,67 @@ class TestDAGCompiler:
         compiler = DAGCompiler()
         source = compiler.render(dag_def, test_context)
         assert "nodesc" in source
+
+    def test_render_dev_schedule_is_none(self, etl_dag_def, test_context):
+        """DEV environments should compile with schedule=None to prevent backfill."""
+        from gcp_ml_framework.config import GitState
+
+        assert test_context.git_state == GitState.DEV
+        compiler = DAGCompiler()
+        source = compiler.render(etl_dag_def, test_context)
+        assert "schedule=None" in source
+        # Original schedule should NOT appear as the active schedule
+        assert "schedule='30 7 * * *'" not in source
+
+    def test_render_staging_keeps_schedule(self, etl_dag_def):
+        """STAGING environments should keep the declared schedule."""
+        from gcp_ml_framework.config import FrameworkConfig, GCPConfig, GitState
+        from gcp_ml_framework.context import MLContext
+
+        staging_config = FrameworkConfig(
+            team="test",
+            project="myproj",
+            branch="main",
+            gcp=GCPConfig(
+                dev_project_id="my-gcp-dev",
+                staging_project_id="my-gcp-staging",
+                prod_project_id="my-gcp-prod",
+            ),
+        )
+        staging_ctx = MLContext.from_config(staging_config)
+        assert staging_ctx.git_state == GitState.STAGING
+
+        compiler = DAGCompiler()
+        source = compiler.render(etl_dag_def, staging_ctx)
+        assert "schedule='30 7 * * *'" in source
+        assert "schedule=None" not in source
+
+    def test_render_prod_keeps_schedule(self, etl_dag_def):
+        """PROD environments should keep the declared schedule."""
+        from gcp_ml_framework.config import FrameworkConfig, GCPConfig, GitState
+        from gcp_ml_framework.context import MLContext
+
+        prod_config = FrameworkConfig(
+            team="test",
+            project="myproj",
+            branch="v1.0.0",
+            gcp=GCPConfig(
+                dev_project_id="my-gcp-dev",
+                staging_project_id="my-gcp-staging",
+                prod_project_id="my-gcp-prod",
+            ),
+        )
+        prod_ctx = MLContext.from_config(prod_config)
+        assert prod_ctx.git_state == GitState.PROD
+
+        compiler = DAGCompiler()
+        source = compiler.render(etl_dag_def, prod_ctx)
+        assert "schedule='30 7 * * *'" in source
+        assert "schedule=None" not in source
+
+    def test_render_dev_no_is_paused_upon_creation(self, etl_dag_def, test_context):
+        """DEV with schedule=None doesn't need is_paused_upon_creation."""
+        compiler = DAGCompiler()
+        source = compiler.render(etl_dag_def, test_context)
+        # schedule=None means no auto-scheduling, so is_paused_upon_creation is unnecessary
+        assert "is_paused_upon_creation" not in source

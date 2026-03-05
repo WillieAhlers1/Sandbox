@@ -73,6 +73,13 @@ class PipelineCompiler:
         ctx_params = self._build_context_params(context, pipeline_def)
         derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir)
 
+        # Resolve the pre-built component base image so steps skip runtime pip install
+        component_base_image = context.naming.image_uri(
+            registry_host=context.artifact_registry_host,
+            gcp_project=context.gcp_project,
+            image_name="component-base",
+        )
+
         @dsl.pipeline(
             name=pipeline_def.name,
             description=pipeline_def.description,
@@ -83,7 +90,7 @@ class PipelineCompiler:
             last_dataset_output = None  # output from data-producing steps (ingest/transform)
             last_model_output = None  # output from train step
             for step in steps:
-                component_fn = step.component.as_kfp_component()
+                component_fn = step.component.as_kfp_component(base_image=component_base_image)
                 step_extra = derived_params.get(step.name, {})
                 all_params = {
                     **ctx_params,
@@ -111,12 +118,17 @@ class PipelineCompiler:
                     task.after(prev_task)
                 prev_task = task
 
-                # Track output — train steps produce model outputs, others produce datasets
+                # Track output — train steps produce model outputs, others produce datasets.
+                # WriteFeatures is metadata-only (registers a BQ table as a FeatureGroup)
+                # and should not overwrite the dataset output for downstream steps.
                 if component_fn.component_spec.outputs:
                     is_train = hasattr(step.component, "trainer_image")
+                    is_metadata_only = step.component.component_name in (
+                        "write_features",
+                    )
                     if is_train:
                         last_model_output = task.output
-                    else:
+                    elif not is_metadata_only:
                         last_dataset_output = task.output
 
         return _pipeline
@@ -151,11 +163,11 @@ class PipelineCompiler:
             comp = step.component
             extra: dict = {}
 
-            # WriteFeatures / ReadFeatures: need feature_view_id
+            # WriteFeatures / ReadFeatures: need feature_view_id and feature_group_id
             if hasattr(comp, "entity") and hasattr(comp, "feature_group"):
-                extra["feature_view_id"] = context.naming.feature_view_id(
-                    comp.entity, comp.feature_group
-                )
+                fv_id = context.naming.feature_view_id(comp.entity, comp.feature_group)
+                extra["feature_view_id"] = fv_id
+                extra["feature_group_id"] = fv_id
 
             # TrainModel: needs job_name, model_output_uri, and resolved trainer_image
             if hasattr(comp, "trainer_image"):

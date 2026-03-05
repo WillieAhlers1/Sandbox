@@ -88,6 +88,20 @@ class MLContext:
         """Returns the fully-qualified Secret Manager secret name for a key."""
         return f"{self.secret_prefix}-{key}"
 
+    @property
+    def pipeline_service_account(self) -> str:
+        """Pipeline SA email — derived from naming convention if not explicitly set.
+
+        Follows Terraform convention: {team}-{project}-{env}-pipeline@{project}.iam.gserviceaccount.com
+        """
+        if self.service_account_email:
+            return self.service_account_email
+        env = self.git_state.value  # dev, staging, prod
+        return (
+            f"{self.naming.team}-{self.naming.project}-{env}-pipeline"
+            f"@{self.gcp_project}.iam.gserviceaccount.com"
+        )
+
     def is_production(self) -> bool:
         return self.git_state in (GitState.PROD, GitState.PROD_EXP)
 

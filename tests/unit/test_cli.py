@@ -23,11 +23,19 @@ runner = CliRunner()
 @pytest.fixture
 def project_dir(tmp_path):
     """Create a scaffolded project in tmp_path and return its path."""
-    result = runner.invoke(app, [
-        "init", "project", "dsci", "testproj",
-        "--dev-project", "gcp-dev-123",
-        "-o", str(tmp_path),
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "project",
+            "dsci",
+            "testproj",
+            "--dev-project",
+            "gcp-dev-123",
+            "-o",
+            str(tmp_path),
+        ],
+    )
     assert result.exit_code == 0, result.output
     return tmp_path
 
@@ -36,10 +44,16 @@ def project_dir(tmp_path):
 def pipeline_dir(project_dir):
     """Scaffold a pipeline inside the project."""
     pipelines = project_dir / "pipelines"
-    result = runner.invoke(app, [
-        "init", "pipeline", "my_pipeline",
-        "-o", str(pipelines),
-    ])
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "pipeline",
+            "my_pipeline",
+            "-o",
+            str(pipelines),
+        ],
+    )
     assert result.exit_code == 0, result.output
     return pipelines / "my_pipeline"
 
@@ -83,13 +97,23 @@ class TestInitProject:
         assert "gcp-dev-123-prod" in content
 
     def test_custom_staging_prod(self, tmp_path):
-        result = runner.invoke(app, [
-            "init", "project", "dsci", "testproj",
-            "--dev-project", "dev-123",
-            "--staging-project", "stage-456",
-            "--prod-project", "prod-789",
-            "-o", str(tmp_path),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "init",
+                "project",
+                "dsci",
+                "testproj",
+                "--dev-project",
+                "dev-123",
+                "--staging-project",
+                "stage-456",
+                "--prod-project",
+                "prod-789",
+                "-o",
+                str(tmp_path),
+            ],
+        )
         assert result.exit_code == 0
         content = (tmp_path / "framework.yaml").read_text()
         assert "stage-456" in content
@@ -124,24 +148,37 @@ class TestInitPipeline:
 
 class TestContextShow:
     def test_context_show_with_config(self, project_dir):
-        result = runner.invoke(app, [
-            "context", "show",
-            "-c", str(project_dir / "framework.yaml"),
-            "--branch", "feature/test-branch",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "context",
+                "show",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--branch",
+                "feature/test-branch",
+            ],
+        )
         assert result.exit_code == 0
         assert "dsci" in result.output
         assert "testproj" in result.output
 
     def test_context_show_json(self, project_dir):
-        result = runner.invoke(app, [
-            "context", "show",
-            "-c", str(project_dir / "framework.yaml"),
-            "--branch", "main",
-            "--json",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "context",
+                "show",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--branch",
+                "main",
+                "--json",
+            ],
+        )
         assert result.exit_code == 0
         import json
+
         data = json.loads(result.output)
         assert "namespace" in data or "gcp_project" in data
 
@@ -155,11 +192,17 @@ class TestCompile:
         assert result.exit_code != 0
 
     def test_compile_missing_pipeline(self, project_dir):
-        result = runner.invoke(app, [
-            "compile", "nonexistent",
-            "-c", str(project_dir / "framework.yaml"),
-            "--pipelines-dir", str(project_dir / "pipelines"),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "compile",
+                "nonexistent",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--pipelines-dir",
+                str(project_dir / "pipelines"),
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -175,12 +218,27 @@ class TestRun:
         result = runner.invoke(app, ["run", "test", "--local", "--vertex"])
         assert result.exit_code != 0
 
+    def test_run_mutually_exclusive_composer_local(self):
+        result = runner.invoke(app, ["run", "test", "--local", "--composer"])
+        assert result.exit_code != 0
+
+    def test_run_mutually_exclusive_composer_vertex(self):
+        result = runner.invoke(app, ["run", "test", "--vertex", "--composer"])
+        assert result.exit_code != 0
+
     def test_run_missing_pipeline(self, project_dir):
-        result = runner.invoke(app, [
-            "run", "nonexistent", "--local",
-            "-c", str(project_dir / "framework.yaml"),
-            "--pipelines-dir", str(project_dir / "pipelines"),
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "nonexistent",
+                "--local",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--pipelines-dir",
+                str(project_dir / "pipelines"),
+            ],
+        )
         assert result.exit_code != 0
 
 
@@ -198,29 +256,47 @@ class TestDeploy:
 
 class TestTeardown:
     def test_teardown_rejects_main_branch(self, project_dir):
-        result = runner.invoke(app, [
-            "teardown", "teardown",
-            "--branch", "main",
-            "-c", str(project_dir / "framework.yaml"),
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "teardown",
+                "teardown",
+                "--branch",
+                "main",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--dry-run",
+            ],
+        )
         assert result.exit_code != 0
 
     def test_teardown_dry_run_dev_branch(self, project_dir):
-        result = runner.invoke(app, [
-            "teardown", "teardown",
-            "--branch", "feature/test-branch",
-            "-c", str(project_dir / "framework.yaml"),
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "teardown",
+                "teardown",
+                "--branch",
+                "feature/test-branch",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--dry-run",
+            ],
+        )
         assert result.exit_code == 0
         assert "dry-run" in result.output.lower()
 
     def test_teardown_rejects_prod_tag(self, project_dir):
-        result = runner.invoke(app, [
-            "teardown", "teardown",
-            "--branch", "v1.0.0",
-            "-c", str(project_dir / "framework.yaml"),
-            "--dry-run",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "teardown",
+                "teardown",
+                "--branch",
+                "v1.0.0",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--dry-run",
+            ],
+        )
         assert result.exit_code != 0

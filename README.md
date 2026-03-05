@@ -129,7 +129,7 @@ Every component implements `as_kfp_component()` (for Vertex AI) and `local_run()
 gml init project <team> <project>      Scaffold a new project with framework.yaml, CI/CD, schemas
 gml init pipeline <name>               Add a pipeline directory with template files
 gml context show [--branch] [--json]   Show resolved namespace, GCP project, resource names
-gml run <pipeline> [--local|--vertex]  Run locally (default) or use as a DEBUG submit to Vertex AI
+gml run <pipeline> [--local|--vertex|--composer]  Run locally, submit to Vertex AI, or trigger on Composer
 gml compile <pipeline> [--all]         Compile to KFP YAML + Airflow DAG files
 gml deploy <pipeline> [--all]          Compile + upload DAGs, YAMLs, feature schemas
 gml teardown --branch <branch>         Delete ephemeral DEV resources (GCS, BQ)
@@ -168,7 +168,7 @@ terraform init && terraform plan -var-file=terraform.tfvars
 ## Testing
 
 ```bash
-uv run pytest tests/ -v              # 360 tests, all passing
+uv run pytest tests/ -v              # 371 tests, all passing
 uv run pytest tests/unit/            # Unit tests only
 uv run pytest tests/integration/     # E2E integration tests
 uv run ruff check .                  # Lint
@@ -182,7 +182,7 @@ uv run ruff check .                  # Lint
 | Unit — DAG Builder/Compiler/Tasks | 67 | DSL, topological sort, compilation, task types |
 | Unit — Pipeline Builder/Compiler | 28 | PipelineBuilder DSL, KFP compilation |
 | Unit — Feature Store/Secrets/SQL | 27 | Schema parsing, v2 API, secrets, BQ→DuckDB compat |
-| Unit — Phase regression | 103 | Phase 1-3 specific regression tests |
+| Unit — Phase regression | 112 | Phase 1-3 specific regression tests |
 | Integration — E2E | 24 | Full compile + local run for all 4 pipelines |
 
 ## Config System
@@ -258,7 +258,7 @@ Secrets use `!secret key` references, resolved from GCP Secret Manager in cloud 
 │
 ├── docker/base/                        #   Base Docker images (python, ML)
 ├── scripts/                            #   bootstrap.sh, docker_build.sh
-├── tests/                              #   360 tests (16 unit + 1 integration file)
+├── tests/                              #   371 tests (16 unit + 1 integration file)
 │
 └── docs/                               #   Documentation
     ├── architecture/plan.md            #     System design + naming conventions

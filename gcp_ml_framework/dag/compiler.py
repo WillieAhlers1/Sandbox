@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
     from gcp_ml_framework.dag.builder import DAGDefinition
 
+from gcp_ml_framework.config import GitState
 from gcp_ml_framework.dag.tasks.bq_query import BQQueryTask
 from gcp_ml_framework.dag.tasks.email import EmailTask
 from gcp_ml_framework.dag.tasks.vertex_pipeline import VertexPipelineTask
@@ -42,7 +43,15 @@ class DAGCompiler:
         """Render the Python source of the Airflow DAG file."""
         dag_id = context.naming.dag_id(dag_def.name)
         description = dag_def.description or f"GML DAG: {dag_def.name}"
-        schedule = repr(dag_def.schedule)
+
+        # DEV: disable automatic scheduling to prevent backfill runs.
+        # Data scientists trigger manually via `gml run --composer`.
+        # STAGING/PROD: use the declared schedule for production cadence.
+        if context.git_state == GitState.DEV:
+            schedule = "None"
+        else:
+            schedule = repr(dag_def.schedule)
+
         tags = (
             [context.naming.team, context.naming.project, context.naming.branch]
             + dag_def.tags

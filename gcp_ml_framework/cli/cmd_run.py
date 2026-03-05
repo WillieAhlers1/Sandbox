@@ -28,17 +28,24 @@ def _load_pipeline(pipeline_dir: Path):
 def run(
     pipeline_name: str = typer.Argument("", help="Pipeline directory name under pipelines/"),
     local: bool = typer.Option(False, "--local", help="Run locally using DuckDB/pandas stubs"),
-    vertex: bool = typer.Option(False, "--vertex", help="Compile and submit to Vertex AI Pipelines"),
+    vertex: bool = typer.Option(
+        False, "--vertex", help="Compile and submit to Vertex AI Pipelines"
+    ),
+    composer: bool = typer.Option(
+        False, "--composer", help="Trigger an already-deployed DAG on Composer"
+    ),
     pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
     framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print execution plan without running"),
-    sync: bool = typer.Option(False, "--sync", help="Block until the Vertex pipeline run completes"),
+    sync: bool = typer.Option(
+        False, "--sync", help="Block until the Vertex pipeline run completes"
+    ),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable KFP step caching"),
     all_pipelines: bool = typer.Option(False, "--all", help="Run all pipelines in pipelines/"),
     run_date: str = typer.Option("", "--run-date", help="Override run_date (default: today)"),
 ) -> None:
     """
-    Run a pipeline locally or on Vertex AI.
+    Run a pipeline locally, on Vertex AI, or trigger on Composer.
 
     Defaults to --local if no mode flag is given.
 
@@ -46,13 +53,14 @@ def run(
         gml run example_churn --local\n
         gml run example_churn --local --dry-run\n
         gml run example_churn --vertex --sync\n
+        gml run sales_analytics --composer --run-date 2026-03-01\n
         gml run --vertex --all\n
     """
     # Validate mutually exclusive flags
-    mode_count = sum([local, vertex])
+    mode_count = sum([local, vertex, composer])
     if mode_count > 1:
         err_console.print(
-            "[red]Error:[/red] --local and --vertex are mutually exclusive."
+            "[red]Error:[/red] --local, --vertex, and --composer are mutually exclusive."
         )
         raise typer.Exit(1)
 
@@ -68,7 +76,11 @@ def run(
     if local:
         _run_local(pipeline_name, pipelines_dir, framework_yaml, dry_run)
     elif vertex:
-        _run_vertex(pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines, run_date)
+        _run_vertex(
+            pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines, run_date
+        )
+    elif composer:
+        _run_composer(pipeline_name, framework_yaml, run_date)
 
 
 def _load_dag(pipeline_dir: Path):
@@ -97,7 +109,9 @@ def _run_local(
     pipeline_dir = pipelines_dir / pipeline_name
     ctx = load_context(
         framework_yaml=framework_yaml,
-        pipeline_yaml=pipeline_dir / "config.yaml" if (pipeline_dir / "config.yaml").exists() else None,
+        pipeline_yaml=pipeline_dir / "config.yaml"
+        if (pipeline_dir / "config.yaml").exists()
+        else None,
     )
 
     seeds_dir = pipeline_dir / "seeds"
@@ -132,9 +146,7 @@ def _run_local(
             runner.run(pipeline_def)
             console.print("[green]Done.[/green]")
     else:
-        err_console.print(
-            f"[red]Error:[/red] {pipeline_name}/ has neither pipeline.py nor dag.py."
-        )
+        err_console.print(f"[red]Error:[/red] {pipeline_name}/ has neither pipeline.py nor dag.py.")
         raise typer.Exit(1)
 
 
@@ -167,7 +179,7 @@ def _run_vertex(
         pipeline_dir = pipelines_dir / name
         pipeline_def = _load_pipeline(pipeline_dir)
         compiler = PipelineCompiler()
-        compiled_path = compiler.compile(pipeline_def, ctx)
+        compiled_path = compiler.compile(pipeline_def, ctx, pipeline_dir=pipeline_dir)
         runner = VertexRunner(ctx)
         job = runner.submit(
             compiled_path=compiled_path,
@@ -177,3 +189,29 @@ def _run_vertex(
             sync=sync,
         )
         console.print(f"[green]Submitted:[/green] {job.resource_name}")
+
+
+def _run_composer(
+    pipeline_name: str,
+    framework_yaml: Path | None,
+    run_date: str,
+) -> None:
+    """Trigger an already-deployed DAG on Cloud Composer."""
+    from gcp_ml_framework.dag.runner import ComposerRunner
+
+    ctx = load_context(framework_yaml=framework_yaml)
+
+    runner = ComposerRunner(ctx)
+    dag_id = runner.resolve_dag_id(pipeline_name)
+
+    console.print(f"[cyan]Triggering DAG '{dag_id}' on Composer...[/cyan]")
+
+    result = runner.trigger_dag(pipeline_name, run_date=run_date)
+
+    console.print("[green]DAG run triggered.[/green]")
+    console.print(f"  DAG run ID: {result.get('dag_run_id', 'unknown')}")
+    console.print(f"  State: {result.get('state', 'unknown')}")
+
+    # Print Airflow UI link
+    airflow_uri = runner._get_airflow_uri()
+    console.print(f"\n[bold]Airflow UI:[/bold] {airflow_uri}/dags/{dag_id}/grid")

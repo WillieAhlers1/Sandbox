@@ -29,18 +29,27 @@ class EvaluateModel(BaseComponent):
     component_name: str = "evaluate_model"
     config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def as_kfp_component(self):
+    def as_kfp_component(self, base_image: str | None = None):
         from kfp import dsl  # type: ignore[import]
 
-        @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=[
+        image = base_image or "python:3.11-slim"
+        # scikit-learn is an ML package NOT included in the component-base image,
+        # so it must always be installed.
+        if base_image:
+            pkgs = ["scikit-learn>=1.4"]
+        else:
+            pkgs = [
                 "scikit-learn>=1.4",
                 "google-cloud-bigquery>=3.17",
                 "google-cloud-storage>=2.14",
+                "google-cloud-aiplatform>=1.49",
                 "pandas>=2",
                 "db-dtypes>=1.2",
-            ],
+            ]
+
+        @dsl.component(
+            base_image=image,
+            packages_to_install=pkgs,
         )
         def evaluate_model(
             model_uri: str,
@@ -102,11 +111,18 @@ class EvaluateModel(BaseComponent):
             if failures:
                 raise ValueError(f"Model failed evaluation gates: {', '.join(failures)}")
 
-            # Log metrics to Vertex AI Experiments
-            from google.cloud import aiplatform
-            aiplatform.init(project=project, location=region, experiment=experiment_name)
-            aiplatform.log_metrics(computed)
-            print(f"Logged metrics to experiment '{experiment_name}': {computed}")
+            # Log metrics to Vertex AI Experiments (best-effort — don't fail the pipeline)
+            try:
+                import hashlib
+                from google.cloud import aiplatform
+                aiplatform.init(project=project, location=region, experiment=experiment_name)
+                run_id = "eval-" + hashlib.md5(model_uri.encode()).hexdigest()[:8]
+                aiplatform.start_run(run=run_id)
+                aiplatform.log_metrics(computed)
+                aiplatform.end_run()
+                print(f"Logged metrics to experiment '{experiment_name}' run '{run_id}': {computed}")
+            except Exception as e:
+                print(f"Warning: could not log to experiments: {e}")
 
             return json.dumps(computed)
 

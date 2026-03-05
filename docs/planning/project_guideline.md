@@ -369,6 +369,10 @@ gml deploy --all --dry-run                 Preview what would be deployed
 # ── Cleanup ──
 gml teardown --branch <name>               Delete all ephemeral resources for a branch
 
+# ── Trigger (remote execution) ──
+gml run <name> --composer                  Trigger deployed DAG on Composer via Airflow REST API
+gml run <name> --composer --run-date DATE  Trigger with a specific logical date
+
 # ── Debug (advanced) ──
 gml run <name> --vertex [--sync]           Submit Vertex pipeline directly (bypass Composer)
 ```
@@ -382,6 +386,7 @@ gml run <name> --vertex [--sync]           Submit Vertex pipeline directly (bypa
 | `gml deploy <name>` for individual | Data scientists deploying during dev want to deploy just their pipeline, not everything. |
 | No `gml promote` | Prod deployment happens via git tags + CI/CD. No manual path to prod. |
 | `--vertex` as debug-only | Production path is: merge → CI/CD → Composer. Direct Vertex submission skips orchestration. |
+| `--composer` for remote trigger | Triggers an already-deployed DAG via Airflow REST API. Prints the Airflow UI link for monitoring. |
 
 ### 5.2 Developer Workflow
 
