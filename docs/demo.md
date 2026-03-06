@@ -156,7 +156,7 @@ Commands:
 |   +-- bootstrap.sh               # One-time GCP project setup (APIs, AR repo)
 |   +-- docker_build.sh            # Build full Docker image hierarchy and optionally push
 |   +-- seed_bq.sh                 # Load seed CSVs into BigQuery
-+-- tests/                         # 425+ tests (unit + integration)
++-- tests/                         # 436 tests (unit + integration)
 +-- dags/                          # Compiled Airflow DAG files (generated output)
 +-- compiled_pipelines/            # Compiled KFP YAML files (generated output)
 ```
@@ -240,7 +240,7 @@ different branch without checking it out.
 uv run pytest
 ```
 
-Expected: `425+ passed`. All tests run without GCP access -- they use mocks and
+Expected: `436 passed`. All tests run without GCP access -- they use mocks and
 DuckDB stubs.
 
 To run a specific test file:
@@ -796,7 +796,7 @@ Composer DAG:
     |
     v
   compute_features (RunPipelineJobOperator -> reco_features Vertex Pipeline)
-    |  ingest -> transform -> transform -> write_features
+    |  ingest -> transform -> transform
     v
   train_model (RunPipelineJobOperator -> reco_training Vertex Pipeline)
     |  ingest -> transform -> train

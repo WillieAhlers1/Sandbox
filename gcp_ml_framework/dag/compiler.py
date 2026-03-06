@@ -225,6 +225,7 @@ with DAG(
     template_path="{template_path}",
     pipeline_root="{pipeline_root}",
     enable_caching={task.enable_caching!r},
+    deferrable=True,
     service_account="{service_account}",
     parameter_values={{"run_date": "{{{{ ds }}}}"}},
 )"""

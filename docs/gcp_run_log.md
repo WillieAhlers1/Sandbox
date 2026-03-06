@@ -897,3 +897,71 @@ The Vertex AI pipeline steps (bigquery-extract, bq-transform, write-features, tr
 **Tests added**: `test_render_vertex_pipeline_passes_run_date` in `test_dag_compiler.py` — asserts `parameter_values=`, `"run_date"`, and `{{ ds }}` all appear in rendered output.
 
 **Test suite**: 407 unit tests passing.
+
+---
+
+### Issue 21: Deploy name matching skips embedded pipeline YAMLs
+
+**Error**: `gml deploy recommendation_engine` compiled the 2 embedded pipeline YAMLs (`reco_features.yaml`, `reco_training.yaml`) but neither uploaded them to GCS nor verified their Docker images.
+
+**Root cause**: The name filter in `_ensure_images()` and `_upload_pipeline_yamls()` checked `name not in yaml_file.name` where `name="recommendation_engine"`. The compiled YAMLs are named after the inline pipeline (`reco_features.yaml`, `reco_training.yaml`) — they don't contain "recommendation_engine" in the filename.
+
+**Fix**: Added `_resolve_match_names()` to `cmd_deploy.py`. For dag.py pipelines with embedded VertexPipelineTasks, it loads the DAG definition and discovers the embedded pipeline names. The match set for `recommendation_engine` becomes `{"recommendation_engine", "reco_features", "reco_training"}`.
+
+**Tests added**: 3 tests in `test_phase2.py::TestResolveMatchNames`:
+- `test_returns_empty_for_all_pipelines`
+- `test_includes_parent_name`
+- `test_includes_embedded_pipeline_names`
+
+---
+
+### Issue 22: WriteFeatures cascade failure on Composer
+
+**Problem**: The `feature_pipeline` included a `WriteFeatures` step that registers a Feature Store FeatureGroup backed by `feat_user_behavioral` BQ table. This table doesn't exist in the dev environment, so the step would fail on Vertex AI, cascading to fail `train_model` and `notify` downstream.
+
+**Fix**: Removed `WriteFeatures` from `feature_pipeline` in `recommendation_engine/dag.py`. The BQ transforms still run — we just skip the Feature Store metadata registration. When the Feature Store infrastructure is provisioned (BQ tables created), WriteFeatures can be re-added.
+
+Also made `_deploy_features` in `cmd_deploy.py` best-effort: warns on error instead of crashing `deploy --all`.
+
+---
+
+## Validation — recommendation_engine
+
+**GCP execution** (2026-03-06, run-date=2026-03-01):
+
+| Task | Type | Status | Duration |
+|------|------|--------|----------|
+| extract_data | BigQueryInsertJobOperator | SUCCESS | ~2 min |
+| compute_features | RunPipelineJobOperator → reco_features | SUCCESS | ~4 min |
+| train_model | RunPipelineJobOperator → reco_training | SUCCESS | ~7 min |
+| notify | EmailOperator | FAILED | No SMTP configured |
+
+**DAG ID**: `dsci_examplechurn_os_experimen__recommendation_engine`
+
+**Images verified** (auto-retagged by `gml deploy`):
+- `component-base:os-experimental-a7dda59`
+- `recommendation-engine-trainer:os-experimental-a7dda59`
+
+**Pipeline YAMLs uploaded**:
+- `gs://dsci-examplechurn/os-experimental/pipelines/reco_features/pipeline.yaml`
+- `gs://dsci-examplechurn/os-experimental/pipelines/reco_training/pipeline.yaml`
+
+**Test suite**: 436 tests passing.
+
+**Workflow used**:
+```bash
+gml deploy recommendation_engine    # compile + verify images + upload DAG + upload YAMLs
+gml run recommendation_engine --composer --run-date 2026-03-01
+```
+
+---
+
+## All 3 Pipelines — Verified on GCP
+
+| Pipeline | Pattern | GCP Result |
+|----------|---------|------------|
+| sales_analytics | Pure ETL (Composer) | 7/8 SUCCESS |
+| churn_prediction | Pure ML (Vertex AI) | 6/6 SUCCESS |
+| recommendation_engine | Hybrid (Composer + Vertex AI) | 3/4 SUCCESS |
+
+All failures are `notify` tasks due to missing SMTP configuration — expected in DEV.

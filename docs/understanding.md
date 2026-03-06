@@ -12,8 +12,8 @@ The key idea: your git branch determines your GCP namespace. Every resource — 
 
 **Codebase stats:**
 - 51 Python source files, ~4,700 lines of framework code
-- 19 test files, ~3,500 lines, 382+ tests (all passing)
-- 4 working example pipelines with seed data
+- 19 test files, ~3,500 lines, 436 tests (all passing)
+- 3 working demo pipelines with seed data
 - Full CLI with 6 command groups
 - 4 Terraform modules for infrastructure
 
@@ -152,17 +152,16 @@ dag = (
 feature_pipeline = (
     PipelineBuilder(name="reco_features")
     .ingest(BigQueryExtract(query="SELECT ... FROM `{bq_dataset}.raw_interactions`", output_table="raw_interactions"))
+    .transform(BQTransform(sql="SELECT ...", output_table="reco_user_item_features"))
     .transform(BQTransform(sql="SELECT ...", output_table="reco_user_profiles"))
-    .write_features(WriteFeatures(entity="user", feature_group="behavioral"))
     .build()
 )
 
 training_pipeline = (
     PipelineBuilder(name="reco_training")
     .ingest(BigQueryExtract(query="SELECT ... FROM `{bq_dataset}.raw_interactions`", output_table="reco_training_data"))
+    .transform(BQTransform(sql="SELECT ...", output_table="reco_training_prepared"))
     .train(TrainModel(machine_type="n2-standard-16", hyperparameters={"embedding_dim": 64}))
-    .evaluate(EvaluateModel(metrics=["ndcg@10"], gate={"ndcg@10": 0.35}))
-    .deploy(DeployModel(endpoint_name="reco-model"))
     .build()
 )
 
@@ -573,7 +572,7 @@ extract_data -> compute_features (VertexPipelineTask: reco_features)
                                                      -> notify
 ```
 
-**Inline pipelines:** `feature_pipeline` (feature extraction + WriteFeatures) and `training_pipeline` (training + evaluation gate + deploy) are defined as `PipelineDefinition` objects directly in `dag.py` — no separate directories needed.
+**Inline pipelines:** `feature_pipeline` (BQ extraction + transforms) and `training_pipeline` (extraction + transform + NMF model training) are defined as `PipelineDefinition` objects directly in `dag.py` — no separate directories needed.
 **Seed data:** `seeds/raw_interactions.csv`.
 
 **Try any pipeline locally:**
@@ -672,7 +671,7 @@ After provisioning, update `framework.yaml` with the Composer DAGs path from `te
 ## Running Tests
 
 ```bash
-# Run all 371 tests
+# Run all tests
 uv run pytest tests/ -v
 
 # Unit tests only
@@ -763,26 +762,27 @@ The fix for the local runner should mirror the KFP compiler's approach: WriteFea
 
 ## GCP Deployment Status (os_experimental branch)
 
+### All 3 Pipelines Verified on GCP
+
+| Pipeline | Target | Result |
+|----------|--------|--------|
+| sales_analytics | Composer (8 BQ/email tasks) | 7/8 SUCCESS (notify fails — no SMTP) |
+| churn_prediction | Vertex AI (6-step KFP pipeline) | 6/6 SUCCESS |
+| recommendation_engine | Composer → 2 Vertex AI pipelines | 3/4 SUCCESS (notify fails — no SMTP) |
+
 ### Artifact Registry
-- `base-python:latest` — Python 3.11 slim base
-- `base-ml:latest` — scikit-learn, pandas, numpy, xgboost
-- `component-base:latest` — GCP SDK + data dependencies (used by KFP components to skip runtime pip installs)
-- `churn-prediction-trainer:os-experimental-{sha}` — sklearn LogisticRegression trainer
+- `base-python`, `base-ml`, `component-base` — platform base images
+- `churn-prediction-trainer`, `recommendation-engine-trainer` — pipeline trainer images
+- All tagged `{branch}-{sha}` (e.g., `os-experimental-a7dda59`)
+- `gml deploy` auto-retags images when commit SHA changes
 
 ### BigQuery
 - Dataset: `dsci_examplechurn_os_experimen` (truncated per 30-char BQ limit)
-- Tables: `raw_user_events` (10 rows seed data), `churn_training_raw`, `churn_features_engineered`
-
-### Vertex AI Pipeline Runs
-Churn prediction pipeline was submitted to Vertex AI. Key bugs fixed during deployment:
-1. `feature_group_id` missing from WriteFeatures params → added to compiler's `_build_derived_params()`
-2. WriteFeatures output overwriting `last_dataset_output` → added metadata-only exclusion
-3. `google-cloud-aiplatform` missing from EvaluateModel's `packages_to_install` → added
-4. Component base image optimization → pre-built `component-base` image skips runtime pip installs
+- Seed tables: `raw_user_events`, `raw_orders`, `raw_inventory`, `raw_returns`, `raw_interactions`
+- Generated tables: `churn_training_raw`, `churn_features_engineered`, `reco_user_item_features`, `reco_user_profiles`, `reco_training_data`, `reco_training_prepared`, `daily_report`, etc.
 
 ### Service Account
-Pipeline SA is auto-derived: `{team}-{project}-{env}-pipeline@{gcp_project}.iam.gserviceaccount.com`
-For os_experimental: `dsci-examplechurn-dev-pipeline@gcp-gap-demo-dev.iam.gserviceaccount.com`
+Pipeline SA: `dsci-examplechurn-dev-pipeline@gcp-gap-demo-dev.iam.gserviceaccount.com`
 
 ---
 
