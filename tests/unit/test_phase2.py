@@ -732,6 +732,45 @@ class TestRecommendationEngine:
         assert "{{{ ds_nodash }}}" not in content
         assert "{{ ds_nodash }}" in content
 
+    def test_reco_feature_pipeline_no_write_features(self):
+        """Feature pipeline omits WriteFeatures — Feature Store table doesn't exist yet."""
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+        from pipelines.recommendation_engine.dag import feature_pipeline
+
+        wf_steps = [s for s in feature_pipeline.steps
+                     if isinstance(s.component, WriteFeatures)]
+        assert len(wf_steps) == 0, "feature_pipeline should not include WriteFeatures"
+
+
+class TestDeployFeatureSchemaResilience:
+    """deploy --all should not crash when feature schemas reference missing BQ tables."""
+
+    def test_deploy_features_continues_on_error(self):
+        """_deploy_features must catch per-entity errors and warn, not crash."""
+        from unittest.mock import MagicMock, patch
+
+        from gcp_ml_framework.cli.cmd_deploy import _deploy_features
+
+        mock_ctx = MagicMock()
+        mock_ctx.gcp_project = "test-project"
+        mock_ctx.region = "us-central1"
+        mock_ctx.feature_store_id = "test_fs"
+        mock_ctx.naming.bq_dataset = "test_dataset"
+
+        schema_dir = Path("feature_schemas")
+        if not schema_dir.exists():
+            return  # skip if no schemas
+
+        # Patch FeatureStoreClient.ensure_entity to raise for all calls
+        with patch(
+            "gcp_ml_framework.feature_store.client.FeatureStoreClient"
+        ) as MockClient:
+            MockClient.return_value.ensure_entity.side_effect = Exception(
+                "BQ table not found"
+            )
+            # Should NOT raise — should warn and continue
+            _deploy_features(schema_dir, mock_ctx, dry_run=False)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 2.6 gml run --composer — trigger DAGs on Composer

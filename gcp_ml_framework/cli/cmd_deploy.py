@@ -159,6 +159,11 @@ def _deploy_features(schema_dir: Path, ctx, dry_run: bool) -> None:
         if dry_run:
             console.print(f"[dim](dry-run) would deploy feature entity:[/dim] {entity_name}")
         else:
-            client = FeatureStoreClient(ctx)
-            client.ensure_entity(schema)
-            console.print(f"[green]Deployed feature entity:[/green] {entity_name}")
+            try:
+                client = FeatureStoreClient(ctx)
+                client.ensure_entity(schema)
+                console.print(f"[green]Deployed feature entity:[/green] {entity_name}")
+            except Exception as e:
+                err_console.print(
+                    f"[yellow]Warning:[/yellow] Feature schema '{entity_name}' skipped: {e}"
+                )

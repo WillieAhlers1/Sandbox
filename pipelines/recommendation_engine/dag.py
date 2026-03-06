@@ -11,7 +11,6 @@ Flow:
                  → notify
 """
 
-from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
 from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
 from gcp_ml_framework.components.ml.train import TrainModel
 from gcp_ml_framework.components.transformation.bq_transform import BQTransform
@@ -62,7 +61,6 @@ feature_pipeline = (
             output_table="reco_user_profiles",
         )
     )
-    .write_features(WriteFeatures(entity="user", feature_group="behavioral"))
     .build()
 )
 
