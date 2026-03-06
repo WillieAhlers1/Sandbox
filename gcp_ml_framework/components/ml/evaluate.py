@@ -29,18 +29,27 @@ class EvaluateModel(BaseComponent):
     component_name: str = "evaluate_model"
     config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def as_kfp_component(self):
+    def as_kfp_component(self, base_image: str | None = None):
         from kfp import dsl  # type: ignore[import]
 
-        @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=[
+        image = base_image or "python:3.11-slim"
+        # scikit-learn is an ML package NOT included in the component-base image,
+        # so it must always be installed.
+        if base_image:
+            pkgs = ["scikit-learn>=1.4"]
+        else:
+            pkgs = [
                 "scikit-learn>=1.4",
                 "google-cloud-bigquery>=3.17",
                 "google-cloud-storage>=2.14",
+                "google-cloud-aiplatform>=1.49",
                 "pandas>=2",
                 "db-dtypes>=1.2",
-            ],
+            ]
+
+        @dsl.component(
+            base_image=image,
+            packages_to_install=pkgs,
         )
         def evaluate_model(
             model_uri: str,
@@ -102,6 +111,19 @@ class EvaluateModel(BaseComponent):
             if failures:
                 raise ValueError(f"Model failed evaluation gates: {', '.join(failures)}")
 
+            # Log metrics to Vertex AI Experiments (best-effort — don't fail the pipeline)
+            try:
+                import hashlib
+                from google.cloud import aiplatform
+                aiplatform.init(project=project, location=region, experiment=experiment_name)
+                run_id = "eval-" + hashlib.md5(model_uri.encode()).hexdigest()[:8]
+                aiplatform.start_run(run=run_id)
+                aiplatform.log_metrics(computed)
+                aiplatform.end_run()
+                print(f"Logged metrics to experiment '{experiment_name}' run '{run_id}': {computed}")
+            except Exception as e:
+                print(f"Warning: could not log to experiments: {e}")
+
             return json.dumps(computed)
 
         return evaluate_model
@@ -113,11 +135,16 @@ class EvaluateModel(BaseComponent):
         eval_dataset_path: str = "",
         **kwargs: Any,
     ) -> dict[str, float]:
-        """Return synthetic metric values locally (no real model evaluation)."""
-        import random
+        """Evaluate a real model if available, otherwise return placeholder metrics."""
+        input_path = kwargs.get("input_path", "") or model_path
 
-        computed = {m: round(random.uniform(0.75, 0.95), 4) for m in self.metrics}
-        print(f"[local] EvaluateModel: metrics={computed}")
+        computed = self._try_real_evaluation(input_path)
+        if computed is None:
+            _placeholder = {"auc": 0.50, "f1": 0.50, "accuracy": 0.50, "precision": 0.50, "recall": 0.50}
+            computed = {m: _placeholder.get(m, 0.50) for m in self.metrics}
+            print(f"[local] EvaluateModel: metrics={computed} (placeholder — no model loaded)")
+        else:
+            print(f"[local] EvaluateModel: metrics={computed}")
 
         failures = [
             f"{m}={v:.4f} < {self.gate[m]}"
@@ -126,5 +153,47 @@ class EvaluateModel(BaseComponent):
         ]
         if failures:
             raise ValueError(f"[local] Gate failures: {', '.join(failures)}")
+
+        return computed
+
+    def _try_real_evaluation(self, model_dir: str) -> dict[str, float] | None:
+        """Load model.pkl + eval_data.parquet and compute real metrics. Returns None on failure."""
+        import os
+        import pickle
+
+        if not model_dir or not os.path.isdir(model_dir):
+            return None
+
+        model_pkl = os.path.join(model_dir, "model.pkl")
+        eval_parquet = os.path.join(model_dir, "eval_data.parquet")
+        if not os.path.exists(model_pkl) or not os.path.exists(eval_parquet):
+            return None
+
+        try:
+            import pandas as pd
+            from sklearn.metrics import f1_score, roc_auc_score
+        except ImportError:
+            return None
+
+        with open(model_pkl, "rb") as f:
+            model = pickle.load(f)
+
+        df = pd.read_parquet(eval_parquet)
+        drop_cols = [c for c in ["label", "user_id", "feature_timestamp"] if c in df.columns]
+        X = df.drop(columns=drop_cols)
+        y = df["label"]
+
+        proba = model.predict_proba(X)[:, 1] if hasattr(model, "predict_proba") else model.predict(X)
+        preds = (proba > 0.5).astype(int)
+
+        computed: dict[str, float] = {}
+        if "auc" in self.metrics:
+            computed["auc"] = round(float(roc_auc_score(y, proba)), 4)
+        if "f1" in self.metrics:
+            computed["f1"] = round(float(f1_score(y, preds)), 4)
+        # Pass through any other requested metrics as placeholders
+        for m in self.metrics:
+            if m not in computed:
+                computed[m] = 0.50
 
         return computed

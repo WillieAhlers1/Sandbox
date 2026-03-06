@@ -1,6 +1,7 @@
 """TrainModel — submit a Vertex AI Custom Training Job."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
@@ -23,13 +24,13 @@ class TrainModel(BaseComponent):
     Example:
         TrainModel(
             trainer_image="us-central1-docker.pkg.dev/my-proj/trainers/churn:latest",
-            machine_type="n1-standard-8",
+            machine_type="n2-standard-8",
             hyperparameters={"learning_rate": 0.01, "max_depth": 6},
         )
     """
 
-    trainer_image: str
-    machine_type: str = "n1-standard-4"
+    trainer_image: str = ""
+    machine_type: str = "n2-standard-4"
     accelerator_type: str = ""
     accelerator_count: int = 0
     trainer_args: list[str] = field(default_factory=list)
@@ -37,12 +38,36 @@ class TrainModel(BaseComponent):
     component_name: str = "train_model"
     config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def as_kfp_component(self):
+    def resolve_image_uri(
+        self, pipeline_name: str, context: "MLContext", pipeline_dir: "Path | None" = None
+    ) -> str:
+        """Resolve the trainer image URI.
+
+        If trainer_image is set, return it as-is.
+        Otherwise, derive from the pipeline directory name (matching
+        ``docker_build.sh`` convention) or fall back to pipeline_name.
+        """
+        if self.trainer_image:
+            return self.trainer_image
+        from gcp_ml_framework.naming import _slugify
+
+        source_name = pipeline_dir.name if pipeline_dir else pipeline_name
+        image_name = _slugify(source_name) + "-trainer"
+        return context.naming.image_uri(
+            registry_host=context.artifact_registry_host,
+            gcp_project=context.gcp_project,
+            image_name=image_name,
+        )
+
+    def as_kfp_component(self, base_image: str | None = None):
         from kfp import dsl  # type: ignore[import]
 
+        image = base_image or "python:3.11-slim"
+        pkgs = [] if base_image else ["google-cloud-aiplatform>=1.49"]
+
         @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=["google-cloud-aiplatform>=1.49"],
+            base_image=image,
+            packages_to_install=pkgs,
         )
         def train_model(
             project: str,
@@ -57,6 +82,7 @@ class TrainModel(BaseComponent):
             trainer_args: str,  # JSON list
             hyperparameters: str,  # JSON dict
             model_output_uri: str,
+            run_id: str = "",
             dataset_uri: str = "",
         ) -> str:
             """Returns GCS URI of the saved model artifact."""
@@ -65,12 +91,18 @@ class TrainModel(BaseComponent):
             from google.cloud import aiplatform
 
             aiplatform.init(
-                project=project, location=region,
+                project=project,
+                location=region,
                 staging_bucket=staging_bucket,
                 experiment=experiment_name,
             )
 
-            args = json.loads(trainer_args) + [f"--model-output={model_output_uri}"]
+            # Use versioned model output path if run_id is provided
+            versioned_uri = model_output_uri
+            if run_id:
+                versioned_uri = f"{model_output_uri.rstrip('/')}/{run_id}"
+
+            args = json.loads(trainer_args) + [f"--model-output={versioned_uri}"]
             if dataset_uri:
                 args.append(f"--dataset-path={dataset_uri}")
             for k, v in json.loads(hyperparameters).items():
@@ -96,16 +128,76 @@ class TrainModel(BaseComponent):
         return train_model
 
     def local_run(self, context: "MLContext", dataset_path: str = "", **kwargs: Any) -> str:
-        """Simulate training locally — writes a placeholder model artifact."""
+        """Train locally using seed data when available, otherwise write a placeholder."""
         import json
         import os
         import tempfile
 
+        pipeline_name = kwargs.get("pipeline_name", "unnamed")
+        run_id = kwargs.get("run_id", "local")
+        input_path = kwargs.get("input_path", "") or dataset_path
+
         print(f"[local] TrainModel: image={self.trainer_image!r}, machine={self.machine_type!r}")
         print(f"[local] TrainModel: hyperparameters={self.hyperparameters}")
-        out_dir = tempfile.mkdtemp(prefix="gml_model_")
-        # Write a placeholder model file
+        print(f"[local] TrainModel: pipeline={pipeline_name}, run_id={run_id}")
+
+        # Use versioned output path: {pipeline_name}/{run_id}/
+        base_dir = tempfile.mkdtemp(prefix="gml_model_")
+        out_dir = os.path.join(base_dir, pipeline_name, run_id)
+        os.makedirs(out_dir, exist_ok=True)
+
+        # Try to train a real model if input data with a label column is available
+        if input_path and self._try_train_real_model(input_path, out_dir):
+            return out_dir
+
+        # Fallback: write a placeholder model file
         model_path = os.path.join(out_dir, "model.json")
         with open(model_path, "w") as f:
-            json.dump({"framework": "placeholder", "hyperparameters": self.hyperparameters}, f)
+            json.dump(
+                {
+                    "framework": "placeholder",
+                    "hyperparameters": self.hyperparameters,
+                    "pipeline_name": pipeline_name,
+                    "run_id": run_id,
+                },
+                f,
+            )
         return out_dir
+
+    def _try_train_real_model(self, input_path: str, out_dir: str) -> bool:
+        """Train a sklearn model on the input Parquet. Returns True on success."""
+        import os
+        import pickle
+
+        try:
+            import pandas as pd
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.pipeline import Pipeline as SkPipeline
+            from sklearn.preprocessing import StandardScaler
+        except ImportError:
+            return False
+
+        try:
+            df = pd.read_parquet(input_path)
+        except Exception:
+            return False
+
+        if "label" not in df.columns:
+            return False
+
+        drop_cols = [c for c in ["label", "user_id", "feature_timestamp"] if c in df.columns]
+        X = df.drop(columns=drop_cols)
+        y = df["label"]
+
+        model = SkPipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=1000, random_state=42)),
+        ])
+        model.fit(X, y)
+        print(f"[local] TrainModel: trained on {len(df)} rows, {len(X.columns)} features")
+
+        with open(os.path.join(out_dir, "model.pkl"), "wb") as f:
+            pickle.dump(model, f)
+        df.to_parquet(os.path.join(out_dir, "eval_data.parquet"), index=False)
+
+        return True

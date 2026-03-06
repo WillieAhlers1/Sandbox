@@ -30,19 +30,22 @@ class DeployModel(BaseComponent):
 
     endpoint_name: str
     serving_container_image: str = ""
-    machine_type: str = "n1-standard-2"
+    machine_type: str = "n2-standard-2"
     min_replica_count: int = 1
     max_replica_count: int = 3
     traffic_split: dict[str, int] = field(default_factory=lambda: {"new": 100})
     component_name: str = "deploy_model"
     config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def as_kfp_component(self):
+    def as_kfp_component(self, base_image: str | None = None):
         from kfp import dsl  # type: ignore[import]
 
+        image = base_image or "python:3.11-slim"
+        pkgs = [] if base_image else ["google-cloud-aiplatform>=1.49"]
+
         @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=["google-cloud-aiplatform>=1.49"],
+            base_image=image,
+            packages_to_install=pkgs,
         )
         def deploy_model(
             project: str,

@@ -1,33 +1,30 @@
 #!/usr/bin/env bash
 # bootstrap.sh — one-time GCP project setup for the GCP ML Framework.
 #
-# Run this once per GCP project (dev, staging, prod) to enable APIs,
-# create service accounts, and configure Workload Identity Federation.
+# Enables required APIs and creates the Artifact Registry repository.
+# Service accounts and IAM are managed by Terraform (terraform/modules/iam/).
 #
 # Usage:
-#   ./scripts/bootstrap.sh --project my-gcp-project-dev --env dev
-#   ./scripts/bootstrap.sh --project my-gcp-project-staging --env staging
-#   ./scripts/bootstrap.sh --project my-gcp-project-prod --env prod
+#   ./scripts/bootstrap.sh --project my-gcp-project-dev
+#   ./scripts/bootstrap.sh --project my-gcp-project-staging
 
 set -euo pipefail
 
 PROJECT=""
-ENV="dev"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) PROJECT="$2"; shift 2 ;;
-    --env)     ENV="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
 
 if [[ -z "$PROJECT" ]]; then
-  echo "Usage: $0 --project GCP_PROJECT_ID --env (dev|staging|prod)"
+  echo "Usage: $0 --project GCP_PROJECT_ID"
   exit 1
 fi
 
-echo "==> Bootstrapping GCP project: $PROJECT (env=$ENV)"
+echo "==> Bootstrapping GCP project: $PROJECT"
 gcloud config set project "$PROJECT"
 
 # ── Enable required APIs ──────────────────────────────────────────────────────
@@ -41,60 +38,7 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   iam.googleapis.com \
   cloudresourcemanager.googleapis.com \
-  --project="$PROJECT"
-
-# ── Create ML service account ─────────────────────────────────────────────────
-SA_NAME="gcp-ml-framework-sa"
-SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
-
-echo "==> Creating service account: $SA_EMAIL"
-gcloud iam service-accounts create "$SA_NAME" \
-  --display-name="GCP ML Framework Service Account" \
-  --project="$PROJECT" || echo "Service account already exists."
-
-# Grant required roles
-ROLES=(
-  "roles/bigquery.dataEditor"
-  "roles/bigquery.jobUser"
-  "roles/storage.objectAdmin"
-  "roles/aiplatform.user"
-  "roles/secretmanager.secretAccessor"
-  "roles/composer.worker"
-)
-for ROLE in "${ROLES[@]}"; do
-  echo "  Granting $ROLE..."
-  gcloud projects add-iam-policy-binding "$PROJECT" \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="$ROLE" \
-    --quiet
-done
-
-# ── Workload Identity Federation (GitHub Actions) ────────────────────────────
-# Replace these with your GitHub org/repo
-GITHUB_ORG="${GITHUB_ORG:-your-org}"
-GITHUB_REPO="${GITHUB_REPO:-your-repo}"
-POOL_ID="github-pool"
-PROVIDER_ID="github-provider"
-
-echo "==> Setting up Workload Identity Federation for GitHub Actions..."
-gcloud iam workload-identity-pools create "$POOL_ID" \
-  --location="global" \
-  --display-name="GitHub Actions Pool" \
-  --project="$PROJECT" || echo "Pool already exists."
-
-gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
-  --location="global" \
-  --workload-identity-pool="$POOL_ID" \
-  --display-name="GitHub OIDC Provider" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
-  --issuer-uri="https://token.actions.githubusercontent.com" \
-  --project="$PROJECT" || echo "Provider already exists."
-
-PROVIDER_RESOURCE="projects/$(gcloud projects describe $PROJECT --format='value(projectNumber)')/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}"
-
-gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/${PROVIDER_RESOURCE}/attribute.repository/${GITHUB_ORG}/${GITHUB_REPO}" \
+  compute.googleapis.com \
   --project="$PROJECT"
 
 # ── Artifact Registry ─────────────────────────────────────────────────────────
@@ -110,11 +54,12 @@ gcloud artifacts repositories create "$REPO_NAME" \
   --project="$PROJECT" || echo "Repository already exists."
 
 echo ""
-echo "==> Bootstrap complete for $PROJECT ($ENV)"
-echo "    Service account: $SA_EMAIL"
-echo "    WIF provider:    $PROVIDER_RESOURCE"
+echo "==> Bootstrap complete for $PROJECT"
+echo "    APIs enabled (including compute.googleapis.com for Composer 3)"
+echo "    AR repository: $REPO_NAME"
 echo ""
-echo "    Add these to your GitHub repo secrets/vars:"
-echo "    WIF_PROVIDER_${ENV^^}=$PROVIDER_RESOURCE"
-echo "    SA_EMAIL_${ENV^^}=$SA_EMAIL"
-echo "    GCP_PROJECT_ID_${ENV^^}=$PROJECT"
+echo "    Next steps:"
+echo "    1. Run Terraform to create service accounts and infrastructure:"
+echo "       cd terraform/envs/dev && terraform init && terraform apply"
+echo "    2. Configure Docker auth:"
+echo "       gcloud auth configure-docker us-central1-docker.pkg.dev"

@@ -1,4 +1,4 @@
-"""gml run — run pipelines locally, on Vertex AI, or compile only."""
+"""gml run — run pipelines locally or on Vertex AI."""
 
 from __future__ import annotations
 
@@ -28,23 +28,29 @@ def _load_pipeline(pipeline_dir: Path):
 def run(
     pipeline_name: str = typer.Argument("", help="Pipeline directory name under pipelines/"),
     local: bool = typer.Option(False, "--local", help="Run locally using DuckDB/pandas stubs"),
-    vertex: bool = typer.Option(False, "--vertex", help="Compile and submit to Vertex AI Pipelines"),
-    compile_only: bool = typer.Option(
-        False, "--compile-only", help="Compile to KFP YAML without submitting (for CI)"
+    vertex: bool = typer.Option(
+        False, "--vertex", help="Compile and submit to Vertex AI Pipelines"
+    ),
+    composer: bool = typer.Option(
+        False, "--composer", help="Trigger an already-deployed DAG on Composer"
     ),
     pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
     framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print execution plan without running"),
-    sync: bool = typer.Option(False, "--sync", help="Block until the Vertex pipeline run completes"),
+    sync: bool = typer.Option(
+        False, "--sync", help="Block until the Vertex pipeline run completes"
+    ),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable KFP step caching"),
     all_pipelines: bool = typer.Option(False, "--all", help="Run all pipelines in pipelines/"),
-    output_dir: Path = typer.Option(
-        Path("compiled_pipelines"), "--out", help="Output dir for compiled YAML"
+    run_date: str = typer.Option(
+        "",
+        "--run-date",
+        help="Override run_date (default: today). Seed data requires specific dates "
+        "for correct results — e.g. 2024-01-01 for churn_prediction, 2026-03-01 for sales_analytics.",
     ),
-    run_date: str = typer.Option("", "--run-date", help="Override run_date (default: today)"),
 ) -> None:
     """
-    Run a pipeline locally, on Vertex AI, or compile to YAML.
+    Run a pipeline locally, on Vertex AI, or trigger on Composer.
 
     Defaults to --local if no mode flag is given.
 
@@ -52,15 +58,14 @@ def run(
         gml run example_churn --local\n
         gml run example_churn --local --dry-run\n
         gml run example_churn --vertex --sync\n
+        gml run sales_analytics --composer --run-date 2026-03-01\n
         gml run --vertex --all\n
-        gml run --compile-only --all\n
-        gml run example_churn --compile-only --out /tmp/compiled\n
     """
     # Validate mutually exclusive flags
-    mode_count = sum([local, vertex, compile_only])
+    mode_count = sum([local, vertex, composer])
     if mode_count > 1:
         err_console.print(
-            "[red]Error:[/red] --local, --vertex, and --compile-only are mutually exclusive."
+            "[red]Error:[/red] --local, --vertex, and --composer are mutually exclusive."
         )
         raise typer.Exit(1)
 
@@ -74,11 +79,29 @@ def run(
         raise typer.Exit(1)
 
     if local:
-        _run_local(pipeline_name, pipelines_dir, framework_yaml, dry_run)
+        _run_local(pipeline_name, pipelines_dir, framework_yaml, dry_run, run_date)
     elif vertex:
-        _run_vertex(pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines, run_date)
-    elif compile_only:
-        _run_compile(pipeline_name, pipelines_dir, framework_yaml, output_dir, all_pipelines)
+        _run_vertex(
+            pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines, run_date
+        )
+    elif composer:
+        _run_composer(pipeline_name, framework_yaml, run_date)
+
+
+def _load_dag(pipeline_dir: Path):
+    """Import a dag.py and return its DAGDefinition."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("_dag", pipeline_dir / "dag.py")
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(f"No dag.py found in {pipeline_dir}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_dag"] = mod
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    if not hasattr(mod, "dag"):
+        raise AttributeError(f"{pipeline_dir}/dag.py must define a `dag` variable")
+    return mod.dag
 
 
 def _run_local(
@@ -86,25 +109,51 @@ def _run_local(
     pipelines_dir: Path,
     framework_yaml: Path | None,
     dry_run: bool,
+    run_date: str = "",
 ) -> None:
     """Run a pipeline locally using DuckDB/pandas stubs."""
-    from gcp_ml_framework.pipeline.runner import LocalRunner
-
     pipeline_dir = pipelines_dir / pipeline_name
     ctx = load_context(
         framework_yaml=framework_yaml,
-        pipeline_yaml=pipeline_dir / "config.yaml" if (pipeline_dir / "config.yaml").exists() else None,
+        pipeline_yaml=pipeline_dir / "config.yaml"
+        if (pipeline_dir / "config.yaml").exists()
+        else None,
     )
-    pipeline_def = _load_pipeline(pipeline_dir)
 
     seeds_dir = pipeline_dir / "seeds"
-    runner = LocalRunner(ctx, seeds_dir=seeds_dir if seeds_dir.exists() else None)
-    if dry_run:
-        runner.print_plan(pipeline_def)
+
+    if (pipeline_dir / "dag.py").exists():
+        # Use DAG local runner
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        dag_def = _load_dag(pipeline_dir)
+        runner = DAGLocalRunner(
+            ctx,
+            seeds_dir=seeds_dir if seeds_dir.exists() else None,
+            pipeline_dir=pipeline_dir,
+        )
+        if dry_run:
+            for task in dag_def.topological_order():
+                console.print(f"[dim][dry-run][/dim] {task.name} ({task.task.task_type})")
+        else:
+            console.print(f"[cyan]Running {pipeline_name!r} DAG locally...[/cyan]")
+            runner.run(dag_def, run_date=run_date)
+            console.print("[green]Done.[/green]")
+    elif (pipeline_dir / "pipeline.py").exists():
+        # Use pipeline local runner (existing)
+        from gcp_ml_framework.pipeline.runner import LocalRunner
+
+        pipeline_def = _load_pipeline(pipeline_dir)
+        runner = LocalRunner(ctx, seeds_dir=seeds_dir if seeds_dir.exists() else None)
+        if dry_run:
+            runner.print_plan(pipeline_def)
+        else:
+            console.print(f"[cyan]Running {pipeline_name!r} locally...[/cyan]")
+            runner.run(pipeline_def, run_date=run_date)
+            console.print("[green]Done.[/green]")
     else:
-        console.print(f"[cyan]Running {pipeline_name!r} locally...[/cyan]")
-        runner.run(pipeline_def)
-        console.print("[green]Done.[/green]")
+        err_console.print(f"[red]Error:[/red] {pipeline_name}/ has neither pipeline.py nor dag.py.")
+        raise typer.Exit(1)
 
 
 def _run_vertex(
@@ -134,9 +183,15 @@ def _run_vertex(
 
     for name in targets:
         pipeline_dir = pipelines_dir / name
+        if (pipeline_dir / "dag.py").exists() and not (pipeline_dir / "pipeline.py").exists():
+            err_console.print(
+                f"[red]Error:[/red] '{name}' is a DAG-based pipeline (dag.py only). "
+                f"Use [bold]--composer[/bold] to run on Composer, or [bold]--local[/bold] to run locally."
+            )
+            raise typer.Exit(1)
         pipeline_def = _load_pipeline(pipeline_dir)
         compiler = PipelineCompiler()
-        compiled_path = compiler.compile(pipeline_def, ctx)
+        compiled_path = compiler.compile(pipeline_def, ctx, pipeline_dir=pipeline_dir)
         runner = VertexRunner(ctx)
         job = runner.submit(
             compiled_path=compiled_path,
@@ -148,25 +203,30 @@ def _run_vertex(
         console.print(f"[green]Submitted:[/green] {job.resource_name}")
 
 
-def _run_compile(
+def _run_composer(
     pipeline_name: str,
-    pipelines_dir: Path,
     framework_yaml: Path | None,
-    output_dir: Path,
-    all_pipelines: bool,
+    run_date: str,
 ) -> None:
-    """Compile pipeline(s) to KFP YAML without submitting."""
-    from gcp_ml_framework.pipeline.compiler import PipelineCompiler
+    """Trigger an already-deployed DAG on Cloud Composer."""
+    from gcp_ml_framework.dag.runner import ComposerRunner
 
     ctx = load_context(framework_yaml=framework_yaml)
-    targets = (
-        [p.name for p in pipelines_dir.iterdir() if p.is_dir() and (p / "pipeline.py").exists()]
-        if all_pipelines or not pipeline_name
-        else [pipeline_name]
-    )
 
-    compiler = PipelineCompiler(output_dir=output_dir)
-    for name in targets:
-        pipeline_def = _load_pipeline(pipelines_dir / name)
-        path = compiler.compile(pipeline_def, ctx)
-        console.print(f"[green]Compiled:[/green] {path}")
+    runner = ComposerRunner(ctx)
+    dag_id = runner.resolve_dag_id(pipeline_name)
+
+    console.print(f"[cyan]Triggering DAG '{dag_id}' on Composer...[/cyan]")
+
+    # Ensure DAG is unpaused — Composer 3 defaults new DAGs to paused
+    runner.unpause_dag(dag_id)
+
+    result = runner.trigger_dag(pipeline_name, run_date=run_date)
+
+    console.print("[green]DAG run triggered.[/green]")
+    console.print(f"  DAG run ID: {result.get('dag_run_id', 'unknown')}")
+    console.print(f"  State: {result.get('state', 'unknown')}")
+
+    # Print Airflow UI link
+    airflow_uri = runner._get_airflow_uri()
+    console.print(f"\n[bold]Airflow UI:[/bold] {airflow_uri}/dags/{dag_id}/grid")

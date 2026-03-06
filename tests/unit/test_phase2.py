@@ -1,0 +1,1141 @@
+"""Phase 2 TDD tests — DAG local runner, Docker auto-gen, use cases."""
+
+import ast
+import os
+import re
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+import duckdb
+import pytest
+
+from gcp_ml_framework.components.ml.train import TrainModel
+from gcp_ml_framework.dag.builder import DAGBuilder, DAGDefinition
+from gcp_ml_framework.dag.tasks.bq_query import BQQueryTask
+from gcp_ml_framework.dag.tasks.email import EmailTask
+from gcp_ml_framework.dag.tasks.vertex_pipeline import VertexPipelineTask
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.1 Docker auto-generation + TrainModel optional image
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestDockerAutoGeneration:
+    def test_base_python_dockerfile_exists(self):
+        path = Path("docker/base/base-python/Dockerfile")
+        assert path.exists(), f"Missing {path}"
+
+    def test_base_ml_dockerfile_exists(self):
+        path = Path("docker/base/base-ml/Dockerfile")
+        assert path.exists(), f"Missing {path}"
+
+    def test_base_python_dockerfile_uses_python311(self):
+        content = Path("docker/base/base-python/Dockerfile").read_text()
+        assert "python:3.11-slim" in content
+
+    def test_base_ml_dockerfile_references_base_python(self):
+        content = Path("docker/base/base-ml/Dockerfile").read_text()
+        assert "base-python" in content
+
+    def test_base_ml_dockerfile_installs_ml_packages(self):
+        content = Path("docker/base/base-ml/Dockerfile").read_text()
+        for pkg in ["scikit-learn", "pandas", "numpy"]:
+            assert pkg in content, f"base-ml Dockerfile missing {pkg}"
+
+    def test_docker_build_script_exists(self):
+        path = Path("scripts/docker_build.sh")
+        assert path.exists(), f"Missing {path}"
+
+    def test_docker_build_script_is_executable(self):
+        path = Path("scripts/docker_build.sh")
+        assert os.access(path, os.X_OK), f"{path} is not executable"
+
+    def test_docker_build_script_auto_generates_dockerfile(self, tmp_path):
+        """Script generates Dockerfile when only train.py + requirements.txt exist."""
+        # Create a temp pipeline with trainer/train.py + requirements.txt, no Dockerfile
+        trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
+        trainer_dir.mkdir(parents=True)
+        (trainer_dir / "train.py").write_text("print('hello')")
+        (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
+
+        # Source the script functions and call _generate_dockerfile
+        import subprocess
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"""
+                source scripts/docker_build.sh
+                _generate_dockerfile "{trainer_dir}"
+            """,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        generated = trainer_dir / "Dockerfile.generated"
+        assert generated.exists(), "Dockerfile.generated was not created"
+        content = generated.read_text()
+        assert "base-ml" in content
+        assert "requirements.txt" in content
+
+    def test_docker_build_generates_ar_base_image(self, tmp_path):
+        """When AR env vars are set, generated Dockerfile uses full AR path for base image."""
+        import subprocess
+
+        trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
+        trainer_dir.mkdir(parents=True)
+        (trainer_dir / "train.py").write_text("print('hello')")
+        (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
+
+        env = os.environ.copy()
+        env["AR_HOST"] = "us-central1-docker.pkg.dev"
+        env["GCP_PROJECT"] = "my-gcp-proj"
+        env["AR_REPO"] = "dsci-myproj"
+        env["BASE_IMAGE_TAG"] = "latest"
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source scripts/docker_build.sh && _generate_dockerfile "{trainer_dir}"',
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        content = (trainer_dir / "Dockerfile.generated").read_text()
+        assert "us-central1-docker.pkg.dev/my-gcp-proj/dsci-myproj/base-ml:latest" in content
+
+    def test_docker_build_local_fallback_without_ar_vars(self, tmp_path):
+        """Without AR env vars, generated Dockerfile uses local base-ml:latest."""
+        import subprocess
+
+        trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
+        trainer_dir.mkdir(parents=True)
+        (trainer_dir / "train.py").write_text("print('hello')")
+        (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
+
+        # Ensure AR vars are NOT set
+        env = os.environ.copy()
+        for var in ("AR_HOST", "GCP_PROJECT", "AR_REPO", "BASE_IMAGE_TAG"):
+            env.pop(var, None)
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f'source scripts/docker_build.sh && _generate_dockerfile "{trainer_dir}"',
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        content = (trainer_dir / "Dockerfile.generated").read_text()
+        assert content.startswith("FROM base-ml:latest")
+
+    def test_docker_build_tags_with_ar_path(self, tmp_path):
+        """When AR env vars are set, _build tags with full AR URI."""
+        import subprocess
+
+        trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
+        trainer_dir.mkdir(parents=True)
+        (trainer_dir / "train.py").write_text("print('hello')")
+        (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
+        (trainer_dir / "Dockerfile.generated").write_text(
+            "FROM base-ml:latest\nCOPY train.py /app/train.py\n"
+        )
+
+        env = os.environ.copy()
+        env["AR_HOST"] = "us-central1-docker.pkg.dev"
+        env["GCP_PROJECT"] = "my-gcp-proj"
+        env["AR_REPO"] = "dsci-myproj"
+        env["IMAGE_TAG"] = "main-abc1234"
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"""
+                source scripts/docker_build.sh
+                # Mock docker so we don't need it installed
+                docker() {{ echo "DOCKER_CMD: $@"; }}
+                export -f docker
+                slug=$(_slugify "test_pipe")
+                _build "$(_full_tag "${{slug}}-trainer")" "{trainer_dir}/Dockerfile.generated" "{trainer_dir}"
+                """,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"Script failed: {result.stderr}"
+        # Should tag with full AR path
+        assert "us-central1-docker.pkg.dev/my-gcp-proj/dsci-myproj/test-pipe-trainer:main-abc1234" in result.stdout
+
+
+class TestTrainModelOptionalImage:
+    def test_train_model_no_image_allowed(self):
+        """TrainModel can be created without trainer_image."""
+        tm = TrainModel()
+        assert tm.trainer_image == ""
+
+    def test_train_model_explicit_image_honored(self):
+        """Explicit trainer_image overrides auto-derivation."""
+        tm = TrainModel(trainer_image="my-custom-image:latest")
+        assert tm.trainer_image == "my-custom-image:latest"
+
+    def test_train_model_resolve_image_uri(self, test_context):
+        """TrainModel.resolve_image_uri derives image from pipeline name + context."""
+        tm = TrainModel()
+        uri = tm.resolve_image_uri("churn_prediction", test_context)
+        assert "churn-prediction" in uri
+        assert test_context.artifact_registry_host in uri
+
+    def test_resolve_image_uri_from_pipeline_dir(self, test_context):
+        """When pipeline_dir is provided, image name derives from dir name."""
+        tm = TrainModel()
+        uri = tm.resolve_image_uri(
+            "reco_training",
+            test_context,
+            pipeline_dir=Path("pipelines/recommendation_engine"),
+        )
+        assert "recommendation-engine-trainer" in uri
+        assert "reco-training" not in uri
+
+    def test_train_model_explicit_image_not_overridden(self, test_context):
+        """Explicit trainer_image is returned as-is by resolve_image_uri."""
+        tm = TrainModel(trainer_image="gcr.io/my-proj/custom:v1")
+        uri = tm.resolve_image_uri("churn_prediction", test_context)
+        assert uri == "gcr.io/my-proj/custom:v1"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.2 DAG Local Runner
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestDAGLocalRunner:
+    def test_dag_runner_topological_order(self, test_context, tmp_path):
+        """Tasks execute in valid topological order."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        # Create a DAG with non-linear deps: a → c, b → c
+        dag_def = (
+            DAGBuilder(name="topo-test", schedule="@daily")
+            .task(BQQueryTask(sql="SELECT 1 AS x"), name="a", depends_on=[])
+            .task(BQQueryTask(sql="SELECT 2 AS y"), name="b", depends_on=[])
+            .task(BQQueryTask(sql="SELECT 3 AS z"), name="c", depends_on=["a", "b"])
+            .build()
+        )
+        runner = DAGLocalRunner(test_context)
+        execution_order = runner.run(dag_def)
+        # c should come after both a and b
+        names = list(execution_order.keys())
+        assert names.index("c") > names.index("a")
+        assert names.index("c") > names.index("b")
+
+    def test_dag_runner_bq_query_via_duckdb(self, test_context, tmp_path):
+        """BQQueryTask executes SQL against DuckDB with seed data."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        # Create seed data
+        seeds_dir = tmp_path / "seeds"
+        seeds_dir.mkdir()
+        (seeds_dir / "raw_data.csv").write_text("id,value\n1,100\n2,200\n")
+
+        dag_def = (
+            DAGBuilder(name="bq-test", schedule="@daily")
+            .task(
+                BQQueryTask(
+                    sql='SELECT id, value * 2 AS doubled FROM "{bq_dataset}"."raw_data"',
+                    destination_table="doubled_data",
+                ),
+                name="double_it",
+            )
+            .build()
+        )
+        runner = DAGLocalRunner(test_context, seeds_dir=seeds_dir)
+        outputs = runner.run(dag_def)
+        assert "double_it" in outputs
+
+        # Verify the destination table was created in DuckDB
+        result = runner._conn.sql(
+            f'SELECT * FROM "{test_context.bq_dataset}"."doubled_data" ORDER BY id'
+        ).fetchall()
+        assert len(result) == 2
+        assert result[0][1] == 200  # value * 2
+        assert result[1][1] == 400
+
+    def test_dag_runner_email_prints_to_console(self, test_context, capsys):
+        """EmailTask prints recipients and subject, does not send."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        dag_def = (
+            DAGBuilder(name="email-test", schedule="@daily")
+            .task(
+                EmailTask(
+                    to=["team@co.com"],
+                    subject="Test subject {namespace}",
+                    body="Test body",
+                ),
+                name="notify",
+            )
+            .build()
+        )
+        runner = DAGLocalRunner(test_context)
+        runner.run(dag_def)
+        captured = capsys.readouterr()
+        assert "team@co.com" in captured.out
+        assert "Test subject" in captured.out
+
+    def test_dag_runner_sql_file_loaded(self, test_context, tmp_path):
+        """BQQueryTask with sql_file loads and executes the file contents."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        # Create SQL file
+        sql_dir = tmp_path / "sql"
+        sql_dir.mkdir()
+        (sql_dir / "query.sql").write_text("SELECT 42 AS answer")
+
+        dag_def = (
+            DAGBuilder(name="sql-file-test", schedule="@daily")
+            .task(
+                BQQueryTask(sql_file="sql/query.sql"),
+                name="run_sql",
+            )
+            .build()
+        )
+        runner = DAGLocalRunner(test_context, pipeline_dir=tmp_path)
+        outputs = runner.run(dag_def)
+        assert "run_sql" in outputs
+
+    def test_dag_runner_bq_compat_translation(self, test_context, tmp_path):
+        """BQQueryTask SQL goes through bq_to_duckdb() translation."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        seeds_dir = tmp_path / "seeds"
+        seeds_dir.mkdir()
+        (seeds_dir / "raw_data.csv").write_text("id,value\n1,100\n2,0\n")
+
+        dag_def = (
+            DAGBuilder(name="compat-test", schedule="@daily")
+            .task(
+                BQQueryTask(
+                    sql="SELECT id, SAFE_DIVIDE(value, value) AS ratio FROM `{bq_dataset}.raw_data`",
+                    destination_table="compat_output",
+                ),
+                name="compat",
+            )
+            .build()
+        )
+        runner = DAGLocalRunner(test_context, seeds_dir=seeds_dir)
+        outputs = runner.run(dag_def)
+        result = runner._conn.sql(
+            f'SELECT * FROM "{test_context.bq_dataset}"."compat_output" ORDER BY id'
+        ).fetchall()
+        assert result[0][1] == 1.0  # 100/100
+        assert result[1][1] is None  # 0/0 → NULL
+
+    def test_dag_runner_resolves_run_date(self, test_context):
+        """DAG runner replaces {run_date} in SQL with the actual run date."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        dag_def = (
+            DAGBuilder(name="date-test", schedule="@daily")
+            .task(
+                BQQueryTask(sql="SELECT '{run_date}' AS dt"),
+                name="date_check",
+            )
+            .build()
+        )
+        runner = DAGLocalRunner(test_context)
+        outputs = runner.run(dag_def, run_date="2024-06-15")
+        assert "date_check" in outputs
+
+    def test_dag_runner_seed_data_loaded(self, test_context, tmp_path):
+        """Seed CSV files are loaded into DuckDB before task execution."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+
+        seeds_dir = tmp_path / "seeds"
+        seeds_dir.mkdir()
+        (seeds_dir / "test_table.csv").write_text("a,b\n1,2\n3,4\n")
+
+        dag_def = (
+            DAGBuilder(name="seed-test", schedule="@daily")
+            .task(
+                BQQueryTask(
+                    sql='SELECT SUM(a) AS total FROM "{bq_dataset}"."test_table"',
+                    destination_table="summed",
+                ),
+                name="sum_it",
+            )
+            .build()
+        )
+        runner = DAGLocalRunner(test_context, seeds_dir=seeds_dir)
+        runner.run(dag_def)
+        result = runner._conn.sql(
+            f'SELECT total FROM "{test_context.bq_dataset}"."summed"'
+        ).fetchone()
+        assert result[0] == 4  # 1 + 3
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.2 cmd_run.py integration — detect dag.py vs pipeline.py
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCmdRunDAGDetection:
+    def test_run_local_detects_dag_py(self, tmp_path, test_context):
+        """_run_local detects dag.py and uses DAGLocalRunner."""
+        # Create a pipeline dir with dag.py
+        pipe_dir = tmp_path / "pipelines" / "test_dag"
+        pipe_dir.mkdir(parents=True)
+        (pipe_dir / "dag.py").write_text(
+            "from gcp_ml_framework.dag.builder import DAGBuilder\n"
+            "from gcp_ml_framework.dag.tasks.bq_query import BQQueryTask\n"
+            "dag = DAGBuilder(name='test', schedule='@daily')"
+            ".task(BQQueryTask(sql='SELECT 1'), name='t').build()\n"
+        )
+        # Should not raise when loading
+        from gcp_ml_framework.cli.cmd_compile import _load_dag
+
+        dag_def = _load_dag(pipe_dir)
+        assert isinstance(dag_def, DAGDefinition)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.2 Fix auto_wrap_pipeline_dag in factory.py
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestAutoWrapPipelineDAG:
+    def test_auto_wrap_pipeline_dag_exists(self):
+        """auto_wrap_pipeline_dag must exist in factory.py."""
+        from gcp_ml_framework.dag import factory
+
+        assert hasattr(factory, "auto_wrap_pipeline_dag")
+
+    def test_auto_wrap_pipeline_dag_writes_file(self, test_context, tmp_path):
+        """auto_wrap_pipeline_dag writes a DAG file and returns the path."""
+        from gcp_ml_framework.dag.factory import auto_wrap_pipeline_dag
+        from gcp_ml_framework.pipeline.builder import PipelineBuilder
+        from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
+
+        pipeline_def = (
+            PipelineBuilder(name="test-pipe", schedule="@daily")
+            .ingest(BigQueryExtract(query="SELECT 1", output_table="raw"))
+            .build()
+        )
+        dag_path = auto_wrap_pipeline_dag(pipeline_def, test_context, tmp_path)
+        assert dag_path.exists()
+        assert dag_path.suffix == ".py"
+        content = dag_path.read_text()
+        assert "gcp_ml_framework" not in content
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.3 Churn prediction use case updates
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestChurnPredictionUpdates:
+    def test_churn_pipeline_exists(self):
+        """churn_prediction pipeline directory exists."""
+        assert Path("pipelines/churn_prediction").is_dir()
+
+    def test_churn_no_explicit_trainer_image(self):
+        """TrainModel in churn pipeline should not have explicit trainer_image."""
+        from pipelines.churn_prediction.pipeline import pipeline
+
+        train_step = [s for s in pipeline.steps if s.stage == "train"][0]
+        # Empty string means auto-derive
+        assert train_step.component.trainer_image == ""
+
+    def test_churn_uses_n2_machine_types(self):
+        """Churn pipeline must use n2 (not n1) machine types."""
+        from pipelines.churn_prediction.pipeline import pipeline
+
+        for step in pipeline.steps:
+            if hasattr(step.component, "machine_type"):
+                assert "n1" not in step.component.machine_type, (
+                    f"{step.name} uses legacy n1: {step.component.machine_type}"
+                )
+
+    def test_churn_no_trainer_dockerfile(self):
+        """trainer/Dockerfile should NOT exist (platform auto-generates)."""
+        assert not Path("pipelines/churn_prediction/trainer/Dockerfile").exists()
+
+    def test_churn_has_requirements_txt(self):
+        """trainer/requirements.txt must exist for Docker auto-generation."""
+        assert Path("pipelines/churn_prediction/trainer/requirements.txt").exists()
+
+    def test_churn_has_trainer_script(self):
+        """trainer/train.py must exist."""
+        assert Path("pipelines/churn_prediction/trainer/train.py").exists()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.4 Sales Analytics use case
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestSalesAnalytics:
+    def test_sales_analytics_dag_exists(self):
+        """sales_analytics/dag.py must exist."""
+        assert Path("pipelines/sales_analytics/dag.py").exists()
+
+    def test_sales_analytics_has_8_tasks(self):
+        """DAG should have 8 tasks."""
+        from pipelines.sales_analytics.dag import dag
+
+        assert len(dag.tasks) == 8
+
+    def test_sales_analytics_dag_shape(self):
+        """DAG has correct fan-out / fan-in pattern."""
+        from pipelines.sales_analytics.dag import dag
+
+        by_name = {t.name: t for t in dag.tasks}
+
+        # Root tasks (extractions) have no deps
+        for name in ["extract_orders", "extract_inventory", "extract_returns"]:
+            assert by_name[name].depends_on == [], f"{name} should be a root"
+
+        # Aggregations depend on their respective extractions
+        assert "extract_orders" in by_name["agg_revenue"].depends_on
+        assert "extract_inventory" in by_name["check_stock"].depends_on
+        assert "extract_returns" in by_name["agg_refunds"].depends_on
+        assert "extract_orders" in by_name["agg_refunds"].depends_on  # SQL JOINs staged_orders
+
+        # build_report fans in from all 3 aggregations
+        build_deps = set(by_name["build_report"].depends_on)
+        assert {"agg_revenue", "check_stock", "agg_refunds"} == build_deps
+
+        # notify depends on build_report
+        assert "build_report" in by_name["notify"].depends_on
+
+    def test_sales_analytics_uses_sql_files(self):
+        """SQL tasks should use sql_file references."""
+        from pipelines.sales_analytics.dag import dag
+
+        sql_tasks = [t for t in dag.tasks if isinstance(t.task, BQQueryTask)]
+        sql_file_count = sum(1 for t in sql_tasks if t.task.sql_file)
+        assert sql_file_count >= 7, "Most BQ tasks should use sql_file"
+
+    def test_sales_analytics_sql_files_exist(self):
+        """All referenced SQL files must exist."""
+        from pipelines.sales_analytics.dag import dag
+
+        for t in dag.tasks:
+            if isinstance(t.task, BQQueryTask) and t.task.sql_file:
+                path = Path("pipelines/sales_analytics") / t.task.sql_file
+                assert path.exists(), f"SQL file missing: {path}"
+
+    def test_sales_analytics_seed_data_exists(self):
+        """Seed CSV files must exist for local testing."""
+        seeds = Path("pipelines/sales_analytics/seeds")
+        assert seeds.exists()
+        assert (seeds / "raw_orders.csv").exists()
+        assert (seeds / "raw_inventory.csv").exists()
+        assert (seeds / "raw_returns.csv").exists()
+
+    def test_sales_analytics_compiles(self, test_context, tmp_path):
+        """DAG compiles to valid Airflow Python file."""
+        from gcp_ml_framework.dag.compiler import DAGCompiler
+        from pipelines.sales_analytics.dag import dag
+
+        compiler = DAGCompiler(output_dir=tmp_path, pipeline_dir=Path("pipelines/sales_analytics"))
+        path = compiler.compile(dag, test_context)
+        assert path.exists()
+        ast.parse(path.read_text())
+
+    def test_sales_analytics_compiled_no_framework_imports(self, test_context, tmp_path):
+        """Compiled DAG has zero gcp_ml_framework imports."""
+        from gcp_ml_framework.dag.compiler import DAGCompiler
+        from pipelines.sales_analytics.dag import dag
+
+        compiler = DAGCompiler(output_dir=tmp_path, pipeline_dir=Path("pipelines/sales_analytics"))
+        path = compiler.compile(dag, test_context)
+        content = path.read_text()
+        assert "gcp_ml_framework" not in content
+
+    def test_sales_analytics_local_run(self, test_context):
+        """Local run executes all 8 tasks against seed data."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+        from pipelines.sales_analytics.dag import dag
+
+        seeds_dir = Path("pipelines/sales_analytics/seeds")
+        pipeline_dir = Path("pipelines/sales_analytics")
+        runner = DAGLocalRunner(test_context, seeds_dir=seeds_dir, pipeline_dir=pipeline_dir)
+        outputs = runner.run(dag, run_date="2026-03-01")
+        assert len(outputs) == 8
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.5 Recommendation Engine use case
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestRecommendationEngine:
+    def test_reco_dag_exists(self):
+        """recommendation_engine/dag.py must exist."""
+        assert Path("pipelines/recommendation_engine/dag.py").exists()
+
+    def test_reco_has_vertex_pipeline_tasks(self):
+        """DAG should have at least 2 VertexPipelineTasks."""
+        from pipelines.recommendation_engine.dag import dag
+
+        vp_tasks = [t for t in dag.tasks if isinstance(t.task, VertexPipelineTask)]
+        assert len(vp_tasks) >= 2
+
+    def test_reco_has_bq_tasks(self):
+        """DAG should have BQQueryTasks for feature extraction."""
+        from pipelines.recommendation_engine.dag import dag
+
+        bq_tasks = [t for t in dag.tasks if isinstance(t.task, BQQueryTask)]
+        assert len(bq_tasks) >= 1
+
+    def test_reco_has_email_task(self):
+        """DAG should have an EmailTask for notification."""
+        from pipelines.recommendation_engine.dag import dag
+
+        email_tasks = [t for t in dag.tasks if isinstance(t.task, EmailTask)]
+        assert len(email_tasks) >= 1
+
+    def test_reco_compiles(self, test_context, tmp_path):
+        """DAG compiles to valid Airflow Python file."""
+        from gcp_ml_framework.dag.compiler import DAGCompiler
+        from pipelines.recommendation_engine.dag import dag
+
+        compiler = DAGCompiler(
+            output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine")
+        )
+        path = compiler.compile(dag, test_context)
+        assert path.exists()
+        ast.parse(path.read_text())
+
+    def test_reco_compiled_no_framework_imports(self, test_context, tmp_path):
+        """Compiled DAG has zero gcp_ml_framework imports."""
+        from gcp_ml_framework.dag.compiler import DAGCompiler
+        from pipelines.recommendation_engine.dag import dag
+
+        compiler = DAGCompiler(
+            output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine")
+        )
+        path = compiler.compile(dag, test_context)
+        content = path.read_text()
+        assert "gcp_ml_framework" not in content
+
+    def test_reco_has_trainer(self):
+        """trainer/train.py and requirements.txt must exist."""
+        assert Path("pipelines/recommendation_engine/trainer/train.py").exists()
+        assert Path("pipelines/recommendation_engine/trainer/requirements.txt").exists()
+
+    def test_reco_no_trainer_dockerfile(self):
+        """trainer/Dockerfile should NOT exist (platform auto-generates)."""
+        assert not Path("pipelines/recommendation_engine/trainer/Dockerfile").exists()
+
+    def test_reco_seed_data_exists(self):
+        """Seed CSV must exist for local testing."""
+        seeds = Path("pipelines/recommendation_engine/seeds")
+        assert (seeds / "raw_interactions.csv").exists()
+
+    def test_reco_sql_files_exist(self):
+        """SQL files must exist."""
+        sql_dir = Path("pipelines/recommendation_engine/sql")
+        assert sql_dir.exists()
+        assert (sql_dir / "extract_interactions.sql").exists()
+
+    def test_reco_vertex_pipeline_definitions_inline(self):
+        """VertexPipelineTasks must have inline pipeline objects (not separate dirs)."""
+        from pipelines.recommendation_engine.dag import dag
+
+        for t in dag.tasks:
+            if isinstance(t.task, VertexPipelineTask):
+                assert t.task.pipeline is not None, (
+                    f"VertexPipelineTask '{t.name}' should have an inline pipeline object"
+                )
+                assert t.task.pipeline_name, f"pipeline_name should be derived from inline pipeline"
+
+    def test_reco_local_run(self, test_context):
+        """Local run executes DAG including Vertex pipeline stubs."""
+        from gcp_ml_framework.dag.runner import DAGLocalRunner
+        from pipelines.recommendation_engine.dag import dag
+
+        seeds_dir = Path("pipelines/recommendation_engine/seeds")
+        pipeline_dir = Path("pipelines/recommendation_engine")
+        runner = DAGLocalRunner(test_context, seeds_dir=seeds_dir, pipeline_dir=pipeline_dir)
+        outputs = runner.run(dag, run_date="2026-03-01")
+        assert len(outputs) >= 4  # at least BQ + 2 Vertex + email
+
+    def test_reco_training_pipeline_has_transform_step(self):
+        """reco_training pipeline must include a BQTransform between ingest and train.
+
+        Without this, TrainModel receives a GCS URI from BigQueryExtract
+        instead of a BQ table reference, which causes data flow failures on Vertex AI.
+        """
+        from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+        from pipelines.recommendation_engine.dag import training_pipeline
+
+        step_types = [type(s.component).__name__ for s in training_pipeline.steps]
+        assert "BQTransform" in step_types, (
+            "reco_training needs BQTransform so TrainModel gets a BQ table ref, not GCS URI"
+        )
+
+    def test_reco_training_pipeline_no_evaluate_or_deploy(self):
+        """reco_training should NOT have EvaluateModel or DeployModel.
+
+        The NMF recommendation model is fundamentally incompatible with the
+        generic EvaluateModel (expects binary classifier with predict_proba)
+        and DeployModel (expects sklearn serving container).
+        """
+        from pipelines.recommendation_engine.dag import training_pipeline
+
+        step_types = [type(s.component).__name__ for s in training_pipeline.steps]
+        assert "EvaluateModel" not in step_types
+        assert "DeployModel" not in step_types
+
+    def test_reco_trainer_handles_bq_input(self):
+        """Trainer must read from BQ (not CSV) for Vertex AI compatibility."""
+        trainer_src = Path("pipelines/recommendation_engine/trainer/train.py").read_text()
+        # Must import bigquery for reading data from BQ tables
+        assert "bigquery" in trainer_src
+        # Must not use pd.read_csv for the main data loading path
+        # (pd.read_csv is only valid for local file paths, not BQ tables)
+
+    def test_reco_trainer_handles_gcs_output(self):
+        """Trainer must handle GCS model output (gs:// prefix)."""
+        trainer_src = Path("pipelines/recommendation_engine/trainer/train.py").read_text()
+        assert "gs://" in trainer_src
+
+    def test_reco_trainer_requirements_include_gcp_sdks(self):
+        """Trainer requirements must include GCP SDKs for BQ reads and GCS writes."""
+        reqs = Path("pipelines/recommendation_engine/trainer/requirements.txt").read_text()
+        assert "google-cloud-bigquery" in reqs
+        assert "google-cloud-storage" in reqs
+
+    def test_reco_compiled_dag_vertex_display_name_valid_jinja(self, test_context, tmp_path):
+        """Compiled DAG VertexPipelineTask display_name must use {{ }} not {{{ }}}."""
+        from gcp_ml_framework.dag.compiler import DAGCompiler
+        from pipelines.recommendation_engine.dag import dag
+
+        compiler = DAGCompiler(
+            output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine")
+        )
+        path = compiler.compile(dag, test_context)
+        content = path.read_text()
+        assert "{{{ ds_nodash }}}" not in content
+        assert "{{ ds_nodash }}" in content
+
+    def test_reco_feature_pipeline_no_write_features(self):
+        """Feature pipeline omits WriteFeatures — Feature Store table doesn't exist yet."""
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+        from pipelines.recommendation_engine.dag import feature_pipeline
+
+        wf_steps = [s for s in feature_pipeline.steps
+                     if isinstance(s.component, WriteFeatures)]
+        assert len(wf_steps) == 0, "feature_pipeline should not include WriteFeatures"
+
+
+class TestDeployFeatureSchemaResilience:
+    """deploy --all should not crash when feature schemas reference missing BQ tables."""
+
+    def test_deploy_features_continues_on_error(self):
+        """_deploy_features must catch per-entity errors and warn, not crash."""
+        from unittest.mock import MagicMock, patch
+
+        from gcp_ml_framework.cli.cmd_deploy import _deploy_features
+
+        mock_ctx = MagicMock()
+        mock_ctx.gcp_project = "test-project"
+        mock_ctx.region = "us-central1"
+        mock_ctx.feature_store_id = "test_fs"
+        mock_ctx.naming.bq_dataset = "test_dataset"
+
+        schema_dir = Path("feature_schemas")
+        if not schema_dir.exists():
+            return  # skip if no schemas
+
+        # Patch FeatureStoreClient.ensure_entity to raise for all calls
+        with patch(
+            "gcp_ml_framework.feature_store.client.FeatureStoreClient"
+        ) as MockClient:
+            MockClient.return_value.ensure_entity.side_effect = Exception(
+                "BQ table not found"
+            )
+            # Should NOT raise — should warn and continue
+            _deploy_features(schema_dir, mock_ctx, dry_run=False)
+
+
+class TestResolveMatchNames:
+    """_resolve_match_names should discover embedded pipeline names for dag.py pipelines."""
+
+    def test_returns_empty_for_all_pipelines(self):
+        from gcp_ml_framework.cli.cmd_deploy import _resolve_match_names
+
+        result = _resolve_match_names("anything", all_pipelines=True, pipelines_dir=Path("pipelines"))
+        assert result == set()
+
+    def test_includes_parent_name(self):
+        from gcp_ml_framework.cli.cmd_deploy import _resolve_match_names
+
+        result = _resolve_match_names("churn_prediction", all_pipelines=False, pipelines_dir=Path("pipelines"))
+        assert "churn_prediction" in result
+
+    def test_includes_embedded_pipeline_names(self):
+        from gcp_ml_framework.cli.cmd_deploy import _resolve_match_names
+
+        result = _resolve_match_names("recommendation_engine", all_pipelines=False, pipelines_dir=Path("pipelines"))
+        assert "recommendation_engine" in result
+        assert "reco_features" in result
+        assert "reco_training" in result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.6 gml run --composer — trigger DAGs on Composer
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestComposerRunMode:
+    """TDD tests for gml run --composer."""
+
+    def test_composer_flag_exists_on_run_command(self):
+        """The run command must accept --composer flag."""
+        from gcp_ml_framework.cli.cmd_run import run
+        import inspect
+
+        sig = inspect.signature(run)
+        assert "composer" in sig.parameters, "--composer flag must exist on gml run"
+
+    def test_composer_mutually_exclusive_with_local(self):
+        """--composer and --local are mutually exclusive."""
+        from typer.testing import CliRunner
+        from gcp_ml_framework.cli.main import app
+
+        cli_runner = CliRunner()
+        result = cli_runner.invoke(app, ["run", "test", "--local", "--composer"])
+        assert result.exit_code != 0
+
+    def test_composer_mutually_exclusive_with_vertex(self):
+        """--composer and --vertex are mutually exclusive."""
+        from typer.testing import CliRunner
+        from gcp_ml_framework.cli.main import app
+
+        cli_runner = CliRunner()
+        result = cli_runner.invoke(app, ["run", "test", "--vertex", "--composer"])
+        assert result.exit_code != 0
+
+    def test_composer_runner_class_exists(self):
+        """ComposerRunner must exist in dag.runner module."""
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        assert ComposerRunner is not None
+
+    def test_composer_runner_trigger_method(self):
+        """ComposerRunner must have a trigger_dag method."""
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        assert hasattr(ComposerRunner, "trigger_dag")
+
+    def test_composer_runner_resolves_dag_id(self, test_context):
+        """ComposerRunner derives the correct DAG ID from pipeline name + context."""
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        runner = ComposerRunner(test_context)
+        dag_id = runner.resolve_dag_id("sales_analytics")
+        expected = test_context.naming.dag_id("sales_analytics")
+        assert dag_id == expected
+
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._get_airflow_uri")
+    def test_composer_runner_builds_airflow_api_url(self, mock_uri, test_context):
+        """ComposerRunner builds the correct Airflow REST API trigger URL."""
+        mock_uri.return_value = "https://fake-airflow.example.com"
+
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        runner = ComposerRunner(test_context)
+        dag_id = runner.resolve_dag_id("sales_analytics")
+        url = runner._build_trigger_url(dag_id)
+        assert "/api/v1/dags/" in url
+        assert dag_id in url
+        assert "/dagRuns" in url
+
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._get_airflow_uri")
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._trigger_dag_run")
+    def test_composer_runner_trigger_calls_api(self, mock_trigger, mock_uri, test_context):
+        """trigger_dag calls the Airflow API with the correct payload."""
+        mock_uri.return_value = "https://fake-airflow.example.com"
+        mock_trigger.return_value = {
+            "dag_run_id": "manual__2026-03-01",
+            "state": "queued",
+        }
+
+        from gcp_ml_framework.dag.runner import ComposerRunner
+
+        runner = ComposerRunner(test_context)
+        result = runner.trigger_dag("sales_analytics", run_date="2026-03-01")
+        assert result["state"] == "queued"
+        mock_trigger.assert_called_once()
+
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._get_airflow_uri")
+    @patch("gcp_ml_framework.dag.runner.ComposerRunner._trigger_dag_run")
+    def test_composer_runner_uses_today_as_default_date(self, mock_trigger, mock_uri, test_context):
+        """When no run_date is given, defaults to today."""
+        mock_uri.return_value = "https://fake-airflow.example.com"
+        mock_trigger.return_value = {
+            "dag_run_id": "manual__today",
+            "state": "queued",
+        }
+
+        from gcp_ml_framework.dag.runner import ComposerRunner
+        import datetime
+
+        runner = ComposerRunner(test_context)
+        runner.trigger_dag("sales_analytics")
+        call_args = mock_trigger.call_args
+        # The logical_date should contain today's date
+        assert datetime.date.today().isoformat() in str(call_args)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.7 LocalRunner data flow — WriteFeatures pass-through + pipeline_name
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestLocalRunnerDataFlow:
+    """WriteFeatures must pass through input_path and LocalRunner must pass pipeline_name."""
+
+    def test_write_features_local_run_returns_input_path(self, test_context, tmp_path):
+        """WriteFeatures.local_run() should return its input_path unchanged (pass-through)."""
+        import pandas as pd
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+
+        # Create a sample parquet file simulating BQTransform output
+        df = pd.DataFrame({"user_id": [1, 2], "feature_a": [0.5, 0.8]})
+        input_path = str(tmp_path / "features.parquet")
+        df.to_parquet(input_path)
+
+        comp = WriteFeatures(entity="user", feature_group="behavioral")
+        result = comp.local_run(test_context, input_path=input_path)
+        assert result == input_path, (
+            f"WriteFeatures should pass through input_path, got {result!r}"
+        )
+
+    def test_write_features_local_run_returns_empty_string_without_input(self, test_context):
+        """WriteFeatures.local_run() with no input returns empty string (no data to pass)."""
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+
+        comp = WriteFeatures(entity="user", feature_group="behavioral")
+        result = comp.local_run(test_context)
+        assert result == "", (
+            f"WriteFeatures with no input should return empty string, got {result!r}"
+        )
+
+    def test_local_runner_passes_pipeline_name(self, test_context, tmp_path):
+        """LocalRunner should pass pipeline_name to each component's local_run()."""
+        from gcp_ml_framework.pipeline.builder import PipelineBuilder
+        from gcp_ml_framework.pipeline.runner import LocalRunner
+        from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
+
+        # Seed DuckDB so SELECT works
+        seeds_dir = tmp_path / "seeds"
+        seeds_dir.mkdir()
+        import pandas as pd
+        pd.DataFrame({"a": [1]}).to_csv(seeds_dir / "src.csv", index=False)
+
+        pipeline_def = (
+            PipelineBuilder(name="test_pipeline", schedule="@daily")
+            .ingest(BigQueryExtract(
+                query='SELECT * FROM "{bq_dataset}"."src"',
+                output_table="raw",
+            ))
+            .build()
+        )
+
+        runner = LocalRunner(test_context, seeds_dir=seeds_dir)
+
+        # Spy on local_run to capture kwargs
+        captured_kwargs = {}
+        original_local_run = pipeline_def.steps[0].component.local_run
+
+        def spy_local_run(context, **kwargs):
+            captured_kwargs.update(kwargs)
+            return original_local_run(context, **kwargs)
+
+        pipeline_def.steps[0].component.local_run = spy_local_run  # type: ignore[assignment]
+        runner.run(pipeline_def)
+
+        assert "pipeline_name" in captured_kwargs, (
+            "LocalRunner must pass pipeline_name in kwargs"
+        )
+        assert captured_kwargs["pipeline_name"] == "test_pipeline"
+
+    def test_local_runner_write_features_does_not_break_chain(self, test_context, tmp_path):
+        """After WriteFeatures, downstream steps should still receive prev_output."""
+        from gcp_ml_framework.pipeline.builder import PipelineBuilder
+        from gcp_ml_framework.pipeline.runner import LocalRunner
+        from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+        from gcp_ml_framework.components.ml.train import TrainModel
+
+        # Seed DuckDB with test data
+        seeds_dir = tmp_path / "seeds"
+        seeds_dir.mkdir()
+        import pandas as pd
+        pd.DataFrame({"user_id": [1], "val": [42]}).to_csv(seeds_dir / "raw_data.csv", index=False)
+
+        pipeline_def = (
+            PipelineBuilder(name="chain_test", schedule="@daily")
+            .ingest(BigQueryExtract(
+                query='SELECT * FROM "{bq_dataset}"."raw_data"',
+                output_table="raw_data_out",
+            ))
+            .write_features(WriteFeatures(
+                entity="user", feature_group="test_group",
+            ), name="write_features")
+            .train(TrainModel(machine_type="n2-standard-4"), name="train")
+            .build()
+        )
+
+        runner = LocalRunner(test_context, seeds_dir=seeds_dir)
+        outputs = runner.run(pipeline_def)
+
+        # WriteFeatures should NOT have set prev_output to None
+        wf_output = outputs["write_features"]
+        assert wf_output is not None, (
+            "WriteFeatures output should not be None — it should pass through input_path"
+        )
+
+
+class TestLocalTrainAndEvaluate:
+    """TrainModel trains a real model from seed data; EvaluateModel computes real metrics."""
+
+    def _make_dataset(self, tmp_path):
+        """Create a labeled Parquet dataset for training/eval."""
+        import pandas as pd
+
+        df = pd.DataFrame({
+            "user_id": range(1, 11),
+            "feature_a": [0.1, 0.9, 0.2, 0.8, 0.15, 0.85, 0.25, 0.75, 0.3, 0.7],
+            "feature_b": [10, 90, 20, 80, 15, 85, 25, 75, 30, 70],
+            "label": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        })
+        path = str(tmp_path / "dataset.parquet")
+        df.to_parquet(path, index=False)
+        return path
+
+    def test_train_model_produces_pickle_when_data_available(self, test_context, tmp_path):
+        """TrainModel.local_run() should produce a model.pkl when input data has a label column."""
+        dataset_path = self._make_dataset(tmp_path)
+        comp = TrainModel(machine_type="n2-standard-4")
+        out_dir = comp.local_run(test_context, input_path=dataset_path, pipeline_name="test")
+
+        model_pkl = os.path.join(out_dir, "model.pkl")
+        assert os.path.exists(model_pkl), "TrainModel should write model.pkl when data is available"
+
+    def test_train_model_saves_eval_data(self, test_context, tmp_path):
+        """TrainModel.local_run() should save eval_data.parquet alongside the model."""
+        dataset_path = self._make_dataset(tmp_path)
+        comp = TrainModel(machine_type="n2-standard-4")
+        out_dir = comp.local_run(test_context, input_path=dataset_path, pipeline_name="test")
+
+        eval_parquet = os.path.join(out_dir, "eval_data.parquet")
+        assert os.path.exists(eval_parquet), "TrainModel should save eval_data.parquet for downstream evaluation"
+
+    def test_train_model_falls_back_to_placeholder_without_data(self, test_context):
+        """TrainModel.local_run() without input_path still produces placeholder model.json."""
+        comp = TrainModel(machine_type="n2-standard-4")
+        out_dir = comp.local_run(test_context, pipeline_name="test")
+
+        model_json = os.path.join(out_dir, "model.json")
+        assert os.path.exists(model_json), "Placeholder model.json should exist when no input data"
+
+    def test_evaluate_model_computes_real_metrics(self, test_context, tmp_path):
+        """EvaluateModel.local_run() should compute real metrics when model.pkl exists."""
+        import pickle
+
+        import pandas as pd
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline as SkPipeline
+        from sklearn.preprocessing import StandardScaler
+
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+
+        # Create a real model and eval dataset in a model directory
+        model_dir = str(tmp_path / "model_output")
+        os.makedirs(model_dir)
+
+        df = pd.DataFrame({
+            "feature_a": [0.1, 0.9, 0.2, 0.8, 0.15],
+            "feature_b": [10, 90, 20, 80, 15],
+            "label": [0, 1, 0, 1, 0],
+        })
+        X = df.drop(columns=["label"])
+        y = df["label"]
+        model = SkPipeline([("scaler", StandardScaler()), ("clf", LogisticRegression(random_state=42))])
+        model.fit(X, y)
+
+        with open(os.path.join(model_dir, "model.pkl"), "wb") as f:
+            pickle.dump(model, f)
+        df.to_parquet(os.path.join(model_dir, "eval_data.parquet"), index=False)
+
+        comp = EvaluateModel(metrics=["auc", "f1"], gate={"auc": 0.5})
+        result = comp.local_run(test_context, input_path=model_dir)
+
+        assert isinstance(result, dict)
+        assert "auc" in result
+        assert "f1" in result
+        # Real metrics from a fitted model — should not be the 0.50 placeholder
+        assert result["auc"] != 0.50 or result["f1"] != 0.50, (
+            "With a real model, at least one metric should differ from the 0.50 placeholder"
+        )
+
+    def test_evaluate_model_falls_back_to_placeholder_without_model(self, test_context):
+        """EvaluateModel.local_run() without model.pkl returns placeholder metrics."""
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+
+        comp = EvaluateModel(metrics=["auc"], gate={})
+        result = comp.local_run(test_context)
+
+        assert result == {"auc": 0.50}
+
+    def test_evaluate_model_gate_passes_with_real_model(self, test_context, tmp_path):
+        """EvaluateModel gate should pass when real metrics exceed threshold."""
+        import pickle
+
+        import pandas as pd
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline as SkPipeline
+        from sklearn.preprocessing import StandardScaler
+
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+
+        # Build a model that perfectly fits the data (high AUC)
+        model_dir = str(tmp_path / "model_output")
+        os.makedirs(model_dir)
+
+        df = pd.DataFrame({
+            "feature_a": [0.1, 0.9, 0.2, 0.8, 0.15, 0.85, 0.25, 0.75, 0.3, 0.7],
+            "feature_b": [10, 90, 20, 80, 15, 85, 25, 75, 30, 70],
+            "label": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        })
+        X = df.drop(columns=["label"])
+        y = df["label"]
+        model = SkPipeline([("scaler", StandardScaler()), ("clf", LogisticRegression(random_state=42))])
+        model.fit(X, y)
+
+        with open(os.path.join(model_dir, "model.pkl"), "wb") as f:
+            pickle.dump(model, f)
+        df.to_parquet(os.path.join(model_dir, "eval_data.parquet"), index=False)
+
+        # Gate at 0.78 — should pass with a well-fitted model on linearly separable data
+        comp = EvaluateModel(metrics=["auc", "f1"], gate={"auc": 0.78})
+        result = comp.local_run(test_context, input_path=model_dir)
+
+        # Should NOT raise — gate should pass
+        assert result["auc"] >= 0.78

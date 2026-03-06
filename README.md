@@ -1,395 +1,292 @@
 # GCP ML Framework
 
-Branch-isolated ML pipelines on Google Cloud Platform.
+Python library + CLI (`gml`) for branch-isolated ML pipelines and data workflows on Google Cloud Platform.
 
-One Python file per pipeline. One `gml` command to run, deploy, or promote it. Every branch gets its own namespace — so DEV experiments never touch PROD data.
+One Python file per pipeline. One command to run, deploy, or promote. Every GCP resource is automatically scoped to `{team}-{project}-{branch}` — no hardcoded project IDs, no `if env == "prod"`, no resource collisions between branches.
 
----
+## How It Works
 
-## How it works
-
-When you push a branch, the framework automatically derives a namespace from your team, project, and branch name:
+Your git branch determines your entire GCP namespace:
 
 ```
 branch: feature/user-embeddings
-namespace: dsci-churn-pred-feature-user-embeddings
-
-GCS:           gs://dsci-churn-pred/feature-user-embeddings/
-BigQuery:      dsci_churn_pred_feature_user_embeddings
-Feature Store: dsci-churn-pred  (shared per project, views are branch-namespaced)
-Vertex AI:     dsci-churn-pred-feature-user-embeddings-{pipeline}
-Airflow DAG:   dsci_churn_pred_feature_user_embeddings__{pipeline}
+  GCS bucket:    gs://dsci-churn-pred/feature-user-embeddings/
+  BigQuery:      dsci_churn_pred_feature_user_embeddings
+  Vertex AI:     dsci-churn-pred-feature-user-embeddings-{pipeline}
+  Composer DAG:  dsci_churn_pred_feature_user_embe__{pipeline}
+  Feature View:  user_behavioral_feature_user_embeddings
 ```
 
-Every GCP resource is derived from this namespace — no hardcoding, no collisions.
-
-### Environment lifecycle
-
-| Git state | Environment | GCP project |
-|---|---|---|
-| `feature/*`, `hotfix/*`, any branch | DEV | `dev_project_id` |
-| `main` | STAGING | `staging_project_id` |
-| release tag (`v1.2.3`) | PROD | `prod_project_id` |
-| `prod/*` branch | PROD-EXP | `prod_project_id` |
-
----
+| Git State | Environment | GCP Project | Lifecycle |
+|---|---|---|---|
+| `feature/*`, `hotfix/*`, other | DEV | `dev_project_id` | Ephemeral — auto-cleanup on merge |
+| `main` | STAGING | `staging_project_id` | Persistent — full integration |
+| Release tag `v*` | PROD | `prod_project_id` | Immutable — promoted from STAGING only |
 
 ## Quickstart
 
-### 1. Install
-
 ```bash
-pip install uv
-uv sync
-```
+# Install dependencies
+pip install uv && uv sync
 
-### 2. Scaffold a project
-
-```bash
+# Scaffold a new project
 gml init project dsci churn-pred \
-  --dev-project my-gcp-project-dev \
-  --staging-project my-gcp-project-staging \
-  --prod-project my-gcp-project-prod
-```
+  --dev-project my-gcp-dev \
+  --staging-project my-gcp-staging \
+  --prod-project my-gcp-prod
 
-This creates:
-
-```
-framework.yaml          ← team/project identity + GCP project IDs
-feature_schemas/        ← entity feature definitions (YAML)
-pipelines/              ← one directory per pipeline
-.github/workflows/      ← CI/CD workflows (dev, stage, promote, teardown)
-scripts/bootstrap.sh    ← one-time GCP setup
-tests/
-```
-
-### 3. Configure
-
-Edit `framework.yaml`:
-
-```yaml
-team: dsci
-project: churn-pred
-
-gcp:
-  dev_project_id: my-gcp-project-dev
-  staging_project_id: my-gcp-project-staging
-  prod_project_id: my-gcp-project-prod
-  region: us-central1
-  composer_env: ml-composer-env
-  artifact_registry_host: us-central1-docker.pkg.dev
-```
-
-### 4. Add a pipeline
-
-```bash
+# Add a pipeline
 gml init pipeline churn_prediction
+# Edit pipelines/churn_prediction/pipeline.py
+
+# Run locally (DuckDB stubs — no GCP needed)
+gml run churn_prediction --local
+
+# Submit to Vertex AI
+gml run churn_prediction --vertex
+
+# Compile and deploy DAGs to Composer
+gml compile --all
+gml deploy --all
 ```
 
-Edit `pipelines/churn_prediction/pipeline.py`:
+## Two DSLs, Two Levels of Orchestration
+
+The framework provides two complementary DSLs:
+
+### PipelineBuilder — ML Pipelines (Vertex AI)
+
+For ML workflows that compile to KFP v2 YAML and run on Vertex AI Pipelines. Steps execute sequentially with automatic data wiring.
 
 ```python
 from gcp_ml_framework.pipeline.builder import PipelineBuilder
 from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
 from gcp_ml_framework.components.transformation.bq_transform import BQTransform
-from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
 from gcp_ml_framework.components.ml.train import TrainModel
 from gcp_ml_framework.components.ml.evaluate import EvaluateModel
 from gcp_ml_framework.components.ml.deploy import DeployModel
 
 pipeline = (
     PipelineBuilder(name="churn_prediction", schedule="0 6 * * 1")
-    .ingest(
-        BigQueryExtract(
-            query="SELECT * FROM `{bq_dataset}.raw_events` WHERE dt = '{run_date}'",
-            output_table="churn_raw",
-        )
-    )
-    .transform(
-        BQTransform(
-            sql_file="sql/churn_features.sql",
-            output_table="churn_features",
-        )
-    )
-    .write_features(
-        WriteFeatures(entity="user", feature_group="behavioral")
-    )
-    .train(
-        TrainModel(
-            trainer_image="{artifact_registry}/churn-trainer:latest",
-            machine_type="n1-standard-8",
-            hyperparameters={"learning_rate": 0.05, "max_depth": 6},
-        )
-    )
-    .evaluate(
-        EvaluateModel(metrics=["auc", "f1"], gate={"auc": 0.78})
-    )
-    .deploy(
-        DeployModel(endpoint_name="churn-classifier")
-    )
+    .ingest(BigQueryExtract(
+        query="SELECT * FROM `{bq_dataset}.raw_events` WHERE dt = '{run_date}'",
+        output_table="raw",
+    ))
+    .transform(BQTransform(sql_file="sql/features.sql", output_table="features"))
+    .train(TrainModel(machine_type="n2-standard-8", hyperparameters={"lr": 0.05}))
+    .evaluate(EvaluateModel(metrics=["auc", "f1"], gate={"auc": 0.78}))
+    .deploy(DeployModel(endpoint_name="churn-classifier"))
     .build()
 )
 ```
 
-That's the entire pipeline definition. No DAG code. No KFP YAML. No operator wiring.
+### DAGBuilder — Composer DAGs (Airflow)
 
-### 5. Check your context
-
-```bash
-gml context show
-```
-
-```
-GCP ML Framework — context for branch 'feature/churn-v2'
-
-Identity
-  team             dsci
-  project          churn-pred
-  branch (raw)     feature/churn-v2
-  branch (slug)    feature-churn-v2
-  git_state        DEV
-
-GCP
-  project          my-gcp-project-dev
-  region           us-central1
-
-Resource Names
-  namespace        dsci-churn-pred-feature-churn-v2
-  gcs_prefix       gs://dsci-churn-pred/feature-churn-v2/
-  bq_dataset       dsci_churn_pred_feature_churn_v2
-  feature_store_id dsci-churn-pred
-  secret_prefix    dsci-churn-pred-feature-churn-v2
-```
-
-### 6. Run locally
-
-No GCP access required. DuckDB and pandas replace BQ and GCS calls.
-
-```bash
-gml run churn_prediction --local
-```
-
-```bash
-# Print the execution plan without running
-gml run churn_prediction --local --dry-run
-```
-
-Note: `--local` is the default — `gml run churn_prediction` works the same way.
-
-### 7. Run on Vertex AI
-
-```bash
-gml run churn_prediction --vertex
-gml run churn_prediction --vertex --sync     # wait for completion
-gml run --vertex --all                       # run all pipelines
-```
-
-### 8. Deploy to Composer
-
-```bash
-# Generate DAG files and sync them to the Composer GCS bucket
-gml deploy dags
-
-# Upsert Feature Store entity types and feature views
-gml deploy features
-```
-
----
-
-## Core concepts
-
-### Naming convention
-
-All resource names are derived from a single `NamingConvention` object. Nothing is hardcoded anywhere in your pipeline code.
+For orchestration workflows with parallel tasks, fan-out/fan-in patterns, notifications, and multi-pipeline coordination. Compiles to standalone Airflow DAG files with zero framework imports at parse time.
 
 ```python
-from gcp_ml_framework.naming import NamingConvention
+from gcp_ml_framework.dag.builder import DAGBuilder
+from gcp_ml_framework.dag.tasks.bq_query import BQQueryTask
+from gcp_ml_framework.dag.tasks.vertex_pipeline import VertexPipelineTask
+from gcp_ml_framework.dag.tasks.email import EmailTask
 
-nc = NamingConvention(team="dsci", project="churn-pred", branch="feature/xyz")
-
-nc.namespace               # "dsci-churn-pred-feature-xyz"
-nc.bq_dataset              # "dsci_churn_pred_feature_xyz"
-nc.gcs_prefix              # "gs://dsci-churn-pred/feature-xyz/"
-nc.feature_store_id        # "dsci-churn-pred"  (shared across branches)
-nc.dag_id("churn_train")   # "dsci_churn_pred_feature_xyz__churn_train"
-```
-
-### MLContext
-
-Every component receives an `MLContext`. It carries the resolved GCP project, namespace, region, and naming convention for the current branch. Components never import config directly.
-
-```python
-from gcp_ml_framework.config import load_config
-from gcp_ml_framework.context import MLContext
-
-cfg = load_config()                  # reads framework.yaml + env vars
-ctx = MLContext.from_config(cfg)
-
-ctx.gcp_project                      # "my-gcp-project-dev"
-ctx.bq_dataset                       # "dsci_churn_pred_feature_xyz"
-ctx.gcs_prefix                       # "gs://dsci-churn-pred/feature-xyz/"
-ctx.is_production()                  # False  (DEV branch)
-ctx.secret_name("db-password")       # "dsci-churn-pred-feature-xyz-db-password"
-```
-
-### PipelineBuilder
-
-The fluent DSL produces a `PipelineDefinition` that is compiled to KFP YAML for Vertex AI and rendered as an Airflow DAG for Composer. The `schedule` parameter is the single source of truth — set it once, it flows through to both.
-
-```python
-pipeline = (
-    PipelineBuilder(name="my-pipeline", schedule="@daily")
-    .ingest(...)
-    .transform(...)
-    .train(...)
-    .evaluate(...)
-    .deploy(...)
+dag = (
+    DAGBuilder(name="sales_analytics", schedule="0 8 * * *")
+    .task(BQQueryTask(sql_file="sql/extract.sql", destination_table="staged"), name="extract", depends_on=[])
+    .task(BQQueryTask(sql_file="sql/aggregate.sql", destination_table="agg"), name="aggregate", depends_on=["extract"])
+    .task(VertexPipelineTask(pipeline_name="sales_forecast"), name="forecast", depends_on=["aggregate"])
+    .task(EmailTask(to=["team@co.com"], subject="Done"), name="notify", depends_on=["forecast"])
     .build()
 )
 ```
 
-### Secrets
+## Component Library
 
-Reference secrets by a short key in config or pipeline code. They are resolved at runtime from GCP Secret Manager using the branch namespace as a prefix.
-
-```python
-# In any config dict or YAML value:
-{"db_url": "!secret db-url"}
-
-# At runtime:
-from gcp_ml_framework.secrets.client import make_secret_client
-client = make_secret_client(ctx)
-client.resolve_dict({"db_url": "!secret db-url"})
-# → {"db_url": "<actual value of dsci-churn-pred-main-db-url>"}
-```
-
-Local development resolves secrets from environment variables instead:
-
-```bash
-export GML_SECRET_DB_URL="postgres://localhost/mydb"
-```
-
-### Feature schemas
-
-Define features in YAML — the framework handles Feature Store entity creation and schema migration on `gml deploy features`.
-
-```yaml
-# feature_schemas/user.yaml
-entity: user
-id_column: user_id
-id_type: STRING
-feature_groups:
-  behavioral:
-    features:
-      - name: session_count_7d
-        type: INT64
-      - name: total_purchases_30d
-        type: FLOAT64
-```
-
----
-
-## CLI reference
-
-```
-gml init project <team> <project>      Scaffold a new project
-gml init pipeline <name>               Add a pipeline to an existing project
-
-gml context show                       Show resolved namespace and resource names
-
-gml run <pipeline> --local             Run pipeline locally (no GCP, default)
-gml run <pipeline> --vertex            Compile and submit to Vertex AI
-gml run --compile-only [--all]         Compile to KFP YAML only (CI validation)
-
-gml deploy dags                        Generate and sync Airflow DAGs to Composer
-gml deploy features [entity ...]       Upsert Feature Store schemas
-
-gml promote --from main --to prod --tag v1.2.3
-                                       Promote STAGE artifacts to PROD
-
-gml teardown --branch <branch>         Delete all DEV resources for a branch
-```
-
----
-
-## CI/CD
-
-Four workflows are scaffolded automatically by `gml init project`:
-
-| Workflow | Trigger | What it does |
+| Stage | Component | What It Does |
 |---|---|---|
-| `ci-dev.yaml` | Push to `feature/*` | Lint, test, compile pipelines, deploy DAGs + features to DEV |
-| `ci-stage.yaml` | Push to `main` | Full test suite, deploy DAGs + features to STAGE, run pipelines on Vertex AI |
-| `promote.yaml` | Push tag `v*` | Copy STAGE artifacts → PROD, sync PROD DAGs |
-| `teardown.yaml` | PR closed / daily | Delete ephemeral DEV resources for merged branches |
+| Ingestion | `BigQueryExtract` | Run BQ SQL query, export results to GCS as Parquet |
+| Ingestion | `GCSExtract` | Copy files from a GCS source path to branch staging prefix |
+| Transformation | `BQTransform` | Run SQL transformation, materialize to BQ table |
+| Feature Store | `WriteFeatures` | Register BQ table as Vertex AI Feature Store v2 FeatureGroup (metadata only) |
+| Feature Store | `ReadFeatures` | Read features from Feature Store (offline from BQ, online from Bigtable) |
+| ML | `TrainModel` | Submit Vertex AI Custom Training Job with versioned model output |
+| ML | `EvaluateModel` | Compute metrics + quality gates (halt pipeline if threshold not met) |
+| ML | `DeployModel` | Upload model to Vertex AI Model Registry, deploy to Endpoint with canary support |
 
-### One-time GCP setup
+Every component implements `as_kfp_component()` (for Vertex AI) and `local_run()` (for local execution with DuckDB).
 
-Run once per environment (dev/staging/prod):
+## DAG Task Library
+
+| Task | Airflow Operator | Purpose |
+|---|---|---|
+| `BQQueryTask` | `BigQueryInsertJobOperator` | Run SQL with template variables, optional `sql_file` |
+| `VertexPipelineTask` | Custom operator | Submit a compiled Vertex AI Pipeline |
+| `EmailTask` | `EmailOperator` | Send notifications with template variables |
+
+## CLI Reference
+
+```
+gml init project <team> <project>      Scaffold a new project with framework.yaml, CI/CD, schemas
+gml init pipeline <name>               Add a pipeline directory with template files
+gml context show [--branch] [--json]   Show resolved namespace, GCP project, resource names
+gml run <pipeline> [--local|--vertex|--composer]  Run locally, submit to Vertex AI, or trigger on Composer
+gml compile <pipeline> [--all]         Compile to KFP YAML + Airflow DAG files
+gml deploy <pipeline> [--all]          Compile + upload DAGs, YAMLs, feature schemas
+gml teardown --branch <branch>         Delete ephemeral DEV resources (GCS, BQ)
+```
+
+## Example Pipelines
+
+The repo ships with 3 working pipelines demonstrating different patterns:
+
+| Pipeline | Type | Pattern | Description |
+|---|---|---|---|
+| `churn_prediction` | PipelineBuilder | Pure ML | Ingest → Transform → Features → Train → Evaluate (gate) → Deploy |
+| `sales_analytics` | DAGBuilder | Fan-out/fan-in | 3 parallel extractions → 3 aggregations → report → notify (8 tasks) |
+| `recommendation_engine` | DAGBuilder | Hybrid ML | BQ extraction → 2 inline Vertex pipelines (features + training) → notify |
+
+All include seed data for local testing with `gml run <name> --local`.
+
+## Infrastructure
+
+Infrastructure is managed via Terraform modules in `terraform/`:
+
+| Module | Resource | Purpose |
+|---|---|---|
+| `composer` | `google_composer_environment` | Cloud Composer 3 with workloads_config |
+| `artifact_registry` | `google_artifact_registry_repository` | Docker repos for containers |
+| `iam` | Service accounts + WIF | Composer SA, Pipeline SA, GitHub Actions OIDC |
+| `storage` | `google_storage_bucket` | GCS buckets with versioning |
+
+Per-environment configs in `terraform/envs/{dev,staging,prod}/` with scaled workloads (dev=small, staging=moderate, prod=production-grade).
 
 ```bash
-GITHUB_ORG=your-org GITHUB_REPO=your-repo \
-  ./scripts/bootstrap.sh --project my-gcp-project-dev --env dev
+cd terraform/envs/dev
+terraform init && terraform plan -var-file=terraform.tfvars
 ```
 
-This enables the required APIs, creates a service account with the right roles, and configures Workload Identity Federation for keyless GitHub Actions auth.
+## Testing
 
-Then add the printed values to your GitHub repo secrets:
-
-```
-WIF_PROVIDER_DEV=projects/.../providers/github-provider
-SA_EMAIL_DEV=gcp-ml-framework-sa@my-gcp-project-dev.iam.gserviceaccount.com
-GCP_PROJECT_ID_DEV=my-gcp-project-dev
-```
-
----
-
-## Project layout
-
-```
-framework.yaml                  ← team/project identity + per-env GCP project IDs
-feature_schemas/
-  user.yaml                     ← entity schema definitions
-  item.yaml
-pipelines/
-  churn_prediction/
-    pipeline.py                 ← the only file you write per pipeline
-    config.yaml                 ← optional pipeline-level config overrides
-    sql/
-      churn_features.sql
-gcp_ml_framework/               ← framework source (not edited by pipeline authors)
-  naming.py
-  config.py
-  context.py
-  secrets/
-  components/
-  pipeline/
-  dag/
-  feature_store/
-  cli/
-  utils/
-tests/
-  unit/
-  integration/
-scripts/
-  bootstrap.sh
-.github/workflows/
+```bash
+uv run pytest tests/ -v              # 371 tests, all passing
+uv run pytest tests/unit/            # Unit tests only
+uv run pytest tests/integration/     # E2E integration tests
+uv run ruff check .                  # Lint
 ```
 
----
+| Test Suite | Tests | Coverage |
+|---|---|---|
+| Unit — Components | 45 | All 8 components: defaults, local_run(), as_kfp_component() |
+| Unit — CLI | 22 | All 6 CLI commands with typer CliRunner |
+| Unit — Config/Context/Naming | 45 | Config layering, git state, namespace resolution |
+| Unit — DAG Builder/Compiler/Tasks | 67 | DSL, topological sort, compilation, task types |
+| Unit — Pipeline Builder/Compiler | 28 | PipelineBuilder DSL, KFP compilation |
+| Unit — Feature Store/Secrets/SQL | 27 | Schema parsing, v2 API, secrets, BQ→DuckDB compat |
+| Unit — Phase regression | 112 | Phase 1-3 specific regression tests |
+| Integration — E2E | 24 | Full compile + local run for all 4 pipelines |
 
-## Environment variables
+## Config System
 
-All config can be overridden via environment variables with the `GML_` prefix:
+Resolution order (later wins):
+
+```
+framework defaults → framework.yaml → pipeline/config.yaml → env vars → CLI flags
+```
+
+Environment variables use `GML_` prefix with `__` for nesting:
 
 ```bash
 GML_TEAM=dsci
-GML_PROJECT=churn-pred
-GML_GCP__DEV_PROJECT_ID=my-gcp-project-dev
-GML_GCP__STAGING_PROJECT_ID=my-gcp-project-staging
-GML_GCP__PROD_PROJECT_ID=my-gcp-project-prod
-GML_GCP__REGION=us-central1
-GML_ENV_OVERRIDE=staging          # force a specific environment (useful in CI)
+GML_GCP__REGION=europe-west1
+GML_ENV_OVERRIDE=staging
 ```
 
-Nested config uses double underscore as the delimiter (`GML_GCP__REGION` → `gcp.region`).
+Secrets use `!secret key` references, resolved from GCP Secret Manager in cloud or environment variables locally.
+
+## Project Layout
+
+```
+.
+├── framework.yaml                      # Team/project/GCP config (single source of truth)
+├── pyproject.toml                      # Dependencies + tool config
+│
+├── gcp_ml_framework/                   # Framework library (51 files, ~4,700 lines)
+│   ├── naming.py                       #   GCP resource names from {team}-{project}-{branch}
+│   ├── config.py                       #   Pydantic v2 layered config + git state resolution
+│   ├── context.py                      #   MLContext — immutable runtime object
+│   │
+│   ├── pipeline/                       #   ML Pipeline engine
+│   │   ├── builder.py                  #     PipelineBuilder fluent DSL → PipelineDefinition
+│   │   ├── compiler.py                 #     → KFP v2 YAML (Vertex AI)
+│   │   └── runner.py                   #     LocalRunner (DuckDB) + VertexRunner (GCP)
+│   │
+│   ├── dag/                            #   Composer DAG engine
+│   │   ├── builder.py                  #     DAGBuilder fluent DSL → DAGDefinition
+│   │   ├── compiler.py                 #     → Standalone Airflow DAG Python file
+│   │   ├── runner.py                   #     DAGLocalRunner (DuckDB, topological execution)
+│   │   ├── factory.py                  #     Auto-wrapping + discovery
+│   │   ├── operators.py                #     VertexPipelineOperator for Airflow
+│   │   └── tasks/                      #     BQQueryTask, EmailTask, VertexPipelineTask
+│   │
+│   ├── components/                     #   KFP v2 component library (8 components)
+│   │   ├── base.py                     #     BaseComponent ABC + ComponentConfig
+│   │   ├── ingestion/                  #     BigQueryExtract, GCSExtract
+│   │   ├── transformation/             #     BQTransform
+│   │   ├── feature_store/              #     WriteFeatures, ReadFeatures
+│   │   └── ml/                         #     TrainModel, EvaluateModel, DeployModel
+│   │
+│   ├── feature_store/                  #   Vertex AI Feature Store v2
+│   │   ├── schema.py                   #     YAML → typed EntitySchema/FeatureGroupSchema
+│   │   └── client.py                   #     FeatureGroup, FeatureView, FeatureOnlineStore
+│   │
+│   ├── secrets/client.py               #   Secret Manager + local env var fallback
+│   ├── cli/                            #   gml CLI (Typer + Rich)
+│   └── utils/                          #   GCS, BQ, SQL compat, logging helpers
+│
+├── pipelines/                          #   User-defined pipelines
+│   ├── churn_prediction/               #     Pure ML pipeline (pipeline.py + seeds + trainer)
+│   ├── sales_analytics/                #     Fan-out/fan-in DAG (dag.py + 7 SQL files + seeds)
+│   └── recommendation_engine/          #     Hybrid DAG (dag.py + 2 inline Vertex pipelines + trainer + seeds)
+│
+├── feature_schemas/                    #   Entity feature definitions (YAML)
+│   ├── user.yaml                       #     9 features (behavioral + demographic)
+│   └── item.yaml                       #     5 features (catalog + engagement)
+│
+├── terraform/                          #   Infrastructure as Code
+│   ├── modules/                        #     Reusable modules (composer, AR, IAM, storage)
+│   └── envs/{dev,staging,prod}/        #     Per-environment configs + tfvars
+│
+├── docker/base/                        #   Base Docker images (python, ML)
+├── scripts/                            #   bootstrap.sh, docker_build.sh
+├── tests/                              #   371 tests (16 unit + 1 integration file)
+│
+└── docs/                               #   Documentation
+    ├── architecture/plan.md            #     System design + naming conventions
+    ├── guides/integration.md           #     Bring existing ML code into framework
+    ├── prerequisite/infrastructure.md  #     GCP provisioning (manual + Terraform)
+    └── planning/                       #     Roadmap + guidelines
+```
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [Architecture Plan](docs/architecture/plan.md) | System design, naming conventions, layer diagram, key decisions |
+| [Integration Guide](docs/guides/integration.md) | Step-by-step: bring existing ML code into the framework |
+| [Infrastructure Setup](docs/prerequisite/infrastructure.md) | GCP provisioning (manual CLI + Terraform modules) |
+| [Framework Walkthrough](docs/understanding.md) | Exhaustive guide: every DSL, component, CLI command, and workflow |
+| [Project Guidelines](docs/planning/project_guideline.md) | Development standards and conventions |
+| [Next Steps](docs/planning/next_steps.md) | Roadmap and implementation phases |
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| KFP v2 + Airflow | KFP for ML (artifacts, lineage, GPUs). Airflow for scheduling and cross-pipeline deps. |
+| Branch = namespace | Isolation is structural. No human discipline required. |
+| DuckDB for local | SQL-compatible with BigQuery, zero infrastructure, in-process. |
+| Feature Store v2 (BQ-native) | No data movement for offline. Bigtable for online serving. |
+| Compiled DAGs (no framework imports) | Airflow parses DAGs every 30s. Zero import overhead at parse time. |
+| N2/C3 machine types | Modern Compute Engine families. No legacy N1. |
+| Terraform for infra | Composer 3, AR, GCS, IAM managed as code. Framework manages ephemeral resources. |
+| `gml` CLI over Makefiles | Type-safe, self-documenting, testable with typer CliRunner. |

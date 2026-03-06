@@ -1,0 +1,11 @@
+item_id,category,stock_count,warehouse
+INV001,Electronics,150,US-West
+INV002,Electronics,80,US-East
+INV003,Clothing,300,US-East
+INV004,Clothing,200,US-West
+INV005,Home,50,EU-West
+INV006,Home,75,US-West
+INV007,Electronics,25,EU-West
+INV008,Clothing,120,EU-West
+INV009,Home,8,US-East
+INV010,Electronics,200,US-West

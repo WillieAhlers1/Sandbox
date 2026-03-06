@@ -129,7 +129,7 @@ class TestPipelineBuilder:
     def test_train_model_defaults(self):
         """TrainModel dataclass defaults."""
         tm = TrainModel(trainer_image="img:latest")
-        assert tm.machine_type == "n1-standard-4"
+        assert tm.machine_type == "n2-standard-4"
         assert tm.accelerator_type == ""
         assert tm.accelerator_count == 0
         assert tm.trainer_args == []
@@ -286,7 +286,7 @@ class TestCompiler:
 
     def test_example_churn_uses_prebuilt_serving_container(self):
         """Example churn pipeline must use Vertex AI pre-built sklearn serving container."""
-        from pipelines.example_churn.pipeline import pipeline
+        from pipelines.churn_prediction.pipeline import pipeline
 
         deploy_step = [s for s in pipeline.steps if s.stage == "deploy"][0]
         image = deploy_step.component.serving_container_image
@@ -296,7 +296,7 @@ class TestCompiler:
 
     def test_serving_container_sklearn_version_gte_1_5(self):
         """Serving container must use sklearn >= 1.5 for numpy 2.x pickle compatibility."""
-        from pipelines.example_churn.pipeline import pipeline
+        from pipelines.churn_prediction.pipeline import pipeline
 
         deploy_step = [s for s in pipeline.steps if s.stage == "deploy"][0]
         image = deploy_step.component.serving_container_image

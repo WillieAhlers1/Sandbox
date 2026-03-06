@@ -5,7 +5,6 @@ Every built-in and custom component implements this interface. The two key
 methods are:
 
     as_kfp_component()    → returns the @dsl.component-decorated KFP function
-    as_airflow_operator() → returns an Airflow BaseOperator for Composer DAGs
     local_run()           → runs the component logic locally (DuckDB/pandas stubs)
 
 Components are pure data classes — they carry configuration, not state.
@@ -27,7 +26,7 @@ if TYPE_CHECKING:
 class ComponentConfig:
     """Per-component resource configuration, applied as KFP resource specs."""
 
-    machine_type: str = "n1-standard-4"
+    machine_type: str = "n2-standard-4"
     accelerator_type: str | None = None
     accelerator_count: int = 0
     timeout_seconds: int = 3600
@@ -43,7 +42,6 @@ class BaseComponent(ABC):
         - as_kfp_component(): return the @dsl.component function
         - local_run(): execute component logic without GCP
 
-    Airflow operator is optional (default wraps the Vertex pipeline submission).
     """
 
     # Subclasses should override these
@@ -52,8 +50,15 @@ class BaseComponent(ABC):
     config: ComponentConfig = field(default_factory=ComponentConfig)  # type: ignore[assignment]
 
     @abstractmethod
-    def as_kfp_component(self) -> Callable:
-        """Return the @dsl.component-decorated KFP v2 function."""
+    def as_kfp_component(self, base_image: str | None = None) -> Callable:
+        """Return the @dsl.component-decorated KFP v2 function.
+
+        Args:
+            base_image: Pre-built Docker image with all dependencies installed.
+                When provided, the component uses this image and skips
+                packages_to_install. When None, falls back to python:3.11-slim
+                with runtime pip install (slower but requires no pre-built image).
+        """
         ...
 
     @abstractmethod
@@ -65,21 +70,6 @@ class BaseComponent(ABC):
         Feature Store stubs replace real GCP SDK calls.
         """
         ...
-
-    def as_airflow_operator(self, context: MLContext, dag: Any) -> Any:
-        """
-        Return an Airflow operator for this component.
-
-        Default implementation uses a generic PythonOperator that calls local_run.
-        Override for components with dedicated Airflow providers.
-        """
-        from airflow.operators.python import PythonOperator  # type: ignore[import]
-
-        return PythonOperator(
-            task_id=self.component_name,
-            python_callable=lambda **kw: self.local_run(context, **kw),
-            dag=dag,
-        )
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.component_name!r})"

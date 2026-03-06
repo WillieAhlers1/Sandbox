@@ -20,7 +20,10 @@ gcp:
   staging_project_id: {staging_project}
   prod_project_id: {prod_project}
   region: us-central1
-  composer_env:              # fill in your Composer env name
+  composer_dags_path:
+    dev: ""              # fill in after Terraform provisions Composer
+    staging: ""
+    prod: ""
   artifact_registry_host: us-central1-docker.pkg.dev
 
 secrets:
@@ -60,7 +63,7 @@ pipeline = (
     .train(
         TrainModel(
             trainer_image="{{artifact_registry}}/{name}-trainer:latest",
-            machine_type="n1-standard-4",
+            machine_type="n2-standard-4",
         )
     )
     .evaluate(
