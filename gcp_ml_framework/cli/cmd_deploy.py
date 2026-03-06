@@ -50,18 +50,21 @@ def deploy(
     except SystemExit:
         pass  # compile_cmd uses typer.Exit for flow control
 
+    # Resolve artifact names to match (handles embedded pipeline names for dag.py)
+    match_names = _resolve_match_names(name, all_pipelines, pipelines_dir)
+
     # Step 2: Ensure Docker images referenced in pipeline YAMLs exist in AR
     if output_dir.exists():
-        _ensure_images(output_dir, ctx, name, all_pipelines, dry_run)
+        _ensure_images(output_dir, ctx, match_names, all_pipelines, dry_run)
 
     # Step 3: Upload DAG files to Composer bucket
     composer_path = ctx.composer_dags_path.get(ctx.git_state.value, "")
     if composer_path and dags_dir.exists():
-        _upload_dags(dags_dir, composer_path, ctx, name, all_pipelines, dry_run)
+        _upload_dags(dags_dir, composer_path, ctx, match_names, all_pipelines, dry_run)
 
     # Step 4: Upload compiled pipeline YAMLs to GCS
     if output_dir.exists():
-        _upload_pipeline_yamls(output_dir, ctx, name, all_pipelines, dry_run)
+        _upload_pipeline_yamls(output_dir, ctx, match_names, all_pipelines, dry_run)
 
     # Step 5: Deploy feature schemas (only with --all)
     if all_pipelines and schema_dir.exists():
@@ -70,8 +73,33 @@ def deploy(
     console.print("[green]Deploy complete.[/green]")
 
 
+def _resolve_match_names(name: str, all_pipelines: bool, pipelines_dir: Path) -> set[str]:
+    """Return the set of artifact name fragments to match for filtering.
+
+    For dag.py pipelines with embedded Vertex pipelines, includes both the
+    parent name and the embedded pipeline names (e.g. reco_features, reco_training).
+    """
+    if all_pipelines or not name:
+        return set()
+
+    names = {name}
+    pipeline_dir = pipelines_dir / name
+    if (pipeline_dir / "dag.py").exists():
+        try:
+            from gcp_ml_framework.cli.cmd_compile import _load_dag
+            from gcp_ml_framework.dag.tasks.vertex_pipeline import VertexPipelineTask
+
+            dag_def = _load_dag(pipeline_dir)
+            for dag_task in dag_def.tasks:
+                if isinstance(dag_task.task, VertexPipelineTask) and dag_task.task.pipeline_name:
+                    names.add(dag_task.task.pipeline_name)
+        except Exception:
+            pass  # Fall back to just the parent name
+    return names
+
+
 def _ensure_images(
-    output_dir: Path, ctx, name: str, all_pipelines: bool, dry_run: bool
+    output_dir: Path, ctx, match_names: set[str], all_pipelines: bool, dry_run: bool
 ) -> None:
     """Ensure Docker images referenced in compiled pipeline YAMLs exist in AR.
 
@@ -87,7 +115,7 @@ def _ensure_images(
 
     seen: set[str] = set()
     for yaml_file in output_dir.glob("*.yaml"):
-        if not all_pipelines and name and name not in yaml_file.name:
+        if not all_pipelines and match_names and not any(n in yaml_file.name for n in match_names):
             continue
         content = yaml_file.read_text()
         for match in image_pattern.findall(content):
@@ -113,13 +141,13 @@ def _ensure_images(
 
 
 def _upload_dags(
-    dags_dir: Path, composer_path: str, ctx, name: str, all_pipelines: bool, dry_run: bool
+    dags_dir: Path, composer_path: str, ctx, match_names: set[str], all_pipelines: bool, dry_run: bool
 ) -> None:
     """Upload DAG files to the Composer GCS bucket."""
     from gcp_ml_framework.utils.gcs import upload_file
 
     for dag_file in dags_dir.glob("*.py"):
-        if not all_pipelines and name and name not in dag_file.name:
+        if not all_pipelines and match_names and not any(n in dag_file.name for n in match_names):
             continue
         gcs_dest = f"{composer_path}/{dag_file.name}"
         if dry_run:
@@ -130,13 +158,13 @@ def _upload_dags(
 
 
 def _upload_pipeline_yamls(
-    output_dir: Path, ctx, name: str, all_pipelines: bool, dry_run: bool
+    output_dir: Path, ctx, match_names: set[str], all_pipelines: bool, dry_run: bool
 ) -> None:
     """Upload compiled pipeline YAMLs to GCS."""
     from gcp_ml_framework.utils.gcs import upload_file
 
     for yaml_file in output_dir.glob("*.yaml"):
-        if not all_pipelines and name and name not in yaml_file.name:
+        if not all_pipelines and match_names and not any(n in yaml_file.name for n in match_names):
             continue
         gcs_dest = ctx.naming.gcs_path("pipelines", yaml_file.stem, "pipeline.yaml")
         if dry_run:

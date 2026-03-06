@@ -772,6 +772,30 @@ class TestDeployFeatureSchemaResilience:
             _deploy_features(schema_dir, mock_ctx, dry_run=False)
 
 
+class TestResolveMatchNames:
+    """_resolve_match_names should discover embedded pipeline names for dag.py pipelines."""
+
+    def test_returns_empty_for_all_pipelines(self):
+        from gcp_ml_framework.cli.cmd_deploy import _resolve_match_names
+
+        result = _resolve_match_names("anything", all_pipelines=True, pipelines_dir=Path("pipelines"))
+        assert result == set()
+
+    def test_includes_parent_name(self):
+        from gcp_ml_framework.cli.cmd_deploy import _resolve_match_names
+
+        result = _resolve_match_names("churn_prediction", all_pipelines=False, pipelines_dir=Path("pipelines"))
+        assert "churn_prediction" in result
+
+    def test_includes_embedded_pipeline_names(self):
+        from gcp_ml_framework.cli.cmd_deploy import _resolve_match_names
+
+        result = _resolve_match_names("recommendation_engine", all_pipelines=False, pipelines_dir=Path("pipelines"))
+        assert "recommendation_engine" in result
+        assert "reco_features" in result
+        assert "reco_training" in result
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 2.6 gml run --composer — trigger DAGs on Composer
 # ═══════════════════════════════════════════════════════════════════════
