@@ -1,4 +1,5 @@
-FROM base-python:latest
+ARG BASE_IMAGE=base-python:latest
+FROM ${BASE_IMAGE}
 RUN pip install --no-cache-dir \
     google-cloud-bigquery>=3.17 \
     google-cloud-storage>=2.16 \

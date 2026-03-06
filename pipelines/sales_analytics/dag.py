@@ -3,8 +3,9 @@ Sales analytics DAG — non-linear fan-out / fan-in pattern.
 
 DAG shape:
     extract_orders ────→ agg_revenue ────→┐
-    extract_inventory ─→ check_stock ────→├→ build_report → notify
-    extract_returns ───→ agg_refunds ───→┘
+    extract_orders ──┬─→ agg_refunds ───→├→ build_report → notify
+    extract_returns ─┘                   │
+    extract_inventory ─→ check_stock ───→┘
 """
 
 from gcp_ml_framework.dag.builder import DAGBuilder
@@ -48,7 +49,7 @@ dag = (
     .task(
         BQQueryTask(sql_file="sql/agg_refunds.sql", destination_table="agg_refunds"),
         name="agg_refunds",
-        depends_on=["extract_returns"],
+        depends_on=["extract_returns", "extract_orders"],
     )
     # --- Fan-in: build_report depends on all 3 aggregations ---
     .task(

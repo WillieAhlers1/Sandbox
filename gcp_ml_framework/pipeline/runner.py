@@ -128,7 +128,11 @@ class LocalRunner:
 
             print(f"[local] {step.name} ({step.component.__class__.__name__}) ...")
             try:
-                kwargs: dict[str, Any] = {"run_date": run_date, "db_conn": self._conn}
+                kwargs: dict[str, Any] = {
+                    "run_date": run_date,
+                    "db_conn": self._conn,
+                    "pipeline_name": pipeline_def.name,
+                }
                 # Wire the previous step's output as input to the next step
                 if prev_output is not None:
                     kwargs["input_path"] = prev_output

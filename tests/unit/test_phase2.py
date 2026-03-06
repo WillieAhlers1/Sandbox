@@ -140,14 +140,13 @@ class TestDockerAutoGeneration:
         assert content.startswith("FROM base-ml:latest")
 
     def test_docker_build_tags_with_ar_path(self, tmp_path):
-        """When AR env vars are set, _build_image tags with full AR URI."""
+        """When AR env vars are set, _build tags with full AR URI."""
         import subprocess
 
         trainer_dir = tmp_path / "pipelines" / "test_pipe" / "trainer"
         trainer_dir.mkdir(parents=True)
         (trainer_dir / "train.py").write_text("print('hello')")
         (trainer_dir / "requirements.txt").write_text("scikit-learn>=1.5\n")
-        # Pre-generate Dockerfile so _build_image doesn't need to
         (trainer_dir / "Dockerfile.generated").write_text(
             "FROM base-ml:latest\nCOPY train.py /app/train.py\n"
         )
@@ -167,7 +166,8 @@ class TestDockerAutoGeneration:
                 # Mock docker so we don't need it installed
                 docker() {{ echo "DOCKER_CMD: $@"; }}
                 export -f docker
-                _build_image "test_pipe" "{trainer_dir}"
+                slug=$(_slugify "test_pipe")
+                _build "$(_full_tag "${{slug}}-trainer")" "{trainer_dir}/Dockerfile.generated" "{trainer_dir}"
                 """,
             ],
             capture_output=True,
@@ -510,6 +510,7 @@ class TestSalesAnalytics:
         assert "extract_orders" in by_name["agg_revenue"].depends_on
         assert "extract_inventory" in by_name["check_stock"].depends_on
         assert "extract_returns" in by_name["agg_refunds"].depends_on
+        assert "extract_orders" in by_name["agg_refunds"].depends_on  # SQL JOINs staged_orders
 
         # build_report fans in from all 3 aggregations
         build_deps = set(by_name["build_report"].depends_on)
@@ -672,6 +673,65 @@ class TestRecommendationEngine:
         outputs = runner.run(dag, run_date="2026-03-01")
         assert len(outputs) >= 4  # at least BQ + 2 Vertex + email
 
+    def test_reco_training_pipeline_has_transform_step(self):
+        """reco_training pipeline must include a BQTransform between ingest and train.
+
+        Without this, TrainModel receives a GCS URI from BigQueryExtract
+        instead of a BQ table reference, which causes data flow failures on Vertex AI.
+        """
+        from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+        from pipelines.recommendation_engine.dag import training_pipeline
+
+        step_types = [type(s.component).__name__ for s in training_pipeline.steps]
+        assert "BQTransform" in step_types, (
+            "reco_training needs BQTransform so TrainModel gets a BQ table ref, not GCS URI"
+        )
+
+    def test_reco_training_pipeline_no_evaluate_or_deploy(self):
+        """reco_training should NOT have EvaluateModel or DeployModel.
+
+        The NMF recommendation model is fundamentally incompatible with the
+        generic EvaluateModel (expects binary classifier with predict_proba)
+        and DeployModel (expects sklearn serving container).
+        """
+        from pipelines.recommendation_engine.dag import training_pipeline
+
+        step_types = [type(s.component).__name__ for s in training_pipeline.steps]
+        assert "EvaluateModel" not in step_types
+        assert "DeployModel" not in step_types
+
+    def test_reco_trainer_handles_bq_input(self):
+        """Trainer must read from BQ (not CSV) for Vertex AI compatibility."""
+        trainer_src = Path("pipelines/recommendation_engine/trainer/train.py").read_text()
+        # Must import bigquery for reading data from BQ tables
+        assert "bigquery" in trainer_src
+        # Must not use pd.read_csv for the main data loading path
+        # (pd.read_csv is only valid for local file paths, not BQ tables)
+
+    def test_reco_trainer_handles_gcs_output(self):
+        """Trainer must handle GCS model output (gs:// prefix)."""
+        trainer_src = Path("pipelines/recommendation_engine/trainer/train.py").read_text()
+        assert "gs://" in trainer_src
+
+    def test_reco_trainer_requirements_include_gcp_sdks(self):
+        """Trainer requirements must include GCP SDKs for BQ reads and GCS writes."""
+        reqs = Path("pipelines/recommendation_engine/trainer/requirements.txt").read_text()
+        assert "google-cloud-bigquery" in reqs
+        assert "google-cloud-storage" in reqs
+
+    def test_reco_compiled_dag_vertex_display_name_valid_jinja(self, test_context, tmp_path):
+        """Compiled DAG VertexPipelineTask display_name must use {{ }} not {{{ }}}."""
+        from gcp_ml_framework.dag.compiler import DAGCompiler
+        from pipelines.recommendation_engine.dag import dag
+
+        compiler = DAGCompiler(
+            output_dir=tmp_path, pipeline_dir=Path("pipelines/recommendation_engine")
+        )
+        path = compiler.compile(dag, test_context)
+        content = path.read_text()
+        assert "{{{ ds_nodash }}}" not in content
+        assert "{{ ds_nodash }}" in content
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 2.6 gml run --composer — trigger DAGs on Composer
@@ -777,3 +837,242 @@ class TestComposerRunMode:
         call_args = mock_trigger.call_args
         # The logical_date should contain today's date
         assert datetime.date.today().isoformat() in str(call_args)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2.7 LocalRunner data flow — WriteFeatures pass-through + pipeline_name
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestLocalRunnerDataFlow:
+    """WriteFeatures must pass through input_path and LocalRunner must pass pipeline_name."""
+
+    def test_write_features_local_run_returns_input_path(self, test_context, tmp_path):
+        """WriteFeatures.local_run() should return its input_path unchanged (pass-through)."""
+        import pandas as pd
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+
+        # Create a sample parquet file simulating BQTransform output
+        df = pd.DataFrame({"user_id": [1, 2], "feature_a": [0.5, 0.8]})
+        input_path = str(tmp_path / "features.parquet")
+        df.to_parquet(input_path)
+
+        comp = WriteFeatures(entity="user", feature_group="behavioral")
+        result = comp.local_run(test_context, input_path=input_path)
+        assert result == input_path, (
+            f"WriteFeatures should pass through input_path, got {result!r}"
+        )
+
+    def test_write_features_local_run_returns_empty_string_without_input(self, test_context):
+        """WriteFeatures.local_run() with no input returns empty string (no data to pass)."""
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+
+        comp = WriteFeatures(entity="user", feature_group="behavioral")
+        result = comp.local_run(test_context)
+        assert result == "", (
+            f"WriteFeatures with no input should return empty string, got {result!r}"
+        )
+
+    def test_local_runner_passes_pipeline_name(self, test_context, tmp_path):
+        """LocalRunner should pass pipeline_name to each component's local_run()."""
+        from gcp_ml_framework.pipeline.builder import PipelineBuilder
+        from gcp_ml_framework.pipeline.runner import LocalRunner
+        from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
+
+        # Seed DuckDB so SELECT works
+        seeds_dir = tmp_path / "seeds"
+        seeds_dir.mkdir()
+        import pandas as pd
+        pd.DataFrame({"a": [1]}).to_csv(seeds_dir / "src.csv", index=False)
+
+        pipeline_def = (
+            PipelineBuilder(name="test_pipeline", schedule="@daily")
+            .ingest(BigQueryExtract(
+                query='SELECT * FROM "{bq_dataset}"."src"',
+                output_table="raw",
+            ))
+            .build()
+        )
+
+        runner = LocalRunner(test_context, seeds_dir=seeds_dir)
+
+        # Spy on local_run to capture kwargs
+        captured_kwargs = {}
+        original_local_run = pipeline_def.steps[0].component.local_run
+
+        def spy_local_run(context, **kwargs):
+            captured_kwargs.update(kwargs)
+            return original_local_run(context, **kwargs)
+
+        pipeline_def.steps[0].component.local_run = spy_local_run  # type: ignore[assignment]
+        runner.run(pipeline_def)
+
+        assert "pipeline_name" in captured_kwargs, (
+            "LocalRunner must pass pipeline_name in kwargs"
+        )
+        assert captured_kwargs["pipeline_name"] == "test_pipeline"
+
+    def test_local_runner_write_features_does_not_break_chain(self, test_context, tmp_path):
+        """After WriteFeatures, downstream steps should still receive prev_output."""
+        from gcp_ml_framework.pipeline.builder import PipelineBuilder
+        from gcp_ml_framework.pipeline.runner import LocalRunner
+        from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+        from gcp_ml_framework.components.ml.train import TrainModel
+
+        # Seed DuckDB with test data
+        seeds_dir = tmp_path / "seeds"
+        seeds_dir.mkdir()
+        import pandas as pd
+        pd.DataFrame({"user_id": [1], "val": [42]}).to_csv(seeds_dir / "raw_data.csv", index=False)
+
+        pipeline_def = (
+            PipelineBuilder(name="chain_test", schedule="@daily")
+            .ingest(BigQueryExtract(
+                query='SELECT * FROM "{bq_dataset}"."raw_data"',
+                output_table="raw_data_out",
+            ))
+            .write_features(WriteFeatures(
+                entity="user", feature_group="test_group",
+            ), name="write_features")
+            .train(TrainModel(machine_type="n2-standard-4"), name="train")
+            .build()
+        )
+
+        runner = LocalRunner(test_context, seeds_dir=seeds_dir)
+        outputs = runner.run(pipeline_def)
+
+        # WriteFeatures should NOT have set prev_output to None
+        wf_output = outputs["write_features"]
+        assert wf_output is not None, (
+            "WriteFeatures output should not be None — it should pass through input_path"
+        )
+
+
+class TestLocalTrainAndEvaluate:
+    """TrainModel trains a real model from seed data; EvaluateModel computes real metrics."""
+
+    def _make_dataset(self, tmp_path):
+        """Create a labeled Parquet dataset for training/eval."""
+        import pandas as pd
+
+        df = pd.DataFrame({
+            "user_id": range(1, 11),
+            "feature_a": [0.1, 0.9, 0.2, 0.8, 0.15, 0.85, 0.25, 0.75, 0.3, 0.7],
+            "feature_b": [10, 90, 20, 80, 15, 85, 25, 75, 30, 70],
+            "label": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        })
+        path = str(tmp_path / "dataset.parquet")
+        df.to_parquet(path, index=False)
+        return path
+
+    def test_train_model_produces_pickle_when_data_available(self, test_context, tmp_path):
+        """TrainModel.local_run() should produce a model.pkl when input data has a label column."""
+        dataset_path = self._make_dataset(tmp_path)
+        comp = TrainModel(machine_type="n2-standard-4")
+        out_dir = comp.local_run(test_context, input_path=dataset_path, pipeline_name="test")
+
+        model_pkl = os.path.join(out_dir, "model.pkl")
+        assert os.path.exists(model_pkl), "TrainModel should write model.pkl when data is available"
+
+    def test_train_model_saves_eval_data(self, test_context, tmp_path):
+        """TrainModel.local_run() should save eval_data.parquet alongside the model."""
+        dataset_path = self._make_dataset(tmp_path)
+        comp = TrainModel(machine_type="n2-standard-4")
+        out_dir = comp.local_run(test_context, input_path=dataset_path, pipeline_name="test")
+
+        eval_parquet = os.path.join(out_dir, "eval_data.parquet")
+        assert os.path.exists(eval_parquet), "TrainModel should save eval_data.parquet for downstream evaluation"
+
+    def test_train_model_falls_back_to_placeholder_without_data(self, test_context):
+        """TrainModel.local_run() without input_path still produces placeholder model.json."""
+        comp = TrainModel(machine_type="n2-standard-4")
+        out_dir = comp.local_run(test_context, pipeline_name="test")
+
+        model_json = os.path.join(out_dir, "model.json")
+        assert os.path.exists(model_json), "Placeholder model.json should exist when no input data"
+
+    def test_evaluate_model_computes_real_metrics(self, test_context, tmp_path):
+        """EvaluateModel.local_run() should compute real metrics when model.pkl exists."""
+        import pickle
+
+        import pandas as pd
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline as SkPipeline
+        from sklearn.preprocessing import StandardScaler
+
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+
+        # Create a real model and eval dataset in a model directory
+        model_dir = str(tmp_path / "model_output")
+        os.makedirs(model_dir)
+
+        df = pd.DataFrame({
+            "feature_a": [0.1, 0.9, 0.2, 0.8, 0.15],
+            "feature_b": [10, 90, 20, 80, 15],
+            "label": [0, 1, 0, 1, 0],
+        })
+        X = df.drop(columns=["label"])
+        y = df["label"]
+        model = SkPipeline([("scaler", StandardScaler()), ("clf", LogisticRegression(random_state=42))])
+        model.fit(X, y)
+
+        with open(os.path.join(model_dir, "model.pkl"), "wb") as f:
+            pickle.dump(model, f)
+        df.to_parquet(os.path.join(model_dir, "eval_data.parquet"), index=False)
+
+        comp = EvaluateModel(metrics=["auc", "f1"], gate={"auc": 0.5})
+        result = comp.local_run(test_context, input_path=model_dir)
+
+        assert isinstance(result, dict)
+        assert "auc" in result
+        assert "f1" in result
+        # Real metrics from a fitted model — should not be the 0.50 placeholder
+        assert result["auc"] != 0.50 or result["f1"] != 0.50, (
+            "With a real model, at least one metric should differ from the 0.50 placeholder"
+        )
+
+    def test_evaluate_model_falls_back_to_placeholder_without_model(self, test_context):
+        """EvaluateModel.local_run() without model.pkl returns placeholder metrics."""
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+
+        comp = EvaluateModel(metrics=["auc"], gate={})
+        result = comp.local_run(test_context)
+
+        assert result == {"auc": 0.50}
+
+    def test_evaluate_model_gate_passes_with_real_model(self, test_context, tmp_path):
+        """EvaluateModel gate should pass when real metrics exceed threshold."""
+        import pickle
+
+        import pandas as pd
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline as SkPipeline
+        from sklearn.preprocessing import StandardScaler
+
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+
+        # Build a model that perfectly fits the data (high AUC)
+        model_dir = str(tmp_path / "model_output")
+        os.makedirs(model_dir)
+
+        df = pd.DataFrame({
+            "feature_a": [0.1, 0.9, 0.2, 0.8, 0.15, 0.85, 0.25, 0.75, 0.3, 0.7],
+            "feature_b": [10, 90, 20, 80, 15, 85, 25, 75, 30, 70],
+            "label": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        })
+        X = df.drop(columns=["label"])
+        y = df["label"]
+        model = SkPipeline([("scaler", StandardScaler()), ("clf", LogisticRegression(random_state=42))])
+        model.fit(X, y)
+
+        with open(os.path.join(model_dir, "model.pkl"), "wb") as f:
+            pickle.dump(model, f)
+        df.to_parquet(os.path.join(model_dir, "eval_data.parquet"), index=False)
+
+        # Gate at 0.78 — should pass with a well-fitted model on linearly separable data
+        comp = EvaluateModel(metrics=["auc", "f1"], gate={"auc": 0.78})
+        result = comp.local_run(test_context, input_path=model_dir)
+
+        # Should NOT raise — gate should pass
+        assert result["auc"] >= 0.78

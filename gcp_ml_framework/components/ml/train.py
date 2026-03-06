@@ -128,13 +128,14 @@ class TrainModel(BaseComponent):
         return train_model
 
     def local_run(self, context: "MLContext", dataset_path: str = "", **kwargs: Any) -> str:
-        """Simulate training locally — writes a placeholder model artifact."""
+        """Train locally using seed data when available, otherwise write a placeholder."""
         import json
         import os
         import tempfile
 
         pipeline_name = kwargs.get("pipeline_name", "unnamed")
         run_id = kwargs.get("run_id", "local")
+        input_path = kwargs.get("input_path", "") or dataset_path
 
         print(f"[local] TrainModel: image={self.trainer_image!r}, machine={self.machine_type!r}")
         print(f"[local] TrainModel: hyperparameters={self.hyperparameters}")
@@ -145,7 +146,11 @@ class TrainModel(BaseComponent):
         out_dir = os.path.join(base_dir, pipeline_name, run_id)
         os.makedirs(out_dir, exist_ok=True)
 
-        # Write a placeholder model file
+        # Try to train a real model if input data with a label column is available
+        if input_path and self._try_train_real_model(input_path, out_dir):
+            return out_dir
+
+        # Fallback: write a placeholder model file
         model_path = os.path.join(out_dir, "model.json")
         with open(model_path, "w") as f:
             json.dump(
@@ -158,3 +163,41 @@ class TrainModel(BaseComponent):
                 f,
             )
         return out_dir
+
+    def _try_train_real_model(self, input_path: str, out_dir: str) -> bool:
+        """Train a sklearn model on the input Parquet. Returns True on success."""
+        import os
+        import pickle
+
+        try:
+            import pandas as pd
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.pipeline import Pipeline as SkPipeline
+            from sklearn.preprocessing import StandardScaler
+        except ImportError:
+            return False
+
+        try:
+            df = pd.read_parquet(input_path)
+        except Exception:
+            return False
+
+        if "label" not in df.columns:
+            return False
+
+        drop_cols = [c for c in ["label", "user_id", "feature_timestamp"] if c in df.columns]
+        X = df.drop(columns=drop_cols)
+        y = df["label"]
+
+        model = SkPipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=1000, random_state=42)),
+        ])
+        model.fit(X, y)
+        print(f"[local] TrainModel: trained on {len(df)} rows, {len(X.columns)} features")
+
+        with open(os.path.join(out_dir, "model.pkl"), "wb") as f:
+            pickle.dump(model, f)
+        df.to_parquet(os.path.join(out_dir, "eval_data.parquet"), index=False)
+
+        return True

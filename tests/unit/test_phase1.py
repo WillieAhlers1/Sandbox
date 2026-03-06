@@ -354,8 +354,8 @@ class TestSelfContainedDags:
         source = compiler.render(dag_def, test_context)
         assert "gcp_ml_framework" not in source
 
-    def test_vertex_pipeline_uses_create_pipeline_job_operator(self, test_context):
-        """Generated code must use CreatePipelineJobOperator."""
+    def test_vertex_pipeline_uses_run_pipeline_job_operator(self, test_context):
+        """Generated code must use RunPipelineJobOperator."""
         from gcp_ml_framework.dag.builder import DAGBuilder
         from gcp_ml_framework.dag.compiler import DAGCompiler
         from gcp_ml_framework.dag.tasks.vertex_pipeline import VertexPipelineTask
@@ -367,7 +367,7 @@ class TestSelfContainedDags:
         )
         compiler = DAGCompiler()
         source = compiler.render(dag_def, test_context)
-        assert "CreatePipelineJobOperator" in source
+        assert "RunPipelineJobOperator" in source
 
     def test_vertex_pipeline_references_gcs_yaml(self, test_context):
         """Generated code must reference the compiled YAML at its GCS path."""

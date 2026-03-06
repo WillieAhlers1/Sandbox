@@ -50,20 +50,66 @@ def deploy(
     except SystemExit:
         pass  # compile_cmd uses typer.Exit for flow control
 
-    # Step 2: Upload DAG files to Composer bucket
+    # Step 2: Ensure Docker images referenced in pipeline YAMLs exist in AR
+    if output_dir.exists():
+        _ensure_images(output_dir, ctx, name, all_pipelines, dry_run)
+
+    # Step 3: Upload DAG files to Composer bucket
     composer_path = ctx.composer_dags_path.get(ctx.git_state.value, "")
     if composer_path and dags_dir.exists():
         _upload_dags(dags_dir, composer_path, ctx, name, all_pipelines, dry_run)
 
-    # Step 3: Upload compiled pipeline YAMLs to GCS
+    # Step 4: Upload compiled pipeline YAMLs to GCS
     if output_dir.exists():
         _upload_pipeline_yamls(output_dir, ctx, name, all_pipelines, dry_run)
 
-    # Step 4: Deploy feature schemas (only with --all)
+    # Step 5: Deploy feature schemas (only with --all)
     if all_pipelines and schema_dir.exists():
         _deploy_features(schema_dir, ctx, dry_run)
 
     console.print("[green]Deploy complete.[/green]")
+
+
+def _ensure_images(
+    output_dir: Path, ctx, name: str, all_pipelines: bool, dry_run: bool
+) -> None:
+    """Ensure Docker images referenced in compiled pipeline YAMLs exist in AR.
+
+    Scans YAML files for image URIs matching the AR host. If a tag doesn't exist,
+    finds the same image with any branch-matching tag and re-tags it.
+    """
+    import re
+
+    from gcp_ml_framework.utils.ar import ensure_image_tag
+
+    ar_prefix = f"{ctx.artifact_registry_host}/{ctx.gcp_project}/"
+    image_pattern = re.compile(re.escape(ar_prefix) + r"[a-z0-9-]+/[a-z0-9-]+:[a-z0-9._-]+")
+
+    seen: set[str] = set()
+    for yaml_file in output_dir.glob("*.yaml"):
+        if not all_pipelines and name and name not in yaml_file.name:
+            continue
+        content = yaml_file.read_text()
+        for match in image_pattern.findall(content):
+            if match not in seen:
+                seen.add(match)
+
+    if not seen:
+        return
+
+    for image_uri in sorted(seen):
+        if dry_run:
+            console.print(f"[dim](dry-run) would verify image:[/dim] {image_uri}")
+            continue
+        ok = ensure_image_tag(image_uri, project=ctx.gcp_project)
+        if ok:
+            console.print(f"[green]Image verified:[/green] {image_uri}")
+        else:
+            err_console.print(
+                f"[red]Error:[/red] Image not found: {image_uri}\n"
+                "  Run ./scripts/docker_build.sh to build and push the image."
+            )
+            raise typer.Exit(1)
 
 
 def _upload_dags(

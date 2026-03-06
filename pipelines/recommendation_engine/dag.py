@@ -13,8 +13,6 @@ Flow:
 
 from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
 from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-from gcp_ml_framework.components.ml.deploy import DeployModel
-from gcp_ml_framework.components.ml.evaluate import EvaluateModel
 from gcp_ml_framework.components.ml.train import TrainModel
 from gcp_ml_framework.components.transformation.bq_transform import BQTransform
 from gcp_ml_framework.dag.builder import DAGBuilder
@@ -69,6 +67,10 @@ feature_pipeline = (
 )
 
 # --- Vertex Pipeline 2: Model Training ---
+# Note: No evaluate/deploy steps — the NMF recommendation model is incompatible
+# with the generic EvaluateModel (expects binary classifier) and DeployModel
+# (expects sklearn serving container). Recommendation-specific evaluation and
+# serving would require dedicated components.
 training_pipeline = (
     PipelineBuilder(
         name="reco_training",
@@ -84,14 +86,21 @@ training_pipeline = (
             output_table="reco_training_data",
         )
     )
+    .transform(
+        BQTransform(
+            sql=(
+                "SELECT user_id, item_id, interaction_type, ts "
+                "FROM `{bq_dataset}.reco_training_data`"
+            ),
+            output_table="reco_training_prepared",
+        )
+    )
     .train(
         TrainModel(
             machine_type="n2-standard-16",
             hyperparameters={"embedding_dim": 64, "epochs": 50},
         )
     )
-    .evaluate(EvaluateModel(metrics=["ndcg@10", "map@10"], gate={"ndcg@10": 0.35}))
-    .deploy(DeployModel(endpoint_name="reco-model", machine_type="n2-standard-4"))
     .build()
 )
 

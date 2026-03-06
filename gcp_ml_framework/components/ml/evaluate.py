@@ -135,10 +135,16 @@ class EvaluateModel(BaseComponent):
         eval_dataset_path: str = "",
         **kwargs: Any,
     ) -> dict[str, float]:
-        """Return deterministic placeholder metric values locally."""
-        _placeholder = {"auc": 0.50, "f1": 0.50, "accuracy": 0.50, "precision": 0.50, "recall": 0.50}
-        computed = {m: _placeholder.get(m, 0.50) for m in self.metrics}
-        print(f"[local] EvaluateModel: metrics={computed} (placeholder — no model loaded)")
+        """Evaluate a real model if available, otherwise return placeholder metrics."""
+        input_path = kwargs.get("input_path", "") or model_path
+
+        computed = self._try_real_evaluation(input_path)
+        if computed is None:
+            _placeholder = {"auc": 0.50, "f1": 0.50, "accuracy": 0.50, "precision": 0.50, "recall": 0.50}
+            computed = {m: _placeholder.get(m, 0.50) for m in self.metrics}
+            print(f"[local] EvaluateModel: metrics={computed} (placeholder — no model loaded)")
+        else:
+            print(f"[local] EvaluateModel: metrics={computed}")
 
         failures = [
             f"{m}={v:.4f} < {self.gate[m]}"
@@ -147,5 +153,47 @@ class EvaluateModel(BaseComponent):
         ]
         if failures:
             raise ValueError(f"[local] Gate failures: {', '.join(failures)}")
+
+        return computed
+
+    def _try_real_evaluation(self, model_dir: str) -> dict[str, float] | None:
+        """Load model.pkl + eval_data.parquet and compute real metrics. Returns None on failure."""
+        import os
+        import pickle
+
+        if not model_dir or not os.path.isdir(model_dir):
+            return None
+
+        model_pkl = os.path.join(model_dir, "model.pkl")
+        eval_parquet = os.path.join(model_dir, "eval_data.parquet")
+        if not os.path.exists(model_pkl) or not os.path.exists(eval_parquet):
+            return None
+
+        try:
+            import pandas as pd
+            from sklearn.metrics import f1_score, roc_auc_score
+        except ImportError:
+            return None
+
+        with open(model_pkl, "rb") as f:
+            model = pickle.load(f)
+
+        df = pd.read_parquet(eval_parquet)
+        drop_cols = [c for c in ["label", "user_id", "feature_timestamp"] if c in df.columns]
+        X = df.drop(columns=drop_cols)
+        y = df["label"]
+
+        proba = model.predict_proba(X)[:, 1] if hasattr(model, "predict_proba") else model.predict(X)
+        preds = (proba > 0.5).astype(int)
+
+        computed: dict[str, float] = {}
+        if "auc" in self.metrics:
+            computed["auc"] = round(float(roc_auc_score(y, proba)), 4)
+        if "f1" in self.metrics:
+            computed["f1"] = round(float(f1_score(y, preds)), 4)
+        # Pass through any other requested metrics as placeholders
+        for m in self.metrics:
+            if m not in computed:
+                computed[m] = 0.50
 
         return computed

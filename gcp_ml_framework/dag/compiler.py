@@ -71,6 +71,19 @@ class DAGCompiler:
         tasks_str = "\n\n".join(task_blocks)
         deps_str = "\n    ".join(dep_lines) if dep_lines else ""
 
+        # Extend template_fields for RunPipelineJobOperator if present — some
+        # provider versions omit display_name/parameter_values, causing Jinja
+        # macros like {{ ds }} to pass through un-rendered.
+        has_vertex = any("RunPipelineJobOperator" in imp for imp in imports)
+        template_fields_block = (
+            "\n# Ensure Jinja macros in display_name/parameter_values are rendered\n"
+            "RunPipelineJobOperator.template_fields = tuple(\n"
+            '    dict.fromkeys((*RunPipelineJobOperator.template_fields, "display_name", "parameter_values"))\n'
+            ")\n"
+            if has_vertex
+            else ""
+        )
+
         return f'''\
 """
 Auto-generated Airflow DAG: {dag_def.name}
@@ -84,7 +97,7 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 {imports_str}
-
+{template_fields_block}
 _default_args = {{
     "owner": "gcp-mlf",
     "depends_on_past": False,
@@ -183,13 +196,13 @@ with DAG(
     def _render_vertex_pipeline(
         self, name: str, task: VertexPipelineTask, context: MLContext
     ) -> tuple[str, set[str]]:
-        """Generate a self-contained CreatePipelineJobOperator.
+        """Generate a self-contained RunPipelineJobOperator.
 
         The generated code references a pre-compiled KFP YAML at its GCS path.
         No gcp_ml_framework imports are needed at Airflow parse time.
         """
         imports = {
-            "from airflow.providers.google.cloud.operators.vertex_ai.pipeline_job import CreatePipelineJobOperator",
+            "from airflow.providers.google.cloud.operators.vertex_ai.pipeline_job import RunPipelineJobOperator",
         }
 
         pipeline_name = task.pipeline_name
@@ -202,14 +215,18 @@ with DAG(
             f"/pipeline_runs/{pipeline_name}/"
         )
 
-        code = f"""{name} = CreatePipelineJobOperator(
+        service_account = context.pipeline_service_account
+
+        code = f"""{name} = RunPipelineJobOperator(
     task_id="{name}",
     project_id="{context.gcp_project}",
     region="{context.region}",
-    display_name="{pipeline_name}_{{{{{{ ds_nodash }}}}}}",
+    display_name="{pipeline_name}_{{{{ ds_nodash }}}}",
     template_path="{template_path}",
     pipeline_root="{pipeline_root}",
     enable_caching={task.enable_caching!r},
+    service_account="{service_account}",
+    parameter_values={{"run_date": "{{{{ ds }}}}"}},
 )"""
         return code, imports
 

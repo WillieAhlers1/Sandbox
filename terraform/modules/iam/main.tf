@@ -85,6 +85,14 @@ resource "google_project_iam_member" "pipeline_ar_reader" {
   member  = "serviceAccount:${google_service_account.pipeline.email}"
 }
 
+# Composer SA needs aiplatform.user to create Vertex AI pipeline jobs
+# (the API call itself runs as Composer SA; the pipeline job runs as Pipeline SA)
+resource "google_project_iam_member" "composer_vertex" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.composer.email}"
+}
+
 # Allow Composer SA to act as the Pipeline SA (for submitting Vertex jobs)
 resource "google_service_account_iam_member" "composer_acts_as_pipeline" {
   service_account_id = google_service_account.pipeline.name

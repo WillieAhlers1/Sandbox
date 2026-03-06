@@ -608,3 +608,292 @@ images." During development, we tagged component-base with both `:latest` and
 `:os-experimental-d5bd511`. The compiler uses the branch-sha tag for
 reproducibility; `:latest` was added for local development convenience.
 CI/CD should enforce branch-sha-only tags in production.
+
+---
+---
+
+# Part 3: recommendation_engine on Composer + Vertex AI
+
+> Date: 2026-03-06
+> Branch: os_experimental
+> Pipeline: recommendation_engine (hybrid DAG — Composer orchestrates 2 Vertex AI pipelines)
+> Execution target: Composer DAG → Vertex AI Pipelines
+
+---
+
+## Pre-deployment fixes (code changes before GCP run)
+
+### Issue 14: Triple-brace Jinja bug in compiled DAGs
+
+**File**: `gcp_ml_framework/dag/compiler.py:209`
+
+**Error**: Compiled DAGs with `VertexPipelineTask` had `display_name="reco_features_{{{ ds_nodash }}}"` — triple braces instead of the double braces Jinja2 requires.
+
+**Root cause**: The f-string used `{{{{{{ ds_nodash }}}}}}` (6 braces per side).
+In Python f-strings, `{{` → literal `{`. So 6 braces → 3 literal braces.
+Should have been `{{{{ ds_nodash }}}}` (4 braces → 2 literal braces → valid `{{ ds_nodash }}`).
+
+**Impact**: Affects ALL DAGs with VertexPipelineTasks:
+- `recommendation_engine` (2 tasks: compute_features, train_model)
+- `churn_prediction` (1 task: run_vertex_pipeline)
+- Does NOT affect `sales_analytics` (no VertexPipelineTasks)
+
+**Why not caught earlier**: `churn_prediction` was submitted directly via `gml run --vertex` (bypassing Composer). The compiled DAG file was never parsed by Airflow. `sales_analytics` has no VertexPipelineTasks. This would have been the first failure when running recommendation_engine on Composer.
+
+**Fix**: Changed `{{{{{{ ds_nodash }}}}}}` → `{{{{ ds_nodash }}}}` in `compiler.py:209`.
+
+**Tests added**: 2 tests — one in `test_dag_compiler.py` (generic), one in `test_phase2.py` (recommendation_engine-specific). Both assert `{{ ds_nodash }}` is present and `{{{ ds_nodash }}}` is absent in compiled output.
+
+---
+
+### Issue 15: reco_training pipeline data flow incompatible with Vertex AI
+
+**Error** (pre-emptive — would have occurred on GCP):
+
+The `reco_training` pipeline was: `BigQueryExtract → TrainModel → EvaluateModel → DeployModel`.
+
+Three blocking issues:
+
+1. **BigQueryExtract returns GCS URI, trainer expects BQ table**:
+   BigQueryExtract's KFP component returns `gs://bucket/prefix/extracts/table/*.parquet`.
+   The trainer received this as `--dataset-path` and did `pd.read_csv(args.dataset_path)` — fails because: (a) GCS URI not a local path, (b) glob pattern, (c) Parquet not CSV.
+   Compare to churn_prediction where BQTransform sits between ingest and train, outputting a fully-qualified BQ table name (`project.dataset.table`) that the churn trainer reads via `bigquery.Client`.
+
+2. **Trainer couldn't save to GCS**: `os.makedirs("gs://...")` crashes. The churn trainer correctly handles GCS with `if output.startswith("gs://")` + `storage.Client`.
+
+3. **EvaluateModel + DeployModel incompatible with NMF models**:
+   - EvaluateModel expects a sklearn classifier (calls `model.predict_proba(X)` or `model.predict(X)`). The NMF model is saved as a dict `{"model": NMF, "W": ..., "H": ..., "users": ..., "items": ...}` — `dict.predict(X)` → `AttributeError`.
+   - EvaluateModel only computes `auc` and `f1`. Pipeline requested `ndcg@10` and `map@10` — metrics not implemented. Gate would silently pass (moot since model loading crashes first).
+   - DeployModel expects a sklearn serving container — fundamentally incompatible with NMF recommendation model.
+
+**Fix**:
+
+1. Added `BQTransform` pass-through step to `reco_training` pipeline between `BigQueryExtract` and `TrainModel`. This makes `last_dataset_output` a fully-qualified BQ table reference instead of a GCS URI — matching the churn_prediction pattern.
+
+2. Rewrote `recommendation_engine/trainer/train.py` to read from BQ via `bigquery.Client` (same pattern as churn trainer) and handle GCS model output via `storage.Client`.
+
+3. Removed `EvaluateModel` and `DeployModel` from `reco_training` pipeline. These components are architecturally incompatible with NMF recommendation models. Recommendation-specific evaluation (ndcg@k, map@k) and serving (approximate nearest neighbors, not sklearn predict) would require dedicated components — a future enhancement, not a patch.
+
+Updated `trainer/requirements.txt` to include `google-cloud-bigquery` and `google-cloud-storage`.
+
+**Tests added**: 6 tests in `test_phase2.py`:
+- `test_reco_training_pipeline_has_transform_step`
+- `test_reco_training_pipeline_no_evaluate_or_deploy`
+- `test_reco_trainer_handles_bq_input`
+- `test_reco_trainer_handles_gcs_output`
+- `test_reco_trainer_requirements_include_gcp_sdks`
+- `test_reco_compiled_dag_vertex_display_name_valid_jinja`
+
+**Test suite**: 425 tests passing (was 408 + 7 new + 10 previously-known-failing tests now passing).
+
+---
+
+## GCP deployment steps
+
+### Step 1: Seed BQ data (raw_interactions)
+
+Load `pipelines/recommendation_engine/seeds/raw_interactions.csv` into BQ:
+
+```bash
+bq load --source_format=CSV --autodetect \
+  dsci_examplechurn_os_experimen.raw_interactions \
+  pipelines/recommendation_engine/seeds/raw_interactions.csv
+```
+
+### Step 2: Build and push recommendation-engine-trainer Docker image
+
+```bash
+# Set AR env vars (same as churn_prediction run)
+export AR_HOST=us-central1-docker.pkg.dev
+export GCP_PROJECT=gcp-gap-demo-dev
+export AR_REPO=dsci-examplechurn
+export IMAGE_TAG=os-experimental-$(git rev-parse --short HEAD)
+
+./scripts/docker_build.sh
+# Builds: recommendation-engine-trainer and churn-prediction-trainer
+# Push the new trainer image to AR
+```
+
+### Step 3: Compile + deploy
+
+```bash
+gml compile recommendation_engine
+gml deploy recommendation_engine
+```
+
+### Step 4: Upload compiled pipeline YAMLs to GCS
+
+```bash
+gsutil cp compiled_pipelines/reco_features.yaml \
+  gs://dsci-examplechurn/os-experimental/pipelines/reco_features/pipeline.yaml
+gsutil cp compiled_pipelines/reco_training.yaml \
+  gs://dsci-examplechurn/os-experimental/pipelines/reco_training/pipeline.yaml
+```
+
+### Step 5: Trigger
+
+```bash
+gml run recommendation_engine --composer --run-date 2026-03-01
+```
+
+### Step 6: Regression — trigger sales_analytics
+
+```bash
+gml run sales_analytics --composer --run-date 2026-03-01
+```
+
+---
+
+## GCP execution — Issues encountered
+
+### Issue 16: `CreatePipelineJobOperator` does not exist in Composer 3
+
+**Error**: `ImportError: cannot import name 'CreatePipelineJobOperator' from airflow.providers.google.cloud.operators.vertex_ai.pipeline_job`
+
+**Root cause**: The DAG compiler generated `from airflow.providers.google.cloud.operators.vertex_ai.pipeline_job import CreatePipelineJobOperator`. This class doesn't exist in Airflow 2.10.5 (Composer 3). The correct class is `RunPipelineJobOperator`.
+
+**Fix**: Changed `CreatePipelineJobOperator` → `RunPipelineJobOperator` in:
+- `gcp_ml_framework/dag/compiler.py` — `_render_vertex_pipeline()` import and class name
+- `tests/unit/test_dag_compiler.py` — updated assertion
+- `tests/unit/test_phase1.py` — updated assertion
+
+---
+
+### Issue 17: Composer SA lacks `aiplatform.pipelineJobs.create` permission
+
+**Error**: `403 Permission 'aiplatform.pipelineJobs.create' denied on resource '//aiplatform.googleapis.com/projects/gcp-gap-demo-dev/locations/us-central1'`
+
+**Root cause**: The Terraform IAM module had two service accounts:
+- **Composer SA** (`dsci-examplechurn-dev-composer`): `composer.worker`, `bigquery.dataEditor`, `bigquery.user`, `storage.objectAdmin`
+- **Pipeline SA** (`dsci-examplechurn-dev-pipeline`): `aiplatform.user`, `bigquery.dataEditor`, `bigquery.user`, `storage.objectAdmin`, `artifactregistry.reader`
+
+The Composer SA had `iam.serviceAccountUser` on the Pipeline SA (can impersonate it), but lacked `roles/aiplatform.user` itself. When `RunPipelineJobOperator` executes in Airflow, the API call to create the pipeline job is made by the Composer SA — which needs `aiplatform.user` to call `pipelineJobs.create`.
+
+Additionally, the compiled `RunPipelineJobOperator` did not specify a `service_account` parameter, so the pipeline job would run as the default compute SA instead of the Pipeline SA (which has the BQ/GCS/AR permissions the pipeline steps need).
+
+**Fix** (two parts):
+
+1. **Terraform** (`terraform/modules/iam/main.tf`): Added `roles/aiplatform.user` to Composer SA:
+   ```hcl
+   resource "google_project_iam_member" "composer_vertex" {
+     project = var.project_id
+     role    = "roles/aiplatform.user"
+     member  = "serviceAccount:${google_service_account.composer.email}"
+   }
+   ```
+   Applied with `terraform apply -target=module.iam.google_project_iam_member.composer_vertex`.
+
+2. **Compiler** (`gcp_ml_framework/dag/compiler.py`): Added `service_account` to `RunPipelineJobOperator` referencing `context.pipeline_service_account`. This ensures the Vertex AI pipeline job runs as the Pipeline SA (which has BQ, GCS, AR permissions).
+
+**Tests added**: `test_render_vertex_pipeline_includes_service_account` in `test_dag_compiler.py`.
+
+---
+
+### Issue 18: Teardown missing Composer DAG cleanup
+
+**Problem**: `gml teardown` deleted GCS objects and BQ datasets but did not clean up:
+- DAG files in the Composer GCS bucket
+- Airflow metadata (DAG runs, task instances)
+
+This left stale DAGs and conflicting runs in Composer, causing trigger failures and scheduling confusion.
+
+**Fix**: Added Composer cleanup to `gml teardown`:
+1. Lists DAG files in Composer bucket matching the namespace prefix (`{namespace_bq}__*.py`)
+2. Deletes matched DAG files via GCS Storage API
+3. Deletes Airflow metadata via `gcloud composer environments run dags delete --yes`
+4. Gracefully handles timeouts on metadata deletion (warning, not error)
+
+The dry-run plan now shows the Composer DAGs pattern:
+```
+Composer DAGs: dsci_examplechurn_os_experimen__*
+```
+
+**Tests added**: `test_teardown_dry_run_shows_composer_dags` in `test_cli.py`.
+
+---
+
+## Clean slate and re-deployment
+
+After Issues 14-18, ran full teardown to start fresh:
+
+```bash
+gml teardown --branch os_experimental --confirm
+```
+
+Deleted: 3 DAG files, 2 Airflow metadata records, GCS prefix, BQ dataset.
+
+Re-seeded BQ data for all 3 pipelines, then deploying one at a time:
+1. churn_prediction (Composer → Vertex AI, single RunPipelineJobOperator)
+2. sales_analytics (Composer, pure BQ/email tasks)
+3. recommendation_engine (Composer → 2 Vertex AI pipelines, hybrid)
+
+### Issue 19: Docker image tag mismatch after new commits
+
+**Error**: `component-base:os-experimental-7cee1bb` not found in AR (only `os-experimental-d5bd511` exists).
+
+**Root cause**: The compiled pipeline YAML embeds `{branch}-{SHA}` tags. When a new commit is made (SHA changes from `d5bd511` to `7cee1bb`), `gml compile` generates a YAML referencing `component-base:os-experimental-7cee1bb` — but the image was built against the old SHA. The image bytes are identical; only the tag differs.
+
+**Fix**: Added image verification + auto-retagging to `gml deploy`:
+1. New `gcp_ml_framework/utils/ar.py` with `ensure_image_tag()` — checks if a tag exists in AR, and if not, finds the same image with a branch-matching tag and adds the new tag
+2. Integrated into `gml deploy` as Step 2 (between compile and upload): scans compiled YAML for AR image URIs and verifies/retags each one
+
+**Tests added**: `test_ensure_image_tag_function_exists` and `test_deploy_calls_ensure_images` in `test_cli.py`.
+
+---
+
+### Issue 20: `RunPipelineJobOperator` missing `pipeline_parameters`
+
+**Error**: `400 Could not cast literal "" to type DATE at [12:51]` — the BigQueryExtract step received empty `run_date`.
+
+**Root cause**: The KFP pipeline YAML declares `run_date: str = ""` as a parameter. The `RunPipelineJobOperator` in the compiled DAG didn't pass `pipeline_parameters`, so the Vertex AI pipeline used the default empty string. The BQ query `WHERE event_date BETWEEN DATE_SUB('', INTERVAL 90 DAY) AND ''` failed.
+
+**Fix**: Added `parameter_values={"run_date": "{{ ds }}"}` to `_render_vertex_pipeline()` in `compiler.py`. `parameter_values` is the correct kwarg for `RunPipelineJobOperator` (not `pipeline_parameters`, which would raise `AirflowException: Invalid arguments`). This maps Airflow's logical date macro to the KFP pipeline's `run_date` parameter.
+
+**Tests added**: `test_render_vertex_pipeline_passes_run_date` in `test_dag_compiler.py`.
+
+---
+
+## Re-deployment — churn_prediction (attempt 2)
+
+After fixing Issues 19 and 20:
+
+```bash
+gml deploy churn_prediction    # compile + verify images + upload DAG + upload YAML
+gml run churn_prediction --composer --run-date 2024-01-01
+```
+
+## Expected outcomes — churn_prediction on Composer
+
+| Task | Type | Expected |
+|------|------|----------|
+| run_vertex_pipeline | RunPipelineJobOperator | SUCCESS — triggers Vertex AI pipeline with 6 steps |
+
+The Vertex AI pipeline steps (bigquery-extract, bq-transform, write-features, train-model, evaluate-model, deploy-model) run as the Pipeline SA with BQ/GCS/AR permissions. The `pipeline_parameters` now correctly pass `run_date` from Airflow's `{{ ds }}` macro.
+
+---
+
+### Issue 19: Docker image tag mismatch after new commits
+
+**Error**: `Artifact [IMAGE] was not found` — compiled pipeline YAML referenced `component-base:os-experimental-7cee1bb` but AR only had `os-experimental-d5bd511`.
+
+**Root cause**: Each `gml compile` embeds the current `{branch}-{SHA}` tag in the pipeline YAML. After a new commit, the SHA changes, so the YAML references a tag that doesn't exist in AR. The underlying Docker image is identical — only the tag is new.
+
+**Fix**: Added image verification + auto-retagging to `gml deploy`:
+- `gcp_ml_framework/utils/ar.py` — `ensure_image_tag()` checks if the target tag exists in AR. If not, finds the same image with any branch-matching tag and re-tags it via `gcloud artifacts docker tags add`.
+- `gcp_ml_framework/cli/cmd_deploy.py` — Step 2 (`_ensure_images()`) scans compiled pipeline YAMLs for AR image URIs and verifies each one before uploading.
+
+**Tests added**: `test_ensure_image_tag_function_exists`, `test_deploy_calls_ensure_images` in `test_cli.py`.
+
+---
+
+### Issue 20: `RunPipelineJobOperator` missing `pipeline_parameters`
+
+**Error**: `400 Could not cast literal "" to type DATE at [12:51]` — BigQuery extract query used `'{run_date}'` but `run_date` was empty string.
+
+**Root cause**: The KFP pipeline YAML declares `run_date` as a parameter with default `""`. The compiled `RunPipelineJobOperator` did not pass `pipeline_parameters`, so the pipeline ran with the empty default. The SQL query `WHERE event_date BETWEEN DATE_SUB('', INTERVAL 90 DAY) AND ''` fails because `''` cannot be cast to DATE.
+
+**Fix**: Added `parameter_values={"run_date": "{{ ds }}"}` to the `RunPipelineJobOperator` in `_render_vertex_pipeline()` (`compiler.py:216`). `parameter_values` is the correct kwarg name for `RunPipelineJobOperator` in Airflow 2.10.5 (Composer 3). Note: `pipeline_parameters` is NOT a valid kwarg — it raises `AirflowException: Invalid arguments`. Airflow renders `{{ ds }}` to the logical execution date (e.g., `2024-01-01`), which flows into the KFP pipeline's `run_date` parameter.
+
+**Tests added**: `test_render_vertex_pipeline_passes_run_date` in `test_dag_compiler.py` — asserts `parameter_values=`, `"run_date"`, and `{{ ds }}` all appear in rendered output.
+
+**Test suite**: 407 unit tests passing.

@@ -32,7 +32,7 @@ class VertexPipelineTask(BaseTask):
 
     pipeline: PipelineDefinition | None = None
     pipeline_name: str = ""
-    enable_caching: bool = True
+    enable_caching: bool = False
     sync: bool = True
     parameter_overrides: dict = field(default_factory=dict)
 

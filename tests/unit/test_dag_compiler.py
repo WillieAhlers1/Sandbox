@@ -138,7 +138,7 @@ class TestDAGCompiler:
     def test_render_ml_dag_contains_vertex_operator(self, ml_dag_def, test_context):
         compiler = DAGCompiler()
         source = compiler.render(ml_dag_def, test_context)
-        assert "CreatePipelineJobOperator" in source
+        assert "RunPipelineJobOperator" in source
         assert "churn_prediction" in source
         # Self-contained: no framework imports
         assert "gcp_ml_framework" not in source
@@ -228,3 +228,38 @@ class TestDAGCompiler:
         source = compiler.render(etl_dag_def, test_context)
         # schedule=None means no auto-scheduling, so is_paused_upon_creation is unnecessary
         assert "is_paused_upon_creation" not in source
+
+    def test_render_vertex_pipeline_display_name_double_braces(self, ml_dag_def, test_context):
+        """VertexPipelineTask display_name must use double braces for Jinja2 — not triple."""
+        compiler = DAGCompiler()
+        source = compiler.render(ml_dag_def, test_context)
+        # Must have {{ ds_nodash }} (valid Jinja2), not {{{ ds_nodash }}} (triple)
+        assert "{{ ds_nodash }}" in source
+        assert "{{{ ds_nodash }}}" not in source
+
+    def test_render_vertex_pipeline_includes_service_account(self, ml_dag_def, test_context):
+        """RunPipelineJobOperator must specify service_account so the pipeline
+        job runs as the Pipeline SA (which has Vertex AI, BQ, GCS, AR permissions)."""
+        compiler = DAGCompiler()
+        source = compiler.render(ml_dag_def, test_context)
+        assert "service_account=" in source
+        assert test_context.pipeline_service_account in source
+
+    def test_render_vertex_pipeline_passes_run_date(self, ml_dag_def, test_context):
+        """RunPipelineJobOperator must pass parameter_values with run_date
+        so the Vertex AI pipeline receives the Airflow logical date."""
+        compiler = DAGCompiler()
+        source = compiler.render(ml_dag_def, test_context)
+        assert "parameter_values=" in source
+        assert '"run_date"' in source
+        assert "{{ ds }}" in source
+
+    def test_render_vertex_pipeline_extends_template_fields(self, ml_dag_def, test_context):
+        """The compiled DAG must extend RunPipelineJobOperator.template_fields
+        to include parameter_values and display_name — some Airflow provider
+        versions omit these, causing Jinja macros to pass through un-rendered."""
+        compiler = DAGCompiler()
+        source = compiler.render(ml_dag_def, test_context)
+        assert "template_fields" in source
+        assert '"parameter_values"' in source or "'parameter_values'" in source
+        assert '"display_name"' in source or "'display_name'" in source

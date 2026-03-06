@@ -141,9 +141,9 @@ class TestVertexPipelineTask:
         t = VertexPipelineTask(pipeline_name="churn_prediction")
         assert t.pipeline_name == "churn_prediction"
 
-    def test_enable_caching_default_true(self):
+    def test_enable_caching_default_false(self):
         t = VertexPipelineTask(pipeline_name="p")
-        assert t.enable_caching is True
+        assert t.enable_caching is False
 
     def test_sync_default_true(self):
         t = VertexPipelineTask(pipeline_name="p")

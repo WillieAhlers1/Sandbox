@@ -100,8 +100,12 @@ class WriteFeatures(BaseComponent):
 
         return write_features
 
-    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> None:
-        """In local mode, log feature registration without touching Feature Store."""
+    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> str:
+        """In local mode, log feature registration without touching Feature Store.
+
+        Returns input_path unchanged — WriteFeatures is metadata-only and does not
+        produce new data, so downstream steps should still see the upstream output.
+        """
         import pandas as pd
 
         if input_path:
@@ -111,6 +115,7 @@ class WriteFeatures(BaseComponent):
         else:
             print(f"[local] WriteFeatures: registering entity={self.entity!r}, "
                   f"feature_group={self.feature_group!r} as FeatureGroup (no data movement)")
+        return input_path
 
 
 @dataclass

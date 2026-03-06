@@ -209,12 +209,14 @@ class TestWriteFeatures:
         df.to_parquet(input_path)
 
         comp = WriteFeatures(entity="user", feature_group="signals")
-        # local_run returns None for WriteFeatures
-        comp.local_run(test_context, input_path=input_path)
+        # WriteFeatures passes through input_path (metadata-only, no new data)
+        result = comp.local_run(test_context, input_path=input_path)
+        assert result == input_path
 
     def test_local_run_no_input(self, test_context):
         comp = WriteFeatures(entity="user", feature_group="signals")
-        comp.local_run(test_context)
+        result = comp.local_run(test_context)
+        assert result == ""
 
 
 # ── ReadFeatures ──────────────────────────────────────────────────────────────

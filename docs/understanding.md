@@ -12,7 +12,7 @@ The key idea: your git branch determines your GCP namespace. Every resource — 
 
 **Codebase stats:**
 - 51 Python source files, ~4,700 lines of framework code
-- 19 test files, ~3,500 lines, 371 tests (all passing)
+- 19 test files, ~3,500 lines, 382+ tests (all passing)
 - 4 working example pipelines with seed data
 - Full CLI with 6 command groups
 - 4 Terraform modules for infrastructure
@@ -249,8 +249,8 @@ uv run gml run sales_analytics --local               # works for DAG-based pipel
 3. For dag.py: executes tasks in topological order via `DAGLocalRunner`
 4. BigQueryExtract/BQTransform use DuckDB with BQ-to-DuckDB SQL translation
 5. VertexPipelineTasks run their contained pipeline via nested `LocalRunner` with shared DuckDB connection
-6. TrainModel writes a placeholder model JSON
-7. EvaluateModel returns placeholder metrics (0.50 for all)
+6. TrainModel trains a real sklearn model on seed data (pickle), or writes a placeholder if no labeled data
+7. EvaluateModel loads the real model and computes real metrics, or returns placeholders (0.50) if no model
 8. DeployModel prints a stub endpoint name
 9. EmailTask prints to console
 
@@ -437,7 +437,7 @@ EvaluateModel(
 
 **KFP component:** Downloads model from GCS, loads eval dataset from BQ, computes real sklearn metrics, logs to Vertex AI Experiments.
 
-**Local run:** Returns placeholder metrics (0.50 for all). Gate logic still applies — if threshold > 0.50, the local run will fail (by design, to validate gate configuration).
+**Local run:** When a real `model.pkl` and `eval_data.parquet` exist (produced by TrainModel from seed data), computes real sklearn metrics. Falls back to placeholder metrics (0.50 for all) when no model is available.
 
 ### DeployModel
 
@@ -714,6 +714,75 @@ uv run mypy gcp_ml_framework/
 | `test_phase2.py` | 59 | Phase 2 regression: Docker, DAG runner, use cases, seed data, Composer mode |
 | `test_phase3.py` | 18 | Phase 3 regression: Feature Store v2, model versioning, experiments |
 | `test_e2e.py` (integration) | 24 | Full compile + local run for all 4 pipelines, generated DAG validation |
+
+---
+
+## Local Runner vs KFP Compiler: Data Flow Architecture
+
+The framework has two execution paths with different data-wiring semantics:
+
+### KFP Compiler (Vertex AI) — Dual-Track Data Flow
+
+The compiler (`gcp_ml_framework/pipeline/compiler.py`) uses two separate output trackers:
+
+- `last_dataset_output` — tracks the latest data-producing step output (BigQueryExtract, BQTransform, ReadFeatures)
+- `last_model_output` — tracks the latest model-producing step output (TrainModel)
+
+Steps that are **metadata-only** (like WriteFeatures) are explicitly excluded from overwriting `last_dataset_output`. This is handled by checking `step.component.component_name in ("write_features",)`.
+
+Cross-step wiring rules:
+- If a step accepts `dataset_uri`, `eval_dataset_uri`, or `bq_source_table`: wire from `last_dataset_output`
+- If a step accepts `model_uri`: wire from `last_model_output`
+
+### LocalRunner — Single Linear Chain
+
+The local runner (`gcp_ml_framework/pipeline/runner.py`) uses a simpler model:
+
+```python
+prev_output = None
+for step in pipeline_def.steps:
+    result = step.component.local_run(ctx, input_path=prev_output, ...)
+    prev_output = result  # overwrites unconditionally
+```
+
+Every step's return value becomes the next step's `input_path`. This works for linear data pipelines but breaks when a metadata-only step (WriteFeatures) returns `None` — it severs the chain for all downstream steps.
+
+### Known Mismatch: WriteFeatures
+
+- **KFP path:** WriteFeatures output is excluded from `last_dataset_output`, so TrainModel still receives the BQTransform output
+- **Local path:** WriteFeatures.`local_run()` returns `None` (no return statement), which overwrites `prev_output`, so TrainModel receives `input_path=None`
+
+The fix for the local runner should mirror the KFP compiler's approach: WriteFeatures should either pass through its `input_path` unchanged, or the LocalRunner should skip updating `prev_output` for metadata-only steps.
+
+### Known Local-Only Behaviors
+
+- **TrainModel** trains a real sklearn LogisticRegression when seed data with a `label` column flows through. Falls back to a placeholder `model.json` when no labeled data is available.
+- **EvaluateModel** computes real sklearn metrics (AUC, F1) when `model.pkl` and `eval_data.parquet` exist in the model directory. Falls back to placeholder metrics (0.50 for all) when no model is available.
+
+---
+
+## GCP Deployment Status (os_experimental branch)
+
+### Artifact Registry
+- `base-python:latest` — Python 3.11 slim base
+- `base-ml:latest` — scikit-learn, pandas, numpy, xgboost
+- `component-base:latest` — GCP SDK + data dependencies (used by KFP components to skip runtime pip installs)
+- `churn-prediction-trainer:os-experimental-{sha}` — sklearn LogisticRegression trainer
+
+### BigQuery
+- Dataset: `dsci_examplechurn_os_experimen` (truncated per 30-char BQ limit)
+- Tables: `raw_user_events` (10 rows seed data), `churn_training_raw`, `churn_features_engineered`
+
+### Vertex AI Pipeline Runs
+Churn prediction pipeline was submitted to Vertex AI. Key bugs fixed during deployment:
+1. `feature_group_id` missing from WriteFeatures params → added to compiler's `_build_derived_params()`
+2. WriteFeatures output overwriting `last_dataset_output` → added metadata-only exclusion
+3. `google-cloud-aiplatform` missing from EvaluateModel's `packages_to_install` → added
+4. Component base image optimization → pre-built `component-base` image skips runtime pip installs
+
+### Service Account
+Pipeline SA is auto-derived: `{team}-{project}-{env}-pipeline@{gcp_project}.iam.gserviceaccount.com`
+For os_experimental: `dsci-examplechurn-dev-pipeline@gcp-gap-demo-dev.iam.gserviceaccount.com`
 
 ---
 

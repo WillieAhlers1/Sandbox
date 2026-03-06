@@ -75,9 +75,10 @@ class TestChurnPredictionE2E:
         mod = _load_module("_e2e_churn3", self.pipeline_dir / "pipeline.py")
         seeds_dir = self.pipeline_dir / "seeds"
         runner = LocalRunner(e2e_context, seeds_dir=seeds_dir)
-        # Gate is set to 0.78 but local placeholder returns 0.50 — expect gate failure
-        with pytest.raises(ValueError, match="Gate failures"):
-            runner.run(mod.pipeline)
+        outputs = runner.run(mod.pipeline)
+        # Pipeline runs end-to-end: real model trained on seed data passes the AUC gate
+        assert "evaluate_model" in outputs
+        assert outputs["evaluate_model"]["auc"] >= 0.78
 
     def test_local_run_dry_run(self, e2e_context):
         from gcp_ml_framework.pipeline.runner import LocalRunner

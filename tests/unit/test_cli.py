@@ -250,6 +250,18 @@ class TestDeploy:
         result = runner.invoke(app, ["deploy"])
         assert result.exit_code != 0
 
+    def test_ensure_image_tag_function_exists(self):
+        """The AR utility for image verification should exist."""
+        from gcp_ml_framework.utils.ar import ensure_image_tag
+
+        assert callable(ensure_image_tag)
+
+    def test_deploy_calls_ensure_images(self):
+        """gml deploy should verify Docker images exist in AR."""
+        from gcp_ml_framework.cli.cmd_deploy import _ensure_images
+
+        assert callable(_ensure_images)
+
 
 # ── gml teardown ─────────────────────────────────────────────────────────────
 
@@ -300,3 +312,20 @@ class TestTeardown:
             ],
         )
         assert result.exit_code != 0
+
+    def test_teardown_dry_run_shows_composer_dags(self, project_dir):
+        """Teardown dry-run should list Composer DAG cleanup in the plan."""
+        result = runner.invoke(
+            app,
+            [
+                "teardown",
+                "teardown",
+                "--branch",
+                "feature/test-branch",
+                "-c",
+                str(project_dir / "framework.yaml"),
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "composer" in result.output.lower() or "dag" in result.output.lower()

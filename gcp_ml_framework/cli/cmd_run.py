@@ -42,7 +42,12 @@ def run(
     ),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable KFP step caching"),
     all_pipelines: bool = typer.Option(False, "--all", help="Run all pipelines in pipelines/"),
-    run_date: str = typer.Option("", "--run-date", help="Override run_date (default: today)"),
+    run_date: str = typer.Option(
+        "",
+        "--run-date",
+        help="Override run_date (default: today). Seed data requires specific dates "
+        "for correct results — e.g. 2024-01-01 for churn_prediction, 2026-03-01 for sales_analytics.",
+    ),
 ) -> None:
     """
     Run a pipeline locally, on Vertex AI, or trigger on Composer.
@@ -74,7 +79,7 @@ def run(
         raise typer.Exit(1)
 
     if local:
-        _run_local(pipeline_name, pipelines_dir, framework_yaml, dry_run)
+        _run_local(pipeline_name, pipelines_dir, framework_yaml, dry_run, run_date)
     elif vertex:
         _run_vertex(
             pipeline_name, pipelines_dir, framework_yaml, sync, no_cache, all_pipelines, run_date
@@ -104,6 +109,7 @@ def _run_local(
     pipelines_dir: Path,
     framework_yaml: Path | None,
     dry_run: bool,
+    run_date: str = "",
 ) -> None:
     """Run a pipeline locally using DuckDB/pandas stubs."""
     pipeline_dir = pipelines_dir / pipeline_name
@@ -131,7 +137,7 @@ def _run_local(
                 console.print(f"[dim][dry-run][/dim] {task.name} ({task.task.task_type})")
         else:
             console.print(f"[cyan]Running {pipeline_name!r} DAG locally...[/cyan]")
-            runner.run(dag_def)
+            runner.run(dag_def, run_date=run_date)
             console.print("[green]Done.[/green]")
     elif (pipeline_dir / "pipeline.py").exists():
         # Use pipeline local runner (existing)
@@ -143,7 +149,7 @@ def _run_local(
             runner.print_plan(pipeline_def)
         else:
             console.print(f"[cyan]Running {pipeline_name!r} locally...[/cyan]")
-            runner.run(pipeline_def)
+            runner.run(pipeline_def, run_date=run_date)
             console.print("[green]Done.[/green]")
     else:
         err_console.print(f"[red]Error:[/red] {pipeline_name}/ has neither pipeline.py nor dag.py.")
@@ -177,6 +183,12 @@ def _run_vertex(
 
     for name in targets:
         pipeline_dir = pipelines_dir / name
+        if (pipeline_dir / "dag.py").exists() and not (pipeline_dir / "pipeline.py").exists():
+            err_console.print(
+                f"[red]Error:[/red] '{name}' is a DAG-based pipeline (dag.py only). "
+                f"Use [bold]--composer[/bold] to run on Composer, or [bold]--local[/bold] to run locally."
+            )
+            raise typer.Exit(1)
         pipeline_def = _load_pipeline(pipeline_dir)
         compiler = PipelineCompiler()
         compiled_path = compiler.compile(pipeline_def, ctx, pipeline_dir=pipeline_dir)
@@ -205,6 +217,9 @@ def _run_composer(
     dag_id = runner.resolve_dag_id(pipeline_name)
 
     console.print(f"[cyan]Triggering DAG '{dag_id}' on Composer...[/cyan]")
+
+    # Ensure DAG is unpaused — Composer 3 defaults new DAGs to paused
+    runner.unpause_dag(dag_id)
 
     result = runner.trigger_dag(pipeline_name, run_date=run_date)
 
