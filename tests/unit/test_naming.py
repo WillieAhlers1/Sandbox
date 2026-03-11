@@ -93,3 +93,47 @@ class TestNamingConvention:
         assert "namespace" in rmap
         assert "gcs_prefix" in rmap
         assert "bq_dataset" in rmap
+
+    # -- GCS bucket with gcp_project (Phase 1A) --
+
+    def test_gcs_bucket_without_project_id_unchanged(self):
+        """Without gcp_project, gcs_bucket is {team}-{project} (backwards compat)."""
+        nc = NamingConvention(team="dsci", project="gcpdemo", branch="test")
+        assert nc.gcs_bucket == "dsci-gcpdemo"
+
+    def test_gcs_bucket_with_project_id(self):
+        """With gcp_project, gcs_bucket is {project_id}-{team}-{project} (GCP best practice)."""
+        nc = NamingConvention(
+            team="dsci", project="gcpdemo", branch="test",
+            gcp_project="prj-0n-dta-pt-ai-sandbox",
+        )
+        assert nc.gcs_bucket == "prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo"
+
+    def test_gcs_prefix_with_project_id(self):
+        """GCS prefix uses project-scoped bucket name."""
+        nc = NamingConvention(
+            team="dsci", project="gcpdemo", branch="feature/xyz",
+            gcp_project="my-project",
+        )
+        assert nc.gcs_prefix == "gs://my-project-dsci-gcpdemo/feature-xyz/"
+
+    def test_gcs_bucket_with_project_id_shared_across_branches(self):
+        """Different branches share the same bucket even with gcp_project."""
+        nc_dev = NamingConvention(
+            team="dsci", project="gcpdemo", branch="feature/abc",
+            gcp_project="my-project",
+        )
+        nc_main = NamingConvention(
+            team="dsci", project="gcpdemo", branch="main",
+            gcp_project="my-project",
+        )
+        assert nc_dev.gcs_bucket == nc_main.gcs_bucket
+
+    def test_gcs_pipeline_root_with_project_id(self):
+        """Pipeline root uses project-scoped bucket."""
+        nc = NamingConvention(
+            team="dsci", project="gcpdemo", branch="test",
+            gcp_project="my-project",
+        )
+        root = nc.gcs_pipeline_root("churn_prediction")
+        assert root.startswith("gs://my-project-dsci-gcpdemo/test/")

@@ -12,10 +12,9 @@ terraform {
     }
   }
 
-  backend "gcs" {
-    bucket = "gcp-gap-demo-terraform-state"
-    prefix = "dev"
-  }
+  # TODO: Migrate to GCS backend after state bucket creation
+  # bucket = "prj-0n-dta-pt-ai-sandbox-terraform-state", prefix = "dev"
+  backend "local" {}
 }
 
 provider "google" {
@@ -56,28 +55,18 @@ variable "environment" {
   default     = "dev"
 }
 
-variable "github_repo" {
-  description = "GitHub repository (org/repo) for WIF"
-  type        = string
-  default     = ""
-}
-
 # --- Modules ---
-
-module "iam" {
-  source       = "../../modules/iam"
-  project_id   = var.project_id
-  team         = var.team
-  project_name = var.project_name
-  environment  = var.environment
-  github_repo  = var.github_repo
-}
+# NOTE: IAM and Composer modules are skipped for this enterprise project.
+# Pre-existing SAs and Composer environment are used instead:
+#   Pipeline SA: gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
+#   Composer SA: gc-sa-for-composer-env@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
+#   Composer env: mlopshousingpoc (shared, private, VPC SC perimeter)
 
 module "storage" {
   source      = "../../modules/storage"
   project_id  = var.project_id
   region      = var.region
-  bucket_name = "${var.project_id}-${var.team}-${var.project_name}-${var.environment}"
+  bucket_name = "${var.project_id}-${var.team}-${var.project_name}"
   labels = {
     team        = var.team
     project     = var.project_name
@@ -89,22 +78,8 @@ module "artifact_registry" {
   source        = "../../modules/artifact_registry"
   project_id    = var.project_id
   region        = var.region
-  repository_id = "${var.team}-${var.project_name}-${var.environment}"
+  repository_id = "${var.team}-${var.project_name}"
   description   = "Docker repository for ${var.team}/${var.project_name} (${var.environment})"
-  labels = {
-    team        = var.team
-    project     = var.project_name
-    environment = var.environment
-  }
-}
-
-module "composer" {
-  source                = "../../modules/composer"
-  project_id            = var.project_id
-  region                = var.region
-  environment_name      = "${var.team}-${var.project_name}-${var.environment}"
-  service_account_email = module.iam.composer_service_account_email
-  environment_size      = "ENVIRONMENT_SIZE_SMALL"
   labels = {
     team        = var.team
     project     = var.project_name
@@ -114,11 +89,6 @@ module "composer" {
 
 # --- Outputs ---
 
-output "composer_dags_path" {
-  description = "GCS path for Composer DAGs"
-  value       = module.composer.composer_dags_path
-}
-
 output "artifact_registry_url" {
   description = "Docker registry URL"
   value       = module.artifact_registry.repository_url
@@ -127,14 +97,4 @@ output "artifact_registry_url" {
 output "bucket_name" {
   description = "GCS bucket name"
   value       = module.storage.bucket_name
-}
-
-output "composer_service_account" {
-  description = "Composer service account email"
-  value       = module.iam.composer_service_account_email
-}
-
-output "pipeline_service_account" {
-  description = "Pipeline service account email"
-  value       = module.iam.pipeline_service_account_email
 }

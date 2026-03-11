@@ -11,7 +11,7 @@
 # Environment variables:
 #   AR_HOST     — Artifact Registry host (e.g. us-central1-docker.pkg.dev)
 #   GCP_PROJECT — GCP project ID
-#   AR_REPO     — AR repository name (e.g. dsci-examplechurn)
+#   AR_REPO     — AR repository name (e.g. dsci-gcpdemo)
 #   IMAGE_TAG   — Tag for all built images (default: latest)
 
 set -euo pipefail

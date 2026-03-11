@@ -36,6 +36,7 @@ class MLContext:
     composer_dags_path: dict[str, str]
     artifact_registry_host: str
     service_account_email: str | None
+    composer_environment_name: str
     feature_store_online_node_count: int
     secret_project_id: str
     secret_prefix: str
@@ -44,13 +45,19 @@ class MLContext:
 
     @classmethod
     def from_config(cls, cfg: FrameworkConfig) -> MLContext:
+        gcp_project = cfg.active_gcp_project
         naming = NamingConvention(
             team=cfg.team,
             project=cfg.project,
             branch=cfg.branch,
+            gcp_project=gcp_project,
         )
-        gcp_project = cfg.active_gcp_project
         secret_prefix = cfg.secrets.secret_prefix or naming.namespace
+
+        # Auto-derive Composer env name: explicit config > {team}-{project}-{env}
+        composer_env_name = cfg.gcp.composer_environment_name or (
+            f"{naming.team}-{naming.project}-{cfg.git_state.value}"
+        )
 
         return cls(
             naming=naming,
@@ -60,6 +67,7 @@ class MLContext:
             composer_dags_path=cfg.gcp.composer_dags_path,
             artifact_registry_host=cfg.gcp.artifact_registry_host,
             service_account_email=cfg.gcp.service_account_email,
+            composer_environment_name=composer_env_name,
             feature_store_online_node_count=cfg.feature_store.online_serving_fixed_node_count,
             secret_project_id=cfg.secrets.project_id or gcp_project,
             secret_prefix=secret_prefix,

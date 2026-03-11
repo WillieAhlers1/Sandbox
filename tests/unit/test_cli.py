@@ -143,6 +143,63 @@ class TestInitPipeline:
         assert "my_pipeline" in sql_files[0].name
 
 
+# ── gml init pipeline --dag ──────────────────────────────────────────────────
+
+
+@pytest.fixture
+def dag_dir(project_dir):
+    """Scaffold a DAG pipeline inside the project."""
+    pipelines = project_dir / "pipelines"
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "pipeline",
+            "my_dag",
+            "--dag",
+            "-o",
+            str(pipelines),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    return pipelines / "my_dag"
+
+
+class TestInitDAG:
+    def test_creates_dag_py(self, dag_dir):
+        assert (dag_dir / "dag.py").exists()
+
+    def test_no_pipeline_py(self, dag_dir):
+        assert not (dag_dir / "pipeline.py").exists()
+
+    def test_dag_py_content(self, dag_dir):
+        content = (dag_dir / "dag.py").read_text()
+        assert "DAGBuilder" in content
+        assert "BQQueryTask" in content
+        assert "EmailTask" in content
+        assert "my_dag" in content
+
+    def test_creates_config_yaml(self, dag_dir):
+        content = (dag_dir / "config.yaml").read_text()
+        assert "schedule" in content
+        assert "my_dag" in content
+
+    def test_creates_sql_directory(self, dag_dir):
+        sql_dir = dag_dir / "sql"
+        assert sql_dir.is_dir()
+        sql_files = sorted(f.name for f in sql_dir.glob("*.sql"))
+        assert sql_files == ["extract.sql", "transform.sql"]
+
+    def test_sql_extract_content(self, dag_dir):
+        content = (dag_dir / "sql" / "extract.sql").read_text()
+        assert "{bq_dataset}" in content
+        assert "{run_date}" in content
+
+    def test_sql_transform_content(self, dag_dir):
+        content = (dag_dir / "sql" / "transform.sql").read_text()
+        assert "{bq_dataset}" in content
+
+
 # ── gml context show ─────────────────────────────────────────────────────────
 
 

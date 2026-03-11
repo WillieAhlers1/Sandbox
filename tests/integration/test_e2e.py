@@ -133,6 +133,12 @@ class TestSalesAnalyticsE2E:
         # notify must come last
         assert order.index("notify") > order.index("build_report")
 
+    def test_notify_depends_on_build_report(self):
+        """notify must explicitly depend on build_report (not rely on implicit ordering)."""
+        mod = _load_module("_e2e_sales5", self.pipeline_dir / "dag.py")
+        notify_task = next(t for t in mod.dag.tasks if t.name == "notify")
+        assert "build_report" in notify_task.depends_on
+
     def test_local_run(self, e2e_context):
         from gcp_ml_framework.dag.runner import DAGLocalRunner
 

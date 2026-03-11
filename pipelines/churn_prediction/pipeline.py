@@ -82,10 +82,9 @@ pipeline = (
         TrainModel(
             machine_type="n2-standard-8",
             hyperparameters={
-                "learning_rate": 0.05,
-                "max_depth": 6,
-                "n_estimators": 300,
-                "subsample": 0.8,
+                "C": 1.0,
+                "max_iter": 1000,
+                "solver": "lbfgs",
             },
         ),
         name="train_churn_model",

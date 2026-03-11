@@ -6,4 +6,6 @@ RUN pip install --no-cache-dir \
     google-cloud-aiplatform>=1.49 \
     pyarrow>=15 \
     pandas>=2 \
-    db-dtypes>=1.2
+    db-dtypes>=1.2 \
+    scikit-learn>=1.4 \
+    kfp==2.15.2

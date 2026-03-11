@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from gcp_ml_framework.naming import get_git_branch
@@ -61,14 +61,16 @@ class GCPConfig(BaseModel):
     prod_project_id: str = ""
     region: str = "us-central1"
     composer_dags_path: dict[str, str] = Field(default_factory=dict)
-    artifact_registry_host: str = "us-central1-docker.pkg.dev"
+    artifact_registry_host: str = ""
     service_account_email: str | None = None
+    composer_environment_name: str | None = None
 
-    @field_validator("region")
-    @classmethod
-    def _only_us_central(cls, v: str) -> str:
-        # Soft warning; enforcement left to Terraform for now.
-        return v
+    @model_validator(mode="after")
+    def _derive_ar_host(self) -> GCPConfig:
+        """Auto-derive artifact_registry_host from region when not explicitly set."""
+        if not self.artifact_registry_host:
+            self.artifact_registry_host = f"{self.region}-docker.pkg.dev"
+        return self
 
 
 class FeatureStoreConfig(BaseModel):

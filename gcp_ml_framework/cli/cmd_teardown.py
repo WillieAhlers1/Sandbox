@@ -112,8 +112,7 @@ def _delete_composer_dags(ctx, composer_path: str) -> None:
             console.print(f"  [green]Deleted DAG file:[/green] {filename}")
 
     # 2. Delete Airflow metadata for each DAG
-    env_suffix = ctx.git_state.value.lower()
-    env_name = f"{ctx.naming.team}-{ctx.naming.project}-{env_suffix}"
+    env_name = ctx.composer_environment_name
 
     for dag_id in dag_ids:
         try:

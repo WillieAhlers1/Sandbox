@@ -63,11 +63,15 @@ class NamingConvention:
         nc.namespace          # "dsci-churn-pred-feature-xyz"
         nc.bq_dataset         # "dsci_churn_pred_feature_xyz"
         nc.gcs_prefix         # "gs://dsci-churn-pred/feature-xyz/"
+
+    When gcp_project is provided, GCS bucket names include the project ID for
+    global uniqueness (GCP best practice): {gcp_project}-{team}-{project}.
     """
 
     team: str
     project: str
     branch: str
+    gcp_project: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "team", _slugify(self.team, 12))
@@ -90,7 +94,13 @@ class NamingConvention:
 
     @cached_property
     def gcs_bucket(self) -> str:
-        """Shared GCS bucket for the team+project (branches share the bucket)."""
+        """Shared GCS bucket name (branches share the bucket).
+
+        When gcp_project is set: {gcp_project}-{team}-{project} (globally unique).
+        Otherwise: {team}-{project} (backwards compatible).
+        """
+        if self.gcp_project:
+            return f"{self.gcp_project}-{self.team}-{self.project}"
         return f"{self.team}-{self.project}"
 
     @cached_property

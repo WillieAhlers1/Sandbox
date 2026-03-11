@@ -10,10 +10,10 @@ Your git branch determines your entire GCP namespace:
 
 ```
 branch: feature/user-embeddings
-  GCS bucket:    gs://dsci-churn-pred/feature-user-embeddings/
-  BigQuery:      dsci_churn_pred_feature_user_embeddings
-  Vertex AI:     dsci-churn-pred-feature-user-embeddings-{pipeline}
-  Composer DAG:  dsci_churn_pred_feature_user_embe__{pipeline}
+  GCS bucket:    gs://PROJECT_ID-dsci-gcpdemo/feature-user-embeddings/
+  BigQuery:      dsci_gcpdemo_feature_user_embeddings
+  Vertex AI:     dsci-gcpdemo-feature-user-embeddings-{pipeline}
+  Composer DAG:  dsci_gcpdemo_feature_user_embe__{pipeline}
   Feature View:  user_behavioral_feature_user_embeddings
 ```
 
@@ -35,9 +35,10 @@ gml init project dsci churn-pred \
   --staging-project my-gcp-staging \
   --prod-project my-gcp-prod
 
-# Add a pipeline
+# Add an ML pipeline
 gml init pipeline churn_prediction
-# Edit pipelines/churn_prediction/pipeline.py
+# Or add a data pipeline (Composer DAG)
+gml init pipeline sales_report --dag
 
 # Run locally (DuckDB stubs — no GCP needed)
 gml run churn_prediction --local
@@ -127,7 +128,7 @@ Every component implements `as_kfp_component()` (for Vertex AI) and `local_run()
 
 ```
 gml init project <team> <project>      Scaffold a new project with framework.yaml, CI/CD, schemas
-gml init pipeline <name>               Add a pipeline directory with template files
+gml init pipeline <name> [--dag]       Add a pipeline (--dag for Composer DAG)
 gml context show [--branch] [--json]   Show resolved namespace, GCP project, resource names
 gml run <pipeline> [--local|--vertex|--composer]  Run locally, submit to Vertex AI, or trigger on Composer
 gml compile <pipeline> [--all]         Compile to KFP YAML + Airflow DAG files
@@ -168,7 +169,7 @@ terraform init && terraform plan -var-file=terraform.tfvars
 ## Testing
 
 ```bash
-uv run pytest tests/ -v              # 371 tests, all passing
+uv run pytest tests/ -v              # 451+ tests, all passing
 uv run pytest tests/unit/            # Unit tests only
 uv run pytest tests/integration/     # E2E integration tests
 uv run ruff check .                  # Lint
@@ -258,7 +259,7 @@ Secrets use `!secret key` references, resolved from GCP Secret Manager in cloud 
 │
 ├── docker/base/                        #   Base Docker images (python, ML)
 ├── scripts/                            #   bootstrap.sh, docker_build.sh
-├── tests/                              #   371 tests (16 unit + 1 integration file)
+├── tests/                              #   451+ tests (unit + integration)
 │
 └── docs/                               #   Documentation
     ├── architecture/plan.md            #     System design + naming conventions
@@ -271,6 +272,7 @@ Secrets use `!secret key` references, resolved from GCP Secret Manager in cloud 
 
 | Document | Description |
 |---|---|
+| [Quickstart](docs/guides/quickstart.md) | 15-minute getting-started for data scientists |
 | [Architecture Plan](docs/architecture/plan.md) | System design, naming conventions, layer diagram, key decisions |
 | [Integration Guide](docs/guides/integration.md) | Step-by-step: bring existing ML code into the framework |
 | [Infrastructure Setup](docs/prerequisite/infrastructure.md) | GCP provisioning (manual CLI + Terraform modules) |

@@ -83,3 +83,61 @@ class TestFrameworkConfig:
 
     def test_git_state_property(self, test_config):
         assert test_config.git_state == GitState.DEV
+
+    # -- artifact_registry_host auto-derivation (Phase 1C) --
+
+    def test_artifact_registry_host_auto_derived_from_region(self):
+        """AR host defaults to {region}-docker.pkg.dev when not explicitly set."""
+        cfg = FrameworkConfig(
+            team="t", project="p", branch="test",
+            gcp=GCPConfig(
+                dev_project_id="dev", staging_project_id="stg", prod_project_id="prd",
+                region="us-east4",
+            ),
+        )
+        assert cfg.gcp.artifact_registry_host == "us-east4-docker.pkg.dev"
+
+    def test_artifact_registry_host_auto_derived_default_region(self):
+        """AR host derives correctly from the default region (us-central1)."""
+        cfg = FrameworkConfig(
+            team="t", project="p", branch="test",
+            gcp=GCPConfig(
+                dev_project_id="dev", staging_project_id="stg", prod_project_id="prd",
+            ),
+        )
+        assert cfg.gcp.artifact_registry_host == "us-central1-docker.pkg.dev"
+
+    def test_artifact_registry_host_explicit_override(self):
+        """Explicit AR host is preserved even when region differs."""
+        cfg = FrameworkConfig(
+            team="t", project="p", branch="test",
+            gcp=GCPConfig(
+                dev_project_id="dev", staging_project_id="stg", prod_project_id="prd",
+                region="us-east4",
+                artifact_registry_host="us-docker.pkg.dev",
+            ),
+        )
+        assert cfg.gcp.artifact_registry_host == "us-docker.pkg.dev"
+
+    # -- composer_environment_name (Phase 3) --
+
+    def test_composer_environment_name_default_none(self):
+        """Composer env name defaults to None (auto-derived by runner)."""
+        cfg = FrameworkConfig(
+            team="t", project="p", branch="test",
+            gcp=GCPConfig(
+                dev_project_id="dev", staging_project_id="stg", prod_project_id="prd",
+            ),
+        )
+        assert cfg.gcp.composer_environment_name is None
+
+    def test_composer_environment_name_explicit(self):
+        """Explicit Composer env name is preserved."""
+        cfg = FrameworkConfig(
+            team="t", project="p", branch="test",
+            gcp=GCPConfig(
+                dev_project_id="dev", staging_project_id="stg", prod_project_id="prd",
+                composer_environment_name="mlopshousingpoc",
+            ),
+        )
+        assert cfg.gcp.composer_environment_name == "mlopshousingpoc"

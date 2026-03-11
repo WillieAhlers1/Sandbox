@@ -3,22 +3,23 @@
 # Commit it. Never put secrets here — use GCP Secret Manager (!secret key-name).
 
 team: dsci
-project: examplechurn
+project: gcpdemo
 
 gcp:
-  # Replace these with your actual GCP project IDs.
-  dev_project_id: gcp-gap-demo-dev
-  staging_project_id: gcp-gap-demo-staging
-  prod_project_id: gcp-gap-demo-prod
-  region: us-central1
+  dev_project_id: prj-0n-dta-pt-ai-sandbox
+  staging_project_id: ""
+  prod_project_id: ""
+  region: us-east4
+  service_account_email: gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
+  composer_environment_name: mlopshousingpoc
   composer_dags_path:
-    dev: "gs://us-central1-dsci-examplechu-8f740abc-bucket/dags"
+    dev: "gs://us-east4-mlopshousingpoc-030c6745-bucket/dags"
     staging: ""
     prod: ""
-  artifact_registry_host: us-central1-docker.pkg.dev
+  # artifact_registry_host auto-derived from region → us-east4-docker.pkg.dev
+
 secrets:
   # Secrets are referenced in config/pipeline code as: !secret <key-name>
   # They are resolved at runtime from GCP Secret Manager.
   # The full secret name will be: {namespace}-{key-name}
-  # e.g. dsci-example-churn-main-db-password
   secret_prefix:    # leave blank to default to the namespace token

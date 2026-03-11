@@ -5,8 +5,7 @@
 >
 > Audience: New team members, reviewers, demo presenters.
 >
-> Last updated: 2026-03-06 (v2) | Branch: `os_experimental`
-> GCP Project: `gcp-gap-demo-dev` (us-central1)
+> Last updated: 2026-03-11 (v3)
 
 ---
 
@@ -74,8 +73,8 @@ gcloud auth application-default login
 # Set your default project
 gcloud config set project YOUR_PROJECT_ID
 
-# Configure Docker to push to Artifact Registry
-gcloud auth configure-docker us-central1-docker.pkg.dev
+# Configure Docker to push to Artifact Registry (use YOUR region)
+gcloud auth configure-docker YOUR_REGION-docker.pkg.dev
 ```
 
 Authentication uses ADC (Application Default Credentials) throughout -- no
@@ -156,7 +155,7 @@ Commands:
 |   +-- bootstrap.sh               # One-time GCP project setup (APIs, AR repo)
 |   +-- docker_build.sh            # Build full Docker image hierarchy and optionally push
 |   +-- seed_bq.sh                 # Load seed CSVs into BigQuery
-+-- tests/                         # 436 tests (unit + integration)
++-- tests/                         # 451+ tests (unit + integration)
 +-- dags/                          # Compiled Airflow DAG files (generated output)
 +-- compiled_pipelines/            # Compiled KFP YAML files (generated output)
 ```
@@ -176,23 +175,44 @@ Commands:
 `framework.yaml` is the single source of truth for project identity and GCP configuration.
 
 ```yaml
+# GCP ML Framework -- project configuration
 team: dsci
-project: examplechurn
+project: gcpdemo
 
 gcp:
-  dev_project_id: YOUR_DEV_PROJECT       # e.g. gcp-gap-demo-dev
-  staging_project_id: YOUR_STAGING_PROJECT
-  prod_project_id: YOUR_PROD_PROJECT
-  region: us-central1
-  artifact_registry_host: us-central1-docker.pkg.dev
+  dev_project_id: prj-0n-dta-pt-ai-sandbox    # your GCP project ID
+  staging_project_id: ""                        # leave blank until multi-env
+  prod_project_id: ""
+  region: us-east4
+
+  # Service account for Vertex AI pipeline execution
+  service_account_email: gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
+
+  # Composer environment name (if using a pre-existing shared environment)
+  composer_environment_name: mlopshousingpoc
+
+  # Composer DAGs bucket path (populated after Terraform or from existing env)
   composer_dags_path:
-    dev: ""       # Populated AFTER Terraform creates Composer (Step 10)
+    dev: "gs://us-east4-mlopshousingpoc-030c6745-bucket/dags"
     staging: ""
     prod: ""
+  # artifact_registry_host auto-derived from region -> us-east4-docker.pkg.dev
 ```
 
 The `team` and `project` fields drive all resource naming. Every GCP resource
 name is derived from the canonical namespace: `{team}-{project}-{branch}`.
+
+Key fields:
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `team` | Team identifier (max 12 chars) | `dsci` |
+| `project` | Framework project name (max 20 chars) | `gcpdemo` |
+| `dev_project_id` | GCP project for DEV branches | `prj-0n-dta-pt-ai-sandbox` |
+| `region` | GCP region for all resources | `us-east4` |
+| `service_account_email` | SA used by Vertex AI pipelines | Pre-existing or TF-created |
+| `composer_environment_name` | Composer env name (if shared/pre-existing) | `mlopshousingpoc` |
+| `composer_dags_path` | GCS path where Composer reads DAGs | From Composer env details |
 
 **Do not put secrets here.** Secrets go in GCP Secret Manager and are referenced
 via `!secret key-name` in config.
@@ -209,17 +229,16 @@ Expected output (values depend on your current git branch):
 
 ```
   team            dsci
-  project         examplechurn
-  branch (raw)    os_experimental
-  branch (slug)   os-experimental
+  project         gcpdemo
+  branch (raw)    test
+  branch (slug)   test
   git_state       dev
-  gcp_project     gcp-gap-demo-dev
-  region          us-central1
-  namespace       dsci-examplechurn-os-experimental
-  gcs_bucket      dsci-examplechurn
-  gcs_prefix      gs://dsci-examplechurn/os-experimental/
-  bq_dataset      dsci_examplechurn_os_experimen
-  feature_store   dsci-examplechurn-os-experimental-fs
+  gcp_project     prj-0n-dta-pt-ai-sandbox
+  region          us-east4
+  namespace       dsci-gcpdemo-test
+  gcs_bucket      prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo
+  gcs_prefix      gs://prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo/test/
+  bq_dataset      dsci_gcpdemo_test
 ```
 
 Key concepts:
@@ -227,7 +246,7 @@ Key concepts:
 - **git_state**: `dev` for any feature branch, `staging` for `main`, `prod` for `v*` tags
 - **namespace**: The canonical token used in ALL GCP resource names
 - **bq_dataset**: BQ-safe name (underscores, max 30 chars)
-- **gcs_prefix**: Branch-isolated path within a shared team-project bucket
+- **gcs_prefix**: Branch-isolated path within a shared project bucket
 
 Use `--json` for machine-readable output, or `--branch <name>` to inspect a
 different branch without checking it out.
@@ -240,7 +259,7 @@ different branch without checking it out.
 uv run pytest
 ```
 
-Expected: `436 passed`. All tests run without GCP access -- they use mocks and
+Expected: `451+ passed`. All tests run without GCP access -- they use mocks and
 DuckDB stubs.
 
 To run a specific test file:
@@ -286,11 +305,11 @@ via the pipeline LocalRunner recursively against DuckDB).
 uv run gml run churn_prediction --local --run-date 2024-01-01
 ```
 
-All 6 steps succeed: ingest → transform → write features → train (real sklearn
-model on seed data) → evaluate (AUC=1.0, F1=1.0 on small seed set — gate 0.78
-passes) → deploy (stub).
+All 6 steps succeed: ingest -> transform -> write features -> train (real sklearn
+model on seed data) -> evaluate (AUC=1.0, F1=1.0 on small seed set -- gate 0.78
+passes) -> deploy (stub).
 
-> **Note on `--run-date`**: The seed data covers Oct–Dec 2023. The pipeline's
+> **Note on `--run-date`**: The seed data covers Oct-Dec 2023. The pipeline's
 > BigQuery query uses a 90-day lookback from `run_date`. With `2024-01-01`, all
 > seed rows are captured. Without `--run-date`, it defaults to today and returns
 > 0 rows.
@@ -308,10 +327,17 @@ uv run gml run sales_analytics --local --run-date 2026-03-01
 ## 8. GCP Bootstrap (One-Time)
 
 The bootstrap script enables required GCP APIs and creates the Artifact Registry
-repository. Service accounts and IAM are managed by Terraform.
+repository. Service accounts and IAM are managed separately (either by Terraform
+or pre-existing in your enterprise environment).
 
 ```bash
-./scripts/bootstrap.sh --project YOUR_DEV_PROJECT
+./scripts/bootstrap.sh --project YOUR_PROJECT_ID --region YOUR_REGION
+```
+
+Example with the current project:
+
+```bash
+./scripts/bootstrap.sh --project prj-0n-dta-pt-ai-sandbox --region us-east4
 ```
 
 This enables:
@@ -329,49 +355,58 @@ This enables:
 | `compute.googleapis.com` | Required by Composer 3 (GKE Autopilot) |
 
 The script also creates the Artifact Registry Docker repository
-(`{team}-{project}` from `framework.yaml`).
+(`{team}-{project}` from `framework.yaml`, e.g., `dsci-gcpdemo`).
 
 ---
 
 ## 9. Terraform -- Provision Infrastructure
 
-Terraform provisions all shared infrastructure: Composer 3, Artifact Registry,
-GCS bucket, IAM service accounts, and optionally WIF.
+Terraform provisions shared infrastructure. There are two deployment scenarios
+depending on your environment.
+
+### Scenario A: Greenfield (You Own the Project)
+
+Terraform creates everything: Composer 3, Artifact Registry, GCS bucket, IAM
+service accounts, and optionally WIF. This is the full-control path.
+
+**All 4 modules are used**: `storage`, `artifact_registry`, `iam`, `composer`.
+
+See the `staging` and `prod` environment configs for examples of this approach.
+
+### Scenario B: Enterprise / Shared Environment
+
+In enterprise setups, some resources are pre-existing and managed outside your
+control (e.g., shared Composer environments, pre-provisioned service accounts).
+Terraform only manages what you own.
+
+This is the current DEV setup for `prj-0n-dta-pt-ai-sandbox`:
+- **Pre-existing**: Composer env (`mlopshousingpoc`), Pipeline SA, Composer SA
+- **TF-managed**: GCS bucket, Artifact Registry repo
+- **Skipped modules**: `iam`, `composer` (commented out in `terraform/envs/dev/main.tf`)
 
 ### 9a. Configure variables
 
 Edit `terraform/envs/dev/terraform.tfvars`:
 
 ```hcl
-project_id   = "YOUR_DEV_PROJECT"       # e.g. gcp-gap-demo-dev
-region       = "us-central1"
+project_id   = "prj-0n-dta-pt-ai-sandbox"
+region       = "us-east4"
 team         = "dsci"                    # must match framework.yaml
-project_name = "examplechurn"            # must match framework.yaml
+project_name = "gcpdemo"                 # must match framework.yaml
 environment  = "dev"
-github_repo  = ""                        # e.g. "your-org/your-repo" for CI/CD WIF
 ```
 
 ### 9b. (Optional) Configure remote state backend
 
-The dev environment is configured to use a GCS backend for Terraform state. If
-this is a fresh setup, create the state bucket first:
+For persistent state, use a GCS backend. Create the bucket first:
 
 ```bash
-gsutil mb -p YOUR_DEV_PROJECT -l us-central1 gs://YOUR-PROJECT-terraform-state/
+gsutil mb -p YOUR_PROJECT_ID -l YOUR_REGION gs://YOUR-PROJECT-terraform-state/
 gsutil versioning set on gs://YOUR-PROJECT-terraform-state/
 ```
 
-Then update `terraform/envs/dev/main.tf`:
-
-```hcl
-backend "gcs" {
-  bucket = "YOUR-PROJECT-terraform-state"
-  prefix = "dev"
-}
-```
-
-For local-only demos, you can switch to a local backend by commenting out the
-GCS backend block.
+Then update the `backend "gcs"` block in `terraform/envs/dev/main.tf` to point
+to your state bucket. For local-only demos, you can use a local backend instead.
 
 ### 9c. Initialize and apply
 
@@ -384,23 +419,22 @@ terraform init
 # Preview what will be created
 terraform plan
 
-# Create all resources (takes 25-45 min on first apply due to Composer 3)
+# Create resources
 terraform apply
 ```
 
-### What Terraform creates
+### What Terraform creates (varies by scenario)
 
-| Resource | Details |
-|----------|---------|
-| **Composer SA** | `{team}-{project}-{env}-composer@...` with `composer.worker`, `bigquery.dataEditor`, `bigquery.user`, `storage.objectAdmin`, `aiplatform.user` |
-| **Pipeline SA** | `{team}-{project}-{env}-pipeline@...` with `aiplatform.user`, `bigquery.dataEditor`, `bigquery.user`, `storage.objectAdmin`, `artifactregistry.reader` |
-| **SA impersonation** | Composer SA can act as Pipeline SA (`iam.serviceAccountUser`) |
-| **Cloud Composer 3** | Environment sized per `ENVIRONMENT_SIZE_SMALL/MEDIUM` |
-| **Artifact Registry** | Docker repository for container images |
-| **GCS bucket** | Pipeline artifacts, models, compiled YAMLs (versioning enabled) |
-| **WIF** (optional) | GitHub Actions OIDC pool + provider |
+| Resource | Greenfield | Enterprise |
+|----------|-----------|-----------|
+| **GCS bucket** | `{project_id}-{team}-{project}` (versioning enabled) | Same |
+| **Artifact Registry** | `{team}-{project}` Docker repo | Same |
+| **Composer SA** | `{team}-{project}-{env}-composer@...` | Pre-existing (skipped) |
+| **Pipeline SA** | `{team}-{project}-{env}-pipeline@...` | Pre-existing (skipped) |
+| **Cloud Composer 3** | Sized per env (SMALL/MEDIUM) | Pre-existing (skipped) |
+| **WIF** (optional) | GitHub Actions OIDC pool + provider | N/A |
 
-### Known issue: IAM race condition
+### Known issue: IAM race condition (greenfield only)
 
 The first `terraform apply` may fail with:
 
@@ -415,37 +449,70 @@ idempotent and only the Composer resource will retry.
 
 ## 10. Post-Terraform Configuration
 
-After Terraform completes, you need to update `framework.yaml` with the outputs.
+After infrastructure is provisioned (or if using pre-existing resources), update
+`framework.yaml` with the correct values.
 
 ### 10a. Get the Composer DAGs bucket path
+
+**If Terraform created Composer:**
 
 ```bash
 cd terraform/envs/dev
 terraform output composer_dags_path
-# Example output: gs://us-central1-dsci-examplechu-8f740abc-bucket/dags
 ```
 
-### 10b. Update framework.yaml
-
-```yaml
-gcp:
-  composer_dags_path:
-    dev: "gs://us-central1-dsci-examplechu-8f740abc-bucket/dags"
-```
-
-This path is where `gml deploy` uploads compiled DAG files.
-
-### 10c. Verify other outputs (optional)
+**If using a pre-existing Composer environment:**
 
 ```bash
-terraform output artifact_registry_url
-terraform output bucket_name
-terraform output composer_service_account
+gcloud composer environments describe YOUR_COMPOSER_ENV_NAME \
+  --location YOUR_REGION \
+  --format='value(config.dagGcsPrefix)'
+```
+
+Example for the current setup:
+
+```bash
+gcloud composer environments describe mlopshousingpoc \
+  --location us-east4 \
+  --format='value(config.dagGcsPrefix)'
+# Output: gs://us-east4-mlopshousingpoc-030c6745-bucket/dags
+```
+
+### 10b. Get the Pipeline service account email
+
+**If Terraform created SAs:**
+
+```bash
 terraform output pipeline_service_account
 ```
 
-These are informational -- the framework resolves them automatically from
-`framework.yaml` + git branch.
+**If using pre-existing SAs:**
+
+```bash
+gcloud iam service-accounts list --project=YOUR_PROJECT_ID \
+  --filter="displayName~pipeline OR displayName~vertex" \
+  --format="table(email,displayName)"
+```
+
+### 10c. Update framework.yaml
+
+Fill in all resolved values:
+
+```yaml
+gcp:
+  service_account_email: gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
+  composer_environment_name: mlopshousingpoc
+  composer_dags_path:
+    dev: "gs://us-east4-mlopshousingpoc-030c6745-bucket/dags"
+```
+
+### 10d. Configure Docker auth
+
+```bash
+gcloud auth configure-docker us-east4-docker.pkg.dev
+```
+
+Replace `us-east4` with your region.
 
 ---
 
@@ -459,14 +526,14 @@ directories that require Docker images. All KFP components use the
 ### 11a. Set environment variables
 
 ```bash
-export AR_HOST=us-central1-docker.pkg.dev
-export GCP_PROJECT=YOUR_DEV_PROJECT                     # e.g. gcp-gap-demo-dev
-export AR_REPO=dsci-examplechurn                        # = {team}-{project} from framework.yaml
+export AR_HOST=us-east4-docker.pkg.dev
+export GCP_PROJECT=prj-0n-dta-pt-ai-sandbox
+export AR_REPO=dsci-gcpdemo                                    # = {team}-{project} from framework.yaml
 export BRANCH_SHA=$(git rev-parse --abbrev-ref HEAD | tr '[:upper:]/' '[:lower:]-')-$(git rev-parse --short HEAD)
 ```
 
-The `BRANCH_SHA` variable (e.g., `os-experimental-7cee1bb`) is the tag the
-compiler embeds in pipeline YAMLs. It **must** match the pushed image tag.
+The `BRANCH_SHA` variable (e.g., `test-a88424d`) is the tag the compiler embeds
+in pipeline YAMLs. It **must** match the pushed image tag.
 
 ### 11b. Build and push all images
 
@@ -479,15 +546,15 @@ export IMAGE_TAG=${BRANCH_SHA}
 ```
 
 Build order:
-1. **base-python** — `python:3.11-slim` + build tools (foundation for all images)
-2. **base-ml** — + ML libs (sklearn, xgboost, lightgbm) — base for trainer images
-3. **component-base** — + GCP SDKs (bigquery, storage, aiplatform) — base for KFP components
-4. **trainer images** — auto-generated per `pipelines/*/trainer/` (train.py + requirements.txt)
+1. **base-python** -- `python:3.11-slim` + build tools (foundation for all images)
+2. **base-ml** -- + ML libs (sklearn, xgboost, lightgbm) -- base for trainer images
+3. **component-base** -- + GCP SDKs (bigquery, storage, aiplatform) -- base for KFP components
+4. **trainer images** -- auto-generated per `pipelines/*/trainer/` (train.py + requirements.txt)
 
-All images are tagged with `IMAGE_TAG` (e.g., `os-experimental-7cee1bb`).
+All images are tagged with `IMAGE_TAG` (e.g., `test-a88424d`).
 
 Without `--push`, the script builds locally only. Without AR env vars, images
-are tagged locally (e.g., `base-python:os-experimental-7cee1bb`).
+are tagged locally (e.g., `base-python:test-a88424d`).
 
 ### 11c. Verify images in Artifact Registry
 
@@ -501,11 +568,11 @@ Expected:
 
 ```
 IMAGE                                    TAGS
-.../base-python                          os-experimental-7cee1bb
-.../base-ml                              os-experimental-7cee1bb
-.../component-base                       os-experimental-7cee1bb
-.../churn-prediction-trainer             os-experimental-7cee1bb
-.../recommendation-engine-trainer        os-experimental-7cee1bb
+.../base-python                          test-a88424d
+.../base-ml                              test-a88424d
+.../component-base                       test-a88424d
+.../churn-prediction-trainer             test-a88424d
+.../recommendation-engine-trainer        test-a88424d
 ```
 
 ---
@@ -540,25 +607,26 @@ It auto-detects all seed files:
 
 ```bash
 BQ_DATASET=$(uv run gml context show --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['bq_dataset'])")
+GCP_PROJECT=$(uv run gml context show --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['gcp_project'])")
+BQ_LOCATION=$(uv run gml context show --json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['region'])")
 
 # churn_prediction
-bq load --source_format=CSV --autodetect --replace \
+bq load --project_id=${GCP_PROJECT} --location=${BQ_LOCATION} \
+  --source_format=CSV --autodetect --replace \
   ${BQ_DATASET}.raw_user_events \
   pipelines/churn_prediction/seeds/raw_user_events.csv
 
 # sales_analytics
-bq load --source_format=CSV --autodetect --replace \
-  ${BQ_DATASET}.raw_orders \
-  pipelines/sales_analytics/seeds/raw_orders.csv
-bq load --source_format=CSV --autodetect --replace \
-  ${BQ_DATASET}.raw_inventory \
-  pipelines/sales_analytics/seeds/raw_inventory.csv
-bq load --source_format=CSV --autodetect --replace \
-  ${BQ_DATASET}.raw_returns \
-  pipelines/sales_analytics/seeds/raw_returns.csv
+for table in raw_orders raw_inventory raw_returns; do
+  bq load --project_id=${GCP_PROJECT} --location=${BQ_LOCATION} \
+    --source_format=CSV --autodetect --replace \
+    ${BQ_DATASET}.${table} \
+    pipelines/sales_analytics/seeds/${table}.csv
+done
 
 # recommendation_engine
-bq load --source_format=CSV --autodetect --replace \
+bq load --project_id=${GCP_PROJECT} --location=${BQ_LOCATION} \
+  --source_format=CSV --autodetect --replace \
   ${BQ_DATASET}.raw_interactions \
   pipelines/recommendation_engine/seeds/raw_interactions.csv
 ```
@@ -566,7 +634,7 @@ bq load --source_format=CSV --autodetect --replace \
 ### 12c. Verify seed data
 
 ```bash
-bq query --use_legacy_sql=false \
+bq query --project_id=${GCP_PROJECT} --use_legacy_sql=false \
   "SELECT table_id, row_count FROM \`${BQ_DATASET}.__TABLES__\` ORDER BY table_id"
 ```
 
@@ -599,7 +667,7 @@ uv run gml compile recommendation_engine
 | sales_analytics | `dags/{ns}__sales_analytics.py` (Airflow DAG with BigQueryInsertJobOperator tasks) |
 | recommendation_engine | `compiled_pipelines/reco_features.yaml`, `compiled_pipelines/reco_training.yaml` (2 KFP v2), `dags/{ns}__recommendation_engine.py` (Airflow DAG with 2 RunPipelineJobOperators) |
 
-Where `{ns}` is the BQ namespace, e.g., `dsci_examplechurn_os_experimen`.
+Where `{ns}` is the BQ namespace, e.g., `dsci_gcpdemo_test`.
 
 ### 13c. Verify compilation
 
@@ -737,14 +805,15 @@ Total: ~25-30 minutes (dominated by endpoint provisioning in deploy-model).
 The CLI prints a Vertex AI console URL. You can also check via gcloud:
 
 ```bash
-gcloud ai pipeline-jobs list --region=us-central1 --project=YOUR_PROJECT \
+gcloud ai pipeline-jobs list --region=us-east4 --project=prj-0n-dta-pt-ai-sandbox \
   --filter="displayName~churn" --format="table(name,state,createTime)"
 ```
 
 ### 16d. Re-runs and caching
 
-Vertex AI caches step outputs. On re-submission with the same parameters,
-completed steps are SKIPPED. To force a full re-run:
+The framework compiles with `enable_caching=False` by default (via
+RunPipelineJobOperator), preventing stale cache hits after teardown or data
+changes. To explicitly control caching on direct Vertex AI submission:
 
 ```bash
 uv run gml run churn_prediction --vertex --sync --run-date 2024-01-01 --no-cache
@@ -770,6 +839,8 @@ The compiled DAG contains a single `RunPipelineJobOperator` that:
 - Points to the compiled KFP YAML on GCS
 - Passes `parameter_values={"run_date": "{{ ds }}"}` (Airflow templates the logical date)
 - Runs the Vertex pipeline as the Pipeline SA (which has BQ/GCS/AR permissions)
+- Uses `deferrable=True` to free the Airflow worker slot while the Vertex pipeline runs
+- Disables caching (`enable_caching=False`) to prevent stale results
 
 ---
 
@@ -817,20 +888,20 @@ SHA, `gml deploy` auto-retags them.
 ### 19a. BigQuery tables
 
 ```bash
-BQ_DATASET=dsci_examplechurn_os_experimen
+BQ_DATASET=dsci_gcpdemo_test
 
 # sales_analytics
-bq query --use_legacy_sql=false \
+bq query --project_id=prj-0n-dta-pt-ai-sandbox --use_legacy_sql=false \
   "SELECT * FROM \`${BQ_DATASET}.daily_report\` ORDER BY category"
 
 # churn_prediction
-bq query --use_legacy_sql=false \
+bq query --project_id=prj-0n-dta-pt-ai-sandbox --use_legacy_sql=false \
   "SELECT table_id, row_count FROM \`${BQ_DATASET}.__TABLES__\`
    WHERE table_id IN ('churn_training_raw','churn_features_engineered')
    ORDER BY table_id"
 
 # recommendation_engine
-bq query --use_legacy_sql=false \
+bq query --project_id=prj-0n-dta-pt-ai-sandbox --use_legacy_sql=false \
   "SELECT table_id, row_count FROM \`${BQ_DATASET}.__TABLES__\`
    WHERE table_id LIKE 'reco_%'
    ORDER BY table_id"
@@ -839,14 +910,14 @@ bq query --use_legacy_sql=false \
 ### 19b. Model in GCS
 
 ```bash
-gsutil ls gs://dsci-examplechurn/os-experimental/models/churn_prediction/latest/
+gsutil ls gs://prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo/test/models/churn_prediction/latest/
 # Expected: model.pkl
 ```
 
 ### 19c. Vertex AI Endpoint (if deploy-model ran)
 
 ```bash
-gcloud ai endpoints list --region=us-central1 --project=YOUR_PROJECT
+gcloud ai endpoints list --region=us-east4 --project=prj-0n-dta-pt-ai-sandbox
 ```
 
 **Important**: Deployed endpoints incur per-hour charges. See [Teardown](#20-teardown)
@@ -857,8 +928,8 @@ for cleanup.
 The Airflow UI URL is printed by `gml run --composer`. You can also find it:
 
 ```bash
-gcloud composer environments describe dsci-examplechurn-dev \
-  --location us-central1 \
+gcloud composer environments describe mlopshousingpoc \
+  --location us-east4 \
   --format='value(config.airflowUri)'
 ```
 
@@ -872,10 +943,10 @@ gcloud composer environments describe dsci-examplechurn-dev \
 
 ```bash
 # Preview what will be deleted
-uv run gml teardown --branch os_experimental --dry-run
+uv run gml teardown --branch test --dry-run
 
 # Delete (requires confirmation)
-uv run gml teardown --branch os_experimental --confirm
+uv run gml teardown --branch test --confirm
 ```
 
 This deletes:
@@ -893,18 +964,18 @@ Deployed endpoints incur per-hour charges for provisioned VMs:
 
 ```bash
 # List endpoints
-gcloud ai endpoints list --region=us-central1 --project=YOUR_PROJECT
+gcloud ai endpoints list --region=us-east4 --project=prj-0n-dta-pt-ai-sandbox
 
 # Undeploy model from endpoint
 gcloud ai endpoints undeploy-model ENDPOINT_ID \
   --deployed-model-id=DEPLOYED_MODEL_ID \
-  --region=us-central1 \
-  --project=YOUR_PROJECT
+  --region=us-east4 \
+  --project=prj-0n-dta-pt-ai-sandbox
 
 # Or delete the endpoint entirely
 gcloud ai endpoints delete ENDPOINT_ID \
-  --region=us-central1 \
-  --project=YOUR_PROJECT
+  --region=us-east4 \
+  --project=prj-0n-dta-pt-ai-sandbox
 ```
 
 ### 20c. Destroy Terraform infrastructure
@@ -916,7 +987,8 @@ cd terraform/envs/dev
 terraform destroy
 ```
 
-This removes Composer, Artifact Registry, GCS bucket, and IAM resources.
+This removes the Artifact Registry and GCS bucket (in the enterprise scenario).
+In the greenfield scenario, it also removes Composer, IAM, and WIF resources.
 Composer destruction takes 10-15 minutes.
 
 ---
@@ -955,7 +1027,7 @@ All run commands accept `--run-date YYYY-MM-DD` (defaults to today).
 python:3.11-slim                              (upstream, ~150 MB)
   +-- base-python:{branch}-{sha}              (+ build-essential, curl)
         |
-        +-- component-base:{branch}-{sha}     (+ GCP SDKs, pyarrow, pandas, db-dtypes)
+        +-- component-base:{branch}-{sha}     (+ GCP SDKs, pyarrow, pandas, db-dtypes, kfp)
         |     Used by: bigquery-extract, bq-transform, write-features,
         |              evaluate-model, deploy-model (KFP components)
         |
@@ -984,19 +1056,19 @@ Why two branches from base-python?
 
 All GCP resources are derived from `{team}-{project}-{branch}`:
 
-| Resource | Pattern | Example |
-|----------|---------|---------|
-| Namespace | `{team}-{project}-{branch}` | `dsci-examplechurn-os-experimental` |
-| BQ dataset | `{ns_bq}` (underscored, 30 chars) | `dsci_examplechurn_os_experimen` |
-| GCS bucket | `{team}-{project}` (shared) | `dsci-examplechurn` |
-| GCS prefix | `gs://{bucket}/{branch}/` | `gs://dsci-examplechurn/os-experimental/` |
-| AR repo | `{team}-{project}` | `dsci-examplechurn` |
-| Image tag | `{branch}-{sha}` | `os-experimental-7cee1bb` |
-| DAG ID | `{ns_bq}__{pipeline}` | `dsci_examplechurn_os_experimen__sales_analytics` |
-| Vertex experiment | `{ns}-{pipeline}-exp` | `dsci-examplechurn-os-experimental-churn-prediction-exp` |
-| Composer env | `{team}-{project}-{env}` | `dsci-examplechurn-dev` |
-| Composer SA | `{team}-{project}-{env}-composer` | `dsci-examplechurn-dev-composer@...` |
-| Pipeline SA | `{team}-{project}-{env}-pipeline` | `dsci-examplechurn-dev-pipeline@...` |
+| Resource | Pattern | Example (branch=test) |
+|----------|---------|-----------------------|
+| Namespace | `{team}-{project}-{branch}` | `dsci-gcpdemo-test` |
+| BQ dataset | `{ns_bq}` (underscored, max 30 chars) | `dsci_gcpdemo_test` |
+| GCS bucket | `{project_id}-{team}-{project}` | `prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo` |
+| GCS prefix | `gs://{bucket}/{branch}/` | `gs://prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo/test/` |
+| AR repo | `{team}-{project}` | `dsci-gcpdemo` |
+| Image tag | `{branch}-{sha}` | `test-a88424d` |
+| DAG ID | `{ns_bq}__{pipeline}` | `dsci_gcpdemo_test__sales_analytics` |
+| Vertex experiment | `{ns}-{pipeline}-exp` | `dsci-gcpdemo-test-churn-prediction-exp` |
+
+Note: GCS bucket includes the GCP `project_id` as a prefix for global uniqueness.
+AR repos are project-scoped and don't need the project_id prefix.
 
 ---
 
@@ -1009,7 +1081,7 @@ results (0 rows from BQ queries with date filters).
 |----------|----------------|-------------------|
 | churn_prediction | Oct 15 - Dec 23, 2023 | `2024-01-01` (90-day lookback covers seed dates) |
 | sales_analytics | Around 2026-03-01 | `2026-03-01` |
-| recommendation_engine | Various | `2026-03-01` |
+| recommendation_engine | Around 2026-03-01 | `2026-03-01` |
 
 If `--run-date` is omitted, the framework defaults to today's date. For
 production use this is correct (data is current); for demo/testing with seed
@@ -1032,8 +1104,8 @@ window doesn't cover the seed data dates, 0 rows are returned. See
 
 ### Terraform IAM race condition
 
-First `terraform apply` may fail with a Composer IAM error. Re-run
-`terraform apply` -- it's idempotent.
+First `terraform apply` may fail with a Composer IAM error (greenfield scenario
+only). Re-run `terraform apply` -- it's idempotent.
 
 ### Composer cold-start latency
 
@@ -1081,7 +1153,7 @@ GCP infrastructure issue, not a code bug. Symptoms:
 - Zombie job detection messages in Airflow logs
 - Downstream tasks stuck in "None" state
 
-**Workaround**: Wait 5–15 minutes for the worker pod to restart, then
+**Workaround**: Wait 5-15 minutes for the worker pod to restart, then
 re-trigger. The issue self-heals.
 
 ### DEV DAGs have schedule=None
@@ -1089,3 +1161,9 @@ re-trigger. The issue self-heals.
 By design, DEV-environment DAGs are compiled with `schedule=None` (manual trigger
 only). This prevents auto-scheduled runs from consuming stale seed data.
 STAGING and PROD DAGs retain the declared schedule.
+
+### Terraform state bucket hardcoded
+
+The GCS backend bucket in `terraform/envs/dev/main.tf` may reference an old
+project's state bucket. Update the `backend "gcs"` block to point to your own
+state bucket, or switch to a local backend for demos.

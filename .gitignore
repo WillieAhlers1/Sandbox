@@ -114,6 +114,23 @@ dags/*.py
 CLAUDE.md
 
 # ========================
+# Task Tracking
+# ========================
+docs/tasks/
+
+# ========================
+# Terraform
+# ========================
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# ========================
+# Docker (generated)
+# ========================
+Dockerfile.generated
+
+# ========================
 # Local Development Artifacts
 # ========================
 local_output/
@@ -122,3 +139,9 @@ tmp/
 *.parquet
 *.csv
 !pipelines/*/seeds/*.csv
+
+
+#=================
+# Framework
+#=================
+framework.yaml
