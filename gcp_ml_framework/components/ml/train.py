@@ -191,7 +191,12 @@ class TrainModel(BaseComponent):
 
         model = SkPipeline([
             ("scaler", StandardScaler()),
-            ("clf", LogisticRegression(max_iter=1000, random_state=42)),
+            ("clf", LogisticRegression(
+                C=float(self.hyperparameters.get("C", 1.0)),
+                max_iter=int(self.hyperparameters.get("max_iter", 1000)),
+                solver=self.hyperparameters.get("solver", "lbfgs"),
+                random_state=42,
+            )),
         ])
         model.fit(X, y)
         print(f"[local] TrainModel: trained on {len(df)} rows, {len(X.columns)} features")

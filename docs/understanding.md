@@ -12,7 +12,7 @@ The key idea: your git branch determines your GCP namespace. Every resource — 
 
 **Codebase stats:**
 - 51 Python source files, ~4,700 lines of framework code
-- 19 test files, ~3,500 lines, 436 tests (all passing)
+- 19 test files, ~3,500 lines, 451+ tests (all passing)
 - 3 working demo pipelines with seed data
 - Full CLI with 6 command groups
 - 4 Terraform modules for infrastructure
@@ -213,23 +213,23 @@ GCP ML Framework — context for branch 'feature/user-embeddings'
 
                Identity
   team             dsci
-  project          examplechurn
+  project          gcpdemo
   branch (raw)     feature/user-embeddings
   branch (slug)    feature-user-embeddings
   git_state        DEV
 
                 GCP
-  project         gcp-gap-demo-dev
-  region          us-central1
+  project         prj-0n-dta-pt-ai-sandbox
+  region          us-east4
 
                                  Resource Names
-  namespace                    dsci-examplechurn-feature-user-embeddings
-  gcs_bucket                   dsci-examplechurn
-  gcs_prefix                   gs://dsci-examplechurn/feature-user-embeddings/
-  bq_dataset                   dsci_examplechurn_feature_user_embe
-  feature_store_id             dsci_examplechurn
-  dag_id pattern               dsci_examplechurn_feature_user_embe__{pipeline}
-  secret_prefix                dsci-examplechurn-feature-user-embeddings
+  namespace                    dsci-gcpdemo-feature-user-embeddings
+  gcs_bucket                   prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo
+  gcs_prefix                   gs://prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo/feature-user-embeddings/
+  bq_dataset                   dsci_gcpdemo_feature_user_embed
+  feature_store_id             dsci_gcpdemo
+  dag_id pattern               dsci_gcpdemo_feature_user_embed__{pipeline}
+  secret_prefix                dsci-gcpdemo-feature-user-embeddings
 ```
 
 ### `gml run` — Execute a Pipeline
@@ -471,19 +471,19 @@ Your git branch determines everything:
 When you're on `feature/user-embeddings`:
 
 ```
-namespace:   dsci-examplechurn-feature-user-embeddings
-GCS:         gs://dsci-examplechurn/feature-user-embeddings/
-BigQuery:    dsci_examplechurn_feature_user_embe
-Vertex:      dsci-examplechurn-feature-user-embeddings-churn_prediction
-DAG ID:      dsci_examplechurn_feature_user_embe__churn_prediction
+namespace:   dsci-gcpdemo-feature-user-embeddings
+GCS:         gs://prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo/feature-user-embeddings/
+BigQuery:    dsci_gcpdemo_feature_user_embed
+Vertex:      dsci-gcpdemo-feature-user-embeddings-churn_prediction
+DAG ID:      dsci_gcpdemo_feature_user_embed__churn_prediction
 ```
 
 When you merge to `main`:
 
 ```
-namespace:   dsci-examplechurn-main
-GCS:         gs://dsci-examplechurn/main/
-BigQuery:    dsci_examplechurn_main
+namespace:   dsci-gcpdemo-main
+GCS:         gs://prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo/main/
+BigQuery:    dsci_gcpdemo_main
 ```
 
 No code changes needed. The framework reads your git branch and resolves everything automatically via `NamingConvention`.
@@ -501,17 +501,19 @@ framework defaults -> framework.yaml -> pipelines/{name}/config.yaml -> env vars
 **`framework.yaml`** (project root — single source of truth for team identity):
 ```yaml
 team: dsci
-project: examplechurn
+project: gcpdemo
 gcp:
-  dev_project_id: gcp-gap-demo-dev
-  staging_project_id: gcp-gap-demo-staging
-  prod_project_id: gcp-gap-demo-prod
-  region: us-central1
-  artifact_registry_host: us-central1-docker.pkg.dev
+  dev_project_id: prj-0n-dta-pt-ai-sandbox
+  staging_project_id: ""
+  prod_project_id: ""
+  region: us-east4
+  service_account_email: gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
+  composer_environment_name: mlopshousingpoc
   composer_dags_path:
-    dev: ""       # fill in after Terraform provisions Composer
+    dev: "gs://us-east4-mlopshousingpoc-030c6745-bucket/dags"
     staging: ""
     prod: ""
+  # artifact_registry_host auto-derived from region -> us-east4-docker.pkg.dev
 ```
 
 **Environment variable overrides** (prefix `GML_`, nested via `__`):
@@ -760,7 +762,7 @@ The fix for the local runner should mirror the KFP compiler's approach: WriteFea
 
 ---
 
-## GCP Deployment Status (os_experimental branch)
+## GCP Deployment Status (test branch — prj-0n-dta-pt-ai-sandbox)
 
 ### All 3 Pipelines Verified on GCP
 
@@ -773,16 +775,19 @@ The fix for the local runner should mirror the KFP compiler's approach: WriteFea
 ### Artifact Registry
 - `base-python`, `base-ml`, `component-base` — platform base images
 - `churn-prediction-trainer`, `recommendation-engine-trainer` — pipeline trainer images
-- All tagged `{branch}-{sha}` (e.g., `os-experimental-a7dda59`)
+- All tagged `{branch}-{sha}` (e.g., `test-a88424d`)
 - `gml deploy` auto-retags images when commit SHA changes
 
 ### BigQuery
-- Dataset: `dsci_examplechurn_os_experimen` (truncated per 30-char BQ limit)
+- Dataset: `dsci_gcpdemo_test`
 - Seed tables: `raw_user_events`, `raw_orders`, `raw_inventory`, `raw_returns`, `raw_interactions`
 - Generated tables: `churn_training_raw`, `churn_features_engineered`, `reco_user_item_features`, `reco_user_profiles`, `reco_training_data`, `reco_training_prepared`, `daily_report`, etc.
 
+### GCS
+- Prefix: `gs://prj-0n-dta-pt-ai-sandbox-dsci-gcpdemo/test/`
+
 ### Service Account
-Pipeline SA: `dsci-examplechurn-dev-pipeline@gcp-gap-demo-dev.iam.gserviceaccount.com`
+Pipeline SA: `gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com`
 
 ---
 

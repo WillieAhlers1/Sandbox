@@ -69,6 +69,7 @@ dag = (
             ),
         ),
         name="notify",
+        depends_on=["build_report"],
     )
     .build()
 )

@@ -39,9 +39,9 @@ The project ships with Terraform modules in `terraform/` that provision all shar
 ```bash
 # terraform/envs/dev/terraform.tfvars
 project_id   = "your-gcp-dev-project"
-region       = "us-central1"
+region       = "us-east4"
 team         = "dsci"
-project_name = "examplechurn"
+project_name = "gcpdemo"
 environment  = "dev"
 github_repo  = "your-org/your-repo"  # for WIF (leave empty to skip)
 ```
@@ -97,8 +97,8 @@ For each environment:
 - **Composer SA** (`{team}-{project}-{env}-composer`) with `roles/composer.worker`, `roles/bigquery.dataEditor`, `roles/bigquery.user`, `roles/storage.objectAdmin`
 - **Pipeline SA** (`{team}-{project}-{env}-pipeline`) with `roles/aiplatform.user`, `roles/bigquery.dataEditor`, `roles/bigquery.user`, `roles/storage.objectAdmin`, `roles/artifactregistry.reader`
 - Composer SA can impersonate Pipeline SA (`roles/iam.serviceAccountUser`)
-- **GCS bucket** (`{project_id}-{team}-{project}-{env}`) with versioning
-- **Artifact Registry** Docker repo (`{team}-{project}-{env}`)
+- **GCS bucket** (`{project_id}-{team}-{project}`) with versioning
+- **Artifact Registry** Docker repo (`{team}-{project}`)
 - **Cloud Composer 3** environment with workloads_config
 - **(Optional)** Workload Identity Federation pool + provider for GitHub Actions
 
@@ -142,20 +142,24 @@ done
 One bucket per team+project. Branches share the bucket via path prefixes.
 
 ```bash
+TEAM="dsci"
+PROJECT_NAME="gcpdemo"
 for PROJECT in your-gcp-dev your-gcp-staging your-gcp-prod; do
-  gsutil mb -p "${PROJECT}" -l us-central1 -c standard \
-    "gs://dsci-examplechurn-${PROJECT##*-}/"
-  gsutil versioning set on "gs://dsci-examplechurn-${PROJECT##*-}/"
+  BUCKET="${PROJECT}-${TEAM}-${PROJECT_NAME}"
+  gsutil mb -p "${PROJECT}" -l us-east4 -c standard "gs://${BUCKET}/"
+  gsutil versioning set on "gs://${BUCKET}/"
 done
 ```
 
 ### 4. Create Artifact Registry
 
 ```bash
+TEAM="dsci"
+PROJECT_NAME="gcpdemo"
 for PROJECT in your-gcp-dev your-gcp-staging your-gcp-prod; do
-  gcloud artifacts repositories create dsci-examplechurn \
+  gcloud artifacts repositories create "${TEAM}-${PROJECT_NAME}" \
     --repository-format=docker \
-    --location=us-central1 \
+    --location=us-east4 \
     --project="${PROJECT}"
 done
 ```
@@ -163,8 +167,10 @@ done
 ### 5. Create Service Accounts + IAM Roles
 
 ```bash
+TEAM="dsci"
+PROJECT_NAME="gcpdemo"
 for PROJECT in your-gcp-dev your-gcp-staging your-gcp-prod; do
-  SA_NAME="dsci-examplechurn-pipeline"
+  SA_NAME="${TEAM}-${PROJECT_NAME}-pipeline"
   SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 
   gcloud iam service-accounts create "${SA_NAME}" \
@@ -206,7 +212,7 @@ gcloud iam workload-identity-pools providers create-oidc github-actions-provider
   --project="${PROJECT}"
 
 PROJECT_NUMBER=$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')
-SA_EMAIL="dsci-examplechurn-pipeline@${PROJECT}.iam.gserviceaccount.com"
+SA_EMAIL="${TEAM}-${PROJECT_NAME}-pipeline@${PROJECT}.iam.gserviceaccount.com"
 
 gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
   --role="roles/iam.workloadIdentityUser" \
@@ -221,7 +227,7 @@ gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
 | `WIF_PROVIDER_DEV` | `projects/{NUMBER}/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider` |
 | `WIF_PROVIDER_STAGING` | Same pattern for staging project |
 | `WIF_PROVIDER_PROD` | Same pattern for prod project |
-| `SA_EMAIL_DEV` | `dsci-examplechurn-pipeline@your-gcp-dev.iam.gserviceaccount.com` |
+| `SA_EMAIL_DEV` | `{team}-{project}-pipeline@your-gcp-dev.iam.gserviceaccount.com` |
 | `SA_EMAIL_STAGING` | Same pattern for staging |
 | `SA_EMAIL_PROD` | Same pattern for prod |
 
@@ -239,10 +245,10 @@ Composer costs ~$300-500/month. The Terraform module handles this automatically.
 
 ```bash
 # Use GCP Console: Composer -> Create Environment -> Composer 3
-# Name: dsci-examplechurn-dev
-# Region: us-central1
+# Name: {team}-{project}-{env}  (e.g., dsci-gcpdemo-dev; or use a shared environment)
+# Region: us-east4
 # Environment size: ENVIRONMENT_SIZE_SMALL
-# Service account: dsci-examplechurn-dev-composer@project.iam.gserviceaccount.com
+# Service account: {team}-{project}-{env}-composer@project.iam.gserviceaccount.com
 ```
 
 After creation, note the DAGs folder GCS path and update `framework.yaml`.
@@ -255,11 +261,11 @@ Bigtable-backed online serving costs ~$470/node/month. Feature Store resources (
 
 ## Automated Bootstrap
 
-`scripts/bootstrap.sh` automates the manual steps (2-6):
+`scripts/bootstrap.sh` automates the manual steps (2-4):
 
 ```bash
-GITHUB_ORG=your-org GITHUB_REPO=your-repo \
-  ./scripts/bootstrap.sh --project your-gcp-dev --env dev
+./scripts/bootstrap.sh --project your-gcp-dev
+./scripts/bootstrap.sh --project your-gcp-dev --region us-east4
 ```
 
 ---

@@ -86,11 +86,18 @@ class TestComponentBaseDockerfile:
         for pkg in ["pyarrow", "pandas"]:
             assert pkg in content, f"component-base Dockerfile missing {pkg}"
 
-    def test_component_base_dockerfile_does_not_install_ml_packages(self):
-        """component-base should NOT include heavy ML libs (that's base-ml's job)."""
+    def test_component_base_dockerfile_does_not_install_heavy_ml_packages(self):
+        """component-base should NOT include heavy ML libs (that's base-ml's job).
+        Note: scikit-learn IS included because EvaluateModel always requires it,
+        and VPC SC environments block runtime pip install."""
         content = Path("docker/base/component-base/Dockerfile").read_text()
-        for pkg in ["scikit-learn", "xgboost", "lightgbm"]:
+        for pkg in ["xgboost", "lightgbm"]:
             assert pkg not in content, f"component-base should not include {pkg}"
+
+    def test_component_base_dockerfile_includes_sklearn(self):
+        """scikit-learn must be in component-base for EvaluateModel (VPC SC)."""
+        content = Path("docker/base/component-base/Dockerfile").read_text()
+        assert "scikit-learn" in content
 
 
 # ── BigQueryExtract ───────────────────────────────────────────────────────────

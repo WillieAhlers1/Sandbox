@@ -89,3 +89,39 @@ class TestMLContext:
         )
         ctx = MLContext.from_config(cfg)
         assert ctx.pipeline_service_account == "custom-sa@dev.iam.gserviceaccount.com"
+
+    # -- GCS bucket with project_id (Phase 1A) --
+
+    def test_gcs_bucket_includes_project_id(self, test_context):
+        """Context GCS bucket includes GCP project ID for global uniqueness."""
+        assert test_context.naming.gcs_bucket == "my-gcp-dev-test-myproj"
+
+    def test_gcs_prefix_includes_project_id(self, test_context):
+        """Context GCS prefix uses project-scoped bucket."""
+        assert test_context.gcs_prefix.startswith("gs://my-gcp-dev-test-myproj/")
+
+    # -- artifact_registry_host auto-derivation (Phase 1C) --
+
+    def test_artifact_registry_host_derived_from_region(self, test_context):
+        """Context AR host matches region-derived value."""
+        assert test_context.artifact_registry_host == f"{test_context.region}-docker.pkg.dev"
+
+    # -- composer_environment_name (Phase 3) --
+
+    def test_composer_environment_name_default_auto_derived(self, test_context):
+        """Without explicit config, composer_environment_name auto-derives from naming."""
+        expected = f"{test_context.naming.team}-{test_context.naming.project}-{test_context.git_state.value}"
+        assert test_context.composer_environment_name == expected
+
+    def test_composer_environment_name_explicit_override(self):
+        """Explicit composer_environment_name overrides auto-derivation."""
+        from gcp_ml_framework.config import FrameworkConfig, GCPConfig
+        cfg = FrameworkConfig(
+            team="dsci", project="gcpdemo", branch="test",
+            gcp=GCPConfig(
+                dev_project_id="proj", staging_project_id="stg", prod_project_id="prd",
+                composer_environment_name="mlopshousingpoc",
+            ),
+        )
+        ctx = MLContext.from_config(cfg)
+        assert ctx.composer_environment_name == "mlopshousingpoc"

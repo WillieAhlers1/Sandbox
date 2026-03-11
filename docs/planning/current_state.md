@@ -1,8 +1,8 @@
 # Current State Assessment
 
 > Critical evaluation of platform completion against `project_guideline.md` goals.
-> Date: 2026-03-06
-> Branch: `os_experimental`
+> Date: 2026-03-11
+> Branch: `test`
 > Evaluated by: Full codebase review (all 51 source files, 19 test files, 4 Terraform modules, 3 use cases, all docs)
 
 ---
@@ -19,8 +19,9 @@ The framework core, all three use cases, Terraform infrastructure, Feature Store
 | Phase 2: Three Use Cases + Docker + Local DAG Runner | **COMPLETE** | All 3 use cases work locally and compile cleanly |
 | Phase 3: Feature Store + Model Management | **COMPLETE** | v2 APIs, model versioning, experiment tracking |
 | Phase 4: Infrastructure (Terraform) | **COMPLETE** | All 4 modules, 3 env configs, validated and applied to dev |
-| Phase 5: Testing | **COMPLETE** | 436 passing, 0 failing |
+| Phase 5: Testing | **COMPLETE** | 451 passing, 0 failing |
 | Phase 6: CI/CD | **NOT STARTED** | No `.github/workflows/` directory exists |
+| **New Project Migration** | **IN PROGRESS** | Deploying to `prj-0n-dta-pt-ai-sandbox` (us-east4). Phases 0-5 done (infra + Docker + seed data + local validation). Phase 6 (GCP deploy) next. See `docs/tasks/todo.md`. |
 
 ---
 
@@ -82,8 +83,8 @@ The framework core, all three use cases, Terraform infrastructure, Feature Store
 - Successfully applied to `gcp-gap-demo-dev` — Composer 3 environment, AR repo, GCS bucket, IAM all provisioned
 
 ### Testing
-- 412 total tests (408 passing, 4 failing)
-- Comprehensive coverage: components (45), CLI (22), config/context/naming (45), DAG builder/compiler/tasks (67), pipeline builder/compiler (28), feature store/secrets/SQL (27), phase regression (112), integration E2E (24), component-base image (26)
+- 469 total tests (all passing)
+- Comprehensive coverage: components (45), CLI (22), config/context/naming (45+15), DAG builder/compiler/tasks (67+1), pipeline builder/compiler (28), feature store/secrets/SQL (27), phase regression (112), integration E2E (25), component-base image (26), composer runner (8)
 - All 3 use cases have E2E integration tests (compile + local run)
 - Generated DAG validation (parseable, no framework imports)
 
@@ -111,20 +112,9 @@ All 4 WriteFeatures data-flow tests now pass. 436 tests passing, 0 failing.
 
 Fixed in `gcp_ml_framework/dag/compiler.py`. Now generates valid `{{ ds_nodash }}` (double braces).
 
-### 4. `churn_prediction --local` Fails Due to Gate Threshold
+### ~~4. `churn_prediction --local` Fails Due to Gate Threshold~~ — RESOLVED
 
-`gml run churn_prediction --local` exits with error:
-```
-Gate failures: auc=0.5000 < 0.78
-```
-
-This is **by design** — `EvaluateModel` returns placeholder metrics (0.50) locally, and the pipeline has `gate={"auc": 0.78}`. The docs explain this validates gate configuration.
-
-However, this creates a poor first-time experience. A new developer cloning the repo and running `gml run churn_prediction --local` gets a failure with no immediately obvious explanation. The `sales_analytics` and `recommendation_engine` pipelines run successfully locally.
-
-**Possible mitigations** (not blocking):
-- Log a clear warning before failing: "Local mode uses placeholder metrics (0.50). Gate threshold 0.78 exceeds placeholder. This validates your gate config works."
-- Or: skip gate enforcement in local mode with a log message
+Previously failed with `auc=0.5000 < 0.78`. Now passes with `auc=1.0, f1=1.0` — `EvaluateModel` computes real sklearn metrics locally on the 10-row seed dataset (trivially learnable). All 3 pipelines run successfully locally.
 
 ### ~~5. Stale DAG Files from Previous Branch~~ — RESOLVED
 
@@ -188,7 +178,7 @@ Staging and prod environments haven't had `terraform init` run (expected — no 
 | DAGFactory | **Solid** | Auto-discovery, pipeline.py auto-wrapping |
 | BQQueryTask | **Solid** | Inline SQL + `sql_file`, template resolution |
 | EmailTask | **Solid** | Console output in local, EmailOperator in compiled DAG |
-| VertexPipelineTask | **Solid** | Accepts PipelineDefinition, compiles to CreatePipelineJobOperator |
+| VertexPipelineTask | **Solid** | Accepts PipelineDefinition, compiles to RunPipelineJobOperator |
 
 ### CLI
 
@@ -202,7 +192,7 @@ Staging and prod environments haven't had `terraform init` run (expected — no 
 | `gml compile` | **Works** | Single name + `--all` |
 | `gml deploy` | **Works** | Single name + `--all`, `--dry-run` |
 | `gml init project` | **Works** | Scaffolds framework.yaml, dirs |
-| `gml init pipeline` | **Works** | Creates pipeline template |
+| `gml init pipeline` | **Works** | Creates pipeline template; `--dag` for Composer DAG |
 | `gml teardown` | **Works** | DEV-only safety, `--confirm` |
 
 ### Infrastructure
@@ -213,7 +203,8 @@ Staging and prod environments haven't had `terraform init` run (expected — no 
 | Artifact Registry | **Works** | Docker repo |
 | IAM | **Works** | Composer SA + Pipeline SA + WIF |
 | Storage | **Works** | GCS bucket with versioning |
-| Dev env | **Applied** | Successfully provisioned on `gcp-gap-demo-dev` |
+| Dev env (original) | **Applied** | Provisioned on `gcp-gap-demo-dev` (us-central1) |
+| Dev env (new) | **Applied** | Provisioned on `prj-0n-dta-pt-ai-sandbox` (us-east4). Storage + AR only (shared Composer). |
 | Staging env | **Config only** | terraform.tfvars exists, not applied |
 | Prod env | **Config only** | terraform.tfvars exists, not applied |
 
@@ -225,8 +216,8 @@ Staging and prod environments haven't had `terraform init` run (expected — no 
 |--------|-------|
 | Python source files | 51 |
 | Lines of framework code | ~4,700 |
-| Test files | 19 |
-| Total tests | 436 (all passing) |
+| Test files | 20 |
+| Total tests | 469 (all passing) |
 | Test pass rate | 100% |
 | Use cases implemented | 3 of 3 |
 | CLI commands | 6 (all working) |
@@ -252,7 +243,7 @@ Staging and prod environments haven't had `terraform init` run (expected — no 
 
 ### Nice-to-Have (Polish)
 
-5. **Improve churn_prediction local run UX** — Either skip gate enforcement locally with a warning, or log a clearer message explaining why the gate failure is expected.
+5. ~~Improve churn_prediction local run UX~~ — RESOLVED (real sklearn metrics on seed data now pass gate)
 
 6. **Configure Terraform remote backend** — Add `backend "gcs"` configuration for state management across environments.
 
@@ -262,6 +253,6 @@ Staging and prod environments haven't had `terraform init` run (expected — no 
 
 ## Conclusion
 
-The platform is **~90-95% complete** against its stated goals. All three use cases are proven on GCP (Composer + Vertex AI), 436 tests pass with 100% pass rate, and the full dev lifecycle (compile → deploy → run) works end-to-end.
+The platform is **~90-95% complete** against its stated goals. All three use cases are proven on GCP (Composer + Vertex AI), 469 tests pass with 100% pass rate, and the full dev lifecycle (compile → deploy → run) works end-to-end.
 
 The critical remaining work is **CI/CD (Phase 6)** — four GitHub Actions workflow files that automate the build/test/deploy lifecycle. Without these, the platform requires manual operations for what should be automated. Once CI/CD is in place, the platform achieves all five stated goals.

@@ -263,3 +263,10 @@ class TestDAGCompiler:
         assert "template_fields" in source
         assert '"parameter_values"' in source or "'parameter_values'" in source
         assert '"display_name"' in source or "'display_name'" in source
+
+    def test_render_email_no_unsupported_kwargs(self, etl_dag_def, test_context):
+        """EmailOperator must not include kwargs unsupported by Composer's Airflow."""
+        compiler = DAGCompiler()
+        source = compiler.render(etl_dag_def, test_context)
+        # soft_fail is not supported on Composer 3 (Airflow 2.10.5)
+        assert "soft_fail" not in source

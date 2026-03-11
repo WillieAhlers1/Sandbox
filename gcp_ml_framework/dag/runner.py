@@ -222,10 +222,7 @@ class ComposerRunner:
 
         import subprocess
 
-        # Composer env name follows Terraform convention: {team}-{project}-{env}
-        # e.g. "dsci-examplechurn-dev"
-        env_suffix = self._ctx.git_state.value.lower()
-        env_name = f"{self._ctx.naming.team}-{self._ctx.naming.project}-{env_suffix}"
+        env_name = self._ctx.composer_environment_name
         result = subprocess.run(
             [
                 "gcloud",
@@ -252,107 +249,70 @@ class ComposerRunner:
         base = self._get_airflow_uri()
         return f"{base}/api/v1/dags/{dag_id}/dagRuns"
 
-    def _trigger_dag_run(self, dag_id: str, logical_date: str) -> dict[str, Any]:
-        """Trigger a DAG run via gcloud composer CLI.
+    def _get_auth_headers(self) -> dict[str, str]:
+        """Get Bearer token headers for the Airflow REST API.
 
-        Uses `gcloud composer environments run ... dags trigger` which handles
-        authentication transparently for all credential types (user, SA, metadata).
+        Uses Application Default Credentials (ADC) — works with user creds,
+        service accounts, and Workload Identity.
         """
-        import subprocess
+        import google.auth
+        import google.auth.transport.requests
 
-        env_suffix = self._ctx.git_state.value.lower()
-        env_name = f"{self._ctx.naming.team}-{self._ctx.naming.project}-{env_suffix}"
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        credentials.refresh(google.auth.transport.requests.Request())
+        return {"Authorization": f"Bearer {credentials.token}"}
 
-        try:
-            result = subprocess.run(
-                [
-                    "gcloud",
-                    "composer",
-                    "environments",
-                    "run",
-                    env_name,
-                    "--location",
-                    self._ctx.region,
-                    "--project",
-                    self._ctx.gcp_project,
-                    "dags",
-                    "trigger",
-                    "--",
-                    dag_id,
-                    "-e",
-                    logical_date,
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=300,
-            )
-        except subprocess.TimeoutExpired:
-            # Composer 3's executeAirflowCommand API can hang while fetching
-            # output even though the trigger was dispatched. Treat as success.
-            print(f"[composer] Warning: trigger command timed out (trigger likely accepted)")
+    def _trigger_dag_run(self, dag_id: str, logical_date: str) -> dict[str, Any]:
+        """Trigger a DAG run via the Airflow Stable REST API.
+
+        POST /api/v1/dags/{dag_id}/dagRuns with a logical_date payload.
+        Returns the parsed JSON response from Airflow.
+        """
+        import requests
+
+        url = self._build_trigger_url(dag_id)
+        headers = {**self._get_auth_headers(), "Content-Type": "application/json"}
+        payload = {"logical_date": f"{logical_date}T00:00:00+00:00"}
+
+        resp = requests.post(url, json=payload, headers=headers, timeout=120)
+
+        if resp.status_code == 409:
+            # DAG run already exists for this logical_date — treat as success
+            print(f"[composer] DAG run already exists for {logical_date} (409 Conflict)")
             return {
                 "dag_run_id": f"manual__{logical_date}",
                 "state": "queued",
-                "output": "trigger dispatched (output fetch timed out)",
+                "conflict": True,
             }
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr or ""
-            # Composer 3 often returns non-zero even when the trigger succeeded
-            # (e.g., MalformedJsonException in output parsing). Check stderr.
-            if "trigger" in stderr.lower() or "already exists" in stderr.lower():
-                print(f"[composer] Warning: trigger returned non-zero but may have succeeded")
-                return {
-                    "dag_run_id": f"manual__{logical_date}",
-                    "state": "queued",
-                    "output": stderr.strip(),
-                }
-            raise RuntimeError(
-                f"Failed to trigger DAG '{dag_id}':\n{stderr}"
-            ) from e
 
-        # Parse the output for run info
-        output = result.stdout + result.stderr
-        return {
-            "dag_run_id": f"manual__{logical_date}",
-            "state": "queued",
-            "output": output.strip(),
-        }
+        if not resp.ok:
+            raise RuntimeError(
+                f"Failed to trigger DAG '{dag_id}': {resp.status_code} {resp.text}"
+            )
+
+        return resp.json()
 
     def unpause_dag(self, dag_id: str) -> None:
-        """Unpause a DAG so the scheduler processes its task instances.
+        """Unpause a DAG via the Airflow Stable REST API.
 
-        Best-effort — Composer 3's executeAirflowCommand API can return
-        transient 500 errors. A failure here should not block the trigger.
+        PATCH /api/v1/dags/{dag_id} with is_paused=false.
+        Best-effort — a failure here should not block the trigger.
         """
-        import subprocess
-
-        env_suffix = self._ctx.git_state.value.lower()
-        env_name = f"{self._ctx.naming.team}-{self._ctx.naming.project}-{env_suffix}"
+        import requests
 
         try:
-            subprocess.run(
-                [
-                    "gcloud",
-                    "composer",
-                    "environments",
-                    "run",
-                    env_name,
-                    "--location",
-                    self._ctx.region,
-                    "--project",
-                    self._ctx.gcp_project,
-                    "dags",
-                    "unpause",
-                    "--",
-                    dag_id,
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=120,
+            base = self._get_airflow_uri()
+            url = f"{base}/api/v1/dags/{dag_id}"
+            headers = {**self._get_auth_headers(), "Content-Type": "application/json"}
+            resp = requests.patch(
+                url, json={"is_paused": False}, headers=headers, timeout=30
             )
-            print(f"[composer] DAG '{dag_id}' unpaused")
+            if resp.ok:
+                print(f"[composer] DAG '{dag_id}' unpaused")
+            else:
+                print(f"[composer] Warning: unpause returned {resp.status_code}: {resp.text}")
         except Exception as e:
             print(f"[composer] Warning: could not unpause DAG '{dag_id}': {e}")
 

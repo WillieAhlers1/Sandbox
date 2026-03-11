@@ -235,6 +235,66 @@ jobs:
       - run: gml teardown --branch ${{{{ github.head_ref }}}} --confirm
 """
 
+_DAG_PY = """\
+from gcp_ml_framework.dag.builder import DAGBuilder
+from gcp_ml_framework.dag.tasks.bq_query import BQQueryTask
+from gcp_ml_framework.dag.tasks.email import EmailTask
+
+dag = (
+    DAGBuilder(
+        name="{name}",
+        schedule="@daily",
+        description="{name} data pipeline",
+        tags=["{name}"],
+    )
+    .task(
+        BQQueryTask(sql_file="sql/extract.sql", destination_table="staged_{name}"),
+        name="extract",
+        depends_on=[],
+    )
+    .task(
+        BQQueryTask(sql_file="sql/transform.sql", destination_table="{name}_output"),
+        name="transform",
+        depends_on=["extract"],
+    )
+    .task(
+        EmailTask(
+            to=["team@company.com"],
+            subject="[{{namespace}}] {name} completed — {{run_date}}",
+            body=(
+                "The {name} pipeline has completed.\\n\\n"
+                "Output table: {{bq_dataset}}.{name}_output\\n"
+                "Execution date: {{run_date}}"
+            ),
+        ),
+        name="notify",
+        depends_on=["transform"],
+    )
+    .build()
+)
+"""
+
+_DAG_CONFIG_YAML = """\
+schedule: "@daily"
+tags:
+  - {name}
+"""
+
+_DAG_EXTRACT_SQL = """\
+-- Extract raw data for {name}
+SELECT
+    *
+FROM `{{bq_dataset}}.raw_{name}`
+WHERE dt = '{{run_date}}'
+"""
+
+_DAG_TRANSFORM_SQL = """\
+-- Transform staged data for {name}
+SELECT
+    *
+FROM `{{bq_dataset}}.staged_{name}`
+"""
+
 _GITIGNORE = """\
 .env
 __pycache__/
@@ -308,28 +368,38 @@ def init_project(
 @init_app.command("pipeline")
 def init_pipeline(
     name: str = typer.Argument(..., help="Pipeline name (snake_case, e.g. 'churn_prediction')"),
+    dag: bool = typer.Option(False, "--dag", help="Scaffold a Composer DAG instead of a Vertex AI pipeline"),
     output_dir: Path = typer.Option(Path("pipelines"), "--out", "-o"),
 ) -> None:
     """
     Scaffold a new pipeline inside an existing project.
 
-    Creates pipeline.py, config.yaml, and a placeholder SQL file.
+    Creates pipeline.py (default) or dag.py (--dag), config.yaml, and SQL templates.
 
-    Example:
+    Examples:
         gml init pipeline churn_prediction
+        gml init pipeline sales_report --dag
     """
     pipeline_dir = output_dir / name
     pipeline_dir.mkdir(parents=True, exist_ok=True)
 
-    _write(pipeline_dir / "pipeline.py", _PIPELINE_PY.format(name=name))
-    _write(pipeline_dir / "config.yaml", _PIPELINE_CONFIG_YAML)
-
-    sql_dir = pipeline_dir / "sql"
-    sql_dir.mkdir(exist_ok=True)
-    _write(sql_dir / f"{name}_features.sql", f"-- Feature SQL for {name}\nSELECT\n  entity_id,\n  -- add features here\nFROM `{{{{bq_dataset}}}}.raw_events`\n")
-
-    console.print(f"\n[bold green]Pipeline '{name}' scaffolded at {pipeline_dir}[/bold green]\n")
-    console.print(f"  Edit [cyan]pipelines/{name}/pipeline.py[/cyan] to define your steps.\n")
+    if dag:
+        _write(pipeline_dir / "dag.py", _DAG_PY.format(name=name))
+        _write(pipeline_dir / "config.yaml", _DAG_CONFIG_YAML.format(name=name))
+        sql_dir = pipeline_dir / "sql"
+        sql_dir.mkdir(exist_ok=True)
+        _write(sql_dir / "extract.sql", _DAG_EXTRACT_SQL.format(name=name))
+        _write(sql_dir / "transform.sql", _DAG_TRANSFORM_SQL.format(name=name))
+        console.print(f"\n[bold green]DAG '{name}' scaffolded at {pipeline_dir}[/bold green]\n")
+        console.print(f"  Edit [cyan]pipelines/{name}/dag.py[/cyan] to define your tasks.\n")
+    else:
+        _write(pipeline_dir / "pipeline.py", _PIPELINE_PY.format(name=name))
+        _write(pipeline_dir / "config.yaml", _PIPELINE_CONFIG_YAML)
+        sql_dir = pipeline_dir / "sql"
+        sql_dir.mkdir(exist_ok=True)
+        _write(sql_dir / f"{name}_features.sql", f"-- Feature SQL for {name}\nSELECT\n  entity_id,\n  -- add features here\nFROM `{{{{bq_dataset}}}}.raw_events`\n")
+        console.print(f"\n[bold green]Pipeline '{name}' scaffolded at {pipeline_dir}[/bold green]\n")
+        console.print(f"  Edit [cyan]pipelines/{name}/pipeline.py[/cyan] to define your steps.\n")
 
 
 def _write(path: Path, content) -> None:

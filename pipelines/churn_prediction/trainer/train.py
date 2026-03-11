@@ -18,11 +18,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-output", required=True)
     parser.add_argument("--dataset-path", default="")
-    # Accept hyperparameters (LogisticRegression uses C and max_iter)
-    parser.add_argument("--learning_rate", type=float, default=0.05)
-    parser.add_argument("--max_depth", type=int, default=6)
-    parser.add_argument("--n_estimators", type=int, default=300)
-    parser.add_argument("--subsample", type=float, default=0.8)
+    # LogisticRegression hyperparameters (passed by TrainModel via --key=value)
+    parser.add_argument("--C", type=float, default=1.0)
+    parser.add_argument("--max_iter", type=int, default=1000)
+    parser.add_argument("--solver", type=str, default="lbfgs")
     args, _ = parser.parse_known_args()
 
     print(f"[trainer] model-output: {args.model_output}")
@@ -49,7 +48,9 @@ def main() -> None:
     # Train a sklearn pipeline (StandardScaler + LogisticRegression)
     model = Pipeline([
         ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(max_iter=1000, random_state=42)),
+        ("clf", LogisticRegression(
+            C=args.C, max_iter=args.max_iter, solver=args.solver, random_state=42
+        )),
     ])
     model.fit(X, y)
 

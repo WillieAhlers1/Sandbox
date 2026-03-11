@@ -8,7 +8,8 @@
 # Usage:
 #   ./scripts/seed_bq.sh                              # uses framework.yaml + current branch
 #   ./scripts/seed_bq.sh --dataset my_dataset          # override dataset name
-#   ./scripts/seed_bq.sh --project gcp-gap-demo-dev    # override project
+#   ./scripts/seed_bq.sh --project YOUR_GCP_PROJECT     # override project
+#   ./scripts/seed_bq.sh --location us-east4           # override BQ dataset location
 
 set -euo pipefail
 
@@ -18,26 +19,31 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 # Parse args
 DATASET=""
 PROJECT=""
+LOCATION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dataset)  DATASET="$2"; shift 2 ;;
     --project)  PROJECT="$2"; shift 2 ;;
+    --location) LOCATION="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
 
 # Resolve from framework context if not provided
-if [[ -z "$DATASET" ]] || [[ -z "$PROJECT" ]]; then
+if [[ -z "$DATASET" ]] || [[ -z "$PROJECT" ]] || [[ -z "$LOCATION" ]]; then
   CONTEXT=$(cd "$ROOT_DIR" && uv run gml context show --json 2>/dev/null | grep -v Warning)
-  [[ -z "$DATASET" ]] && DATASET=$(echo "$CONTEXT" | python3 -c "import sys,json; print(json.load(sys.stdin)['bq_dataset'])")
-  [[ -z "$PROJECT" ]] && PROJECT=$(echo "$CONTEXT" | python3 -c "import sys,json; print(json.load(sys.stdin)['gcp_project'])")
+  [[ -z "$DATASET" ]]  && DATASET=$(echo "$CONTEXT" | python3 -c "import sys,json; print(json.load(sys.stdin)['bq_dataset'])")
+  [[ -z "$PROJECT" ]]  && PROJECT=$(echo "$CONTEXT" | python3 -c "import sys,json; print(json.load(sys.stdin)['gcp_project'])")
+  [[ -z "$LOCATION" ]] && LOCATION=$(echo "$CONTEXT" | python3 -c "import sys,json; print(json.load(sys.stdin)['region'])")
 fi
 
-echo "==> Seeding BQ dataset: ${PROJECT}:${DATASET}"
+echo "==> Seeding BQ dataset: ${PROJECT}:${DATASET} (location: ${LOCATION})"
 
-# Create dataset if it doesn't exist
-bq mk --project_id="$PROJECT" --dataset "$DATASET" 2>/dev/null || true
+# Create dataset if it doesn't exist (show errors except "already exists")
+if ! bq mk --project_id="$PROJECT" --dataset --location="$LOCATION" "$DATASET" 2>&1 | grep -v "Already Exists"; then
+  true  # dataset already exists — expected
+fi
 
 # Find and load all seed CSVs
 LOADED=0
@@ -52,6 +58,7 @@ for seed_dir in "$ROOT_DIR"/pipelines/*/seeds; do
     echo "  Loading ${pipeline_name}/seeds/${table_name}.csv → ${DATASET}.${table_name}"
     bq load \
       --project_id="$PROJECT" \
+      --location="$LOCATION" \
       --source_format=CSV \
       --autodetect \
       --replace \

@@ -12,10 +12,9 @@ terraform {
     }
   }
 
-  backend "gcs" {
-    bucket = "gcp-gap-demo-terraform-state"
-    prefix = "prod"
-  }
+  # TODO: Migrate to GCS backend after state bucket creation
+  # bucket = "<YOUR_PROJECT_ID>-terraform-state", prefix = "prod"
+  backend "local" {}
 }
 
 provider "google" {
@@ -77,7 +76,7 @@ module "storage" {
   source      = "../../modules/storage"
   project_id  = var.project_id
   region      = var.region
-  bucket_name = "${var.project_id}-${var.team}-${var.project_name}-${var.environment}"
+  bucket_name = "${var.project_id}-${var.team}-${var.project_name}"
   labels = {
     team        = var.team
     project     = var.project_name
@@ -89,7 +88,7 @@ module "artifact_registry" {
   source        = "../../modules/artifact_registry"
   project_id    = var.project_id
   region        = var.region
-  repository_id = "${var.team}-${var.project_name}-${var.environment}"
+  repository_id = "${var.team}-${var.project_name}"
   description   = "Docker repository for ${var.team}/${var.project_name} (${var.environment})"
   labels = {
     team        = var.team
