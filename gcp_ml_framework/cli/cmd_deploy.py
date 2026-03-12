@@ -59,7 +59,9 @@ def deploy(
 
     # Step 3: Upload DAG files to Composer bucket
     composer_path = ctx.composer_dags_path.get(ctx.git_state.value, "")
-    if composer_path and dags_dir.exists():
+    console.print(f"Using Composer DAGs path: {composer_path}")
+    console.print(f"Looking for DAG files in: {dags_dir} {dags_dir.exists()}")
+    if composer_path and dags_dir.exists():        
         _upload_dags(dags_dir, composer_path, ctx, match_names, all_pipelines, dry_run)
 
     # Step 4: Upload compiled pipeline YAMLs to GCS

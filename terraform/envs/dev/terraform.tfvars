@@ -1,5 +1,5 @@
 project_id   = "prj-0n-dta-pt-ai-sandbox"
 region       = "us-east4"
-team         = "dsci"
-project_name = "gcpdemo"
+team         = "mlplatform"
+project_name = "second_run"
 environment  = "dev"

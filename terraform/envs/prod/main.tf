@@ -61,13 +61,17 @@ variable "github_repo" {
   default     = ""
 }
 
+locals {
+  project_slug = replace(var.project_name, "_", "-")
+}
+
 # --- Modules ---
 
 module "iam" {
   source       = "../../modules/iam"
   project_id   = var.project_id
   team         = var.team
-  project_name = var.project_name
+  project_name = local.project_slug
   environment  = var.environment
   github_repo  = var.github_repo
 }
@@ -76,7 +80,7 @@ module "storage" {
   source      = "../../modules/storage"
   project_id  = var.project_id
   region      = var.region
-  bucket_name = "${var.project_id}-${var.team}-${var.project_name}"
+  bucket_name = "${var.project_id}-${var.team}-${local.project_slug}"
   labels = {
     team        = var.team
     project     = var.project_name
@@ -88,7 +92,7 @@ module "artifact_registry" {
   source        = "../../modules/artifact_registry"
   project_id    = var.project_id
   region        = var.region
-  repository_id = "${var.team}-${var.project_name}"
+  repository_id = "${var.team}-${local.project_slug}"
   description   = "Docker repository for ${var.team}/${var.project_name} (${var.environment})"
   labels = {
     team        = var.team
@@ -101,7 +105,7 @@ module "composer" {
   source                = "../../modules/composer"
   project_id            = var.project_id
   region                = var.region
-  environment_name      = "${var.team}-${var.project_name}-${var.environment}"
+  environment_name      = "${var.team}-${local.project_slug}-${var.environment}"
   service_account_email = module.iam.composer_service_account_email
   environment_size      = "ENVIRONMENT_SIZE_MEDIUM"
 

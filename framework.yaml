@@ -1,25 +1,21 @@
-# GCP ML Framework — project configuration
-# This file is the single source of truth for team/project identity.
-# Commit it. Never put secrets here — use GCP Secret Manager (!secret key-name).
+team: mlplatform
 
-team: dsci
-project: gcpdemo
+# TODO: enforce project name is same as repo name or folder name 
+project: second_run 
 
 gcp:
   dev_project_id: prj-0n-dta-pt-ai-sandbox
-  staging_project_id: ""
-  prod_project_id: ""
+  # TODO: deploy was using staging project id
+  staging_project_id: prj-0n-dta-pt-ai-sandbox
+  prod_project_id: prj-0n-dta-pt-ai-sandbox-prod
   region: us-east4
-  service_account_email: gc-sa-for-vertex-ai-pipelines@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com
-  composer_environment_name: mlopshousingpoc
   composer_dags_path:
     dev: "gs://us-east4-mlopshousingpoc-030c6745-bucket/dags"
+    # dev: "gs://composer-gap-0n-dta-pt-ai-sbx/dags"
     staging: ""
     prod: ""
-  # artifact_registry_host auto-derived from region → us-east4-docker.pkg.dev
+  artifact_registry_host: us-east4-docker.pkg.dev
 
 secrets:
-  # Secrets are referenced in config/pipeline code as: !secret <key-name>
-  # They are resolved at runtime from GCP Secret Manager.
-  # The full secret name will be: {namespace}-{key-name}
-  secret_prefix:    # leave blank to default to the namespace token
+  secret_prefix:             # defaults to namespace token; override only if needed
+

@@ -116,7 +116,9 @@ _build_component_base() {
         echo "[docker_build] component-base Dockerfile not found — skipping"
         return
     fi
-    _build "$(_full_tag component-base)" "$dockerfile" "docker/base/component-base" \
+    # Use repository root as build context so top-level packages (e.g. second_run)
+    # and project files are available to the Dockerfile.
+    _build "$(_full_tag component-base)" "$dockerfile" "." \
         --build-arg "BASE_IMAGE=$(_full_tag base-python)"
 }
 

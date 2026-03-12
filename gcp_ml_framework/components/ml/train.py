@@ -3,8 +3,9 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
+from tempfile import TemporaryDirectory
 from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
+from google.cloud import bigquery, storage
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
@@ -102,27 +103,39 @@ class TrainModel(BaseComponent):
             if run_id:
                 versioned_uri = f"{model_output_uri.rstrip('/')}/{run_id}"
 
-            args = json.loads(trainer_args) + [f"--model-output={versioned_uri}"]
-            if dataset_uri:
-                args.append(f"--dataset-path={dataset_uri}")
-            for k, v in json.loads(hyperparameters).items():
-                args.append(f"--{k}={v}")
 
-            worker_pool: dict = {
-                "machine_spec": {"machine_type": machine_type},
-                "replica_count": 1,
-                "container_spec": {"image_uri": trainer_image, "args": args},
-            }
-            if accelerator_type and accelerator_count > 0:
-                worker_pool["machine_spec"]["accelerator_type"] = accelerator_type
-                worker_pool["machine_spec"]["accelerator_count"] = accelerator_count
+            with TemporaryDirectory() as temp_dir:
 
-            job = aiplatform.CustomJob(
-                display_name=job_name,
-                worker_pool_specs=[worker_pool],
-                staging_bucket=staging_bucket,
-            )
-            job.run(sync=True, experiment=experiment_name)
+                args = json.loads(trainer_args) + [f"--model-output={temp_dir}"]
+                if dataset_uri:
+                    args.append(f"--dataset-path={dataset_uri}")
+                for k, v in json.loads(hyperparameters).items():
+                    args.append(f"--{k}={v}")
+
+                worker_pool: dict = {
+                    "machine_spec": {"machine_type": machine_type},
+                    "replica_count": 1,
+                    "container_spec": {"image_uri": trainer_image, "args": args},
+                }
+                if accelerator_type and accelerator_count > 0:
+                    worker_pool["machine_spec"]["accelerator_type"] = accelerator_type
+                    worker_pool["machine_spec"]["accelerator_count"] = accelerator_count
+
+                job = aiplatform.CustomJob(
+                    display_name=job_name,
+                    worker_pool_specs=[worker_pool],
+                    staging_bucket=staging_bucket,
+                )
+                job.run(sync=True, experiment=experiment_name)
+
+                parts = versioned_uri.replace("gs://", "").split("/", 1)
+                bucket_name = parts[0]                
+                gcs_client = storage.Client(project=project)
+                for local_path in Path(temp_dir).glob("*"):
+                    blob_path = f"{parts[1].rstrip('/')}/{local_path.name}"
+                    blob = gcs_client.bucket(bucket_name).blob(blob_path)
+                    blob.upload_from_filename(local_path)
+                print(f"[trainer] Model uploaded to {versioned_uri}/model.pkl")
             return model_output_uri
 
         return train_model

@@ -126,10 +126,17 @@ class PipelineCompiler:
                     is_metadata_only = step.component.component_name in (
                         "write_features",
                     )
+                    # @dsl.container_component uses named outputs (e.g. output_uri),
+                    # while @dsl.component uses task.output (return value).
+                    outputs = component_fn.component_spec.outputs
+                    if "output_uri" in outputs:
+                        task_output = task.outputs["output_uri"]
+                    else:
+                        task_output = task.output
                     if is_train:
-                        last_model_output = task.output
+                        last_model_output = task_output
                     elif not is_metadata_only:
-                        last_dataset_output = task.output
+                        last_dataset_output = task_output
 
         return _pipeline
 

@@ -8,7 +8,7 @@ terraform {
 }
 
 locals {
-  sa_name_prefix = "${var.team}-${var.project_name}-${var.environment}"
+  sa_name_prefix = "${var.team}-${replace(var.project_name, "_", "-")}-${var.environment}"
 }
 
 # --- Service Accounts ---
