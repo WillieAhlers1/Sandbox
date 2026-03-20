@@ -1,0 +1,6 @@
+# Pipeline-level config overrides.
+# These are merged on top of framework.yaml.
+# Only set values that differ from the framework defaults.
+
+# feature_store:
+#   sync_schedule: "0 */3 * * *"

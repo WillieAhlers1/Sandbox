@@ -1,0 +1,218 @@
+"""
+PipelineCompiler — compiles a PipelineDefinition to a KFP v2 pipeline YAML.
+
+The compiled YAML is what gets submitted to Vertex AI Pipelines and stored in GCS
+for artifact promotion (STAGE → PROD copies the YAML, never recompiles).
+"""
+
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from gcp_ml_framework.components.ml.train import TrainModel
+from gcp_ml_framework.components.ml.register import RegisterModel
+from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+
+if TYPE_CHECKING:
+    from gcp_ml_framework.context import MLContext
+    from gcp_ml_framework.pipeline.builder import PipelineDefinition
+
+
+class PipelineCompiler:
+    """
+    Wraps the KFP v2 compiler.
+
+    Builds a @dsl.pipeline function dynamically from the PipelineDefinition
+    steps, then invokes kfp.compiler.Compiler() to produce the YAML artifact.
+    """
+
+    def __init__(self, output_dir: "Path | str" = "compiled_pipelines") -> None:
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def compile(
+        self,
+        pipeline_def: "PipelineDefinition",
+        context: "MLContext",
+        pipeline_dir: "Path | None" = None,
+    ) -> Path:
+        """
+        Compile the pipeline to a KFP YAML file.
+
+        Returns the path to the compiled YAML.
+        """
+        try:
+            import kfp.compiler as kfp_compiler
+        except ImportError as exc:
+            raise ImportError(
+                "kfp is required for compilation. Install with: pip install kfp>=2.7"
+            ) from exc
+
+        pipeline_fn = self._build_kfp_pipeline(pipeline_def, context, pipeline_dir)
+
+        output_path = self.output_dir / f"{pipeline_def.name}.yaml"
+        kfp_compiler.Compiler().compile(
+            pipeline_func=pipeline_fn,
+            package_path=str(output_path),
+        )
+        return output_path
+
+    def _build_kfp_pipeline(
+        self,
+        pipeline_def: "PipelineDefinition",
+        context: "MLContext",
+        pipeline_dir: "Path | None" = None,
+    ):
+        """
+        Dynamically construct a @dsl.pipeline decorated function from the steps.
+
+        Each step's component.as_kfp_component() provides the KFP function.
+        Steps are wired in sequence using .after() for dependency ordering.
+        Cross-step data flow is wired via prev_task.output.
+        """
+        from kfp import dsl
+
+        steps = pipeline_def.steps
+        pipeline_root = context.naming.gcs_pipeline_root(pipeline_def.name)
+        ctx_params = self._build_context_params(context, pipeline_def)
+        derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir)
+
+        # Resolve the per-pipeline image (named after the pipeline directory)
+        pipeline_image_name = pipeline_def.name.replace("_", "-")
+        base_image = context.naming.image_uri(
+            registry_host=context.artifact_registry_host,
+            gcp_project=context.gcp_project,
+            image_name=pipeline_image_name,
+        )
+
+        @dsl.pipeline(
+            name=pipeline_def.name,
+            description=pipeline_def.description,
+            pipeline_root=pipeline_root,
+        )
+        def _pipeline(run_date: str = ""):
+            prev_task = None
+            last_dataset_output = None  # output from data-producing steps (ingest/transform)
+            last_model_output = None  # output from train step
+            for step in steps:
+                # Derive step_module from the component's class module path
+                step_module = step.component.__class__.__module__
+                component_fn = step.component.as_kfp_component(
+                    step_module=step_module,
+                    base_image=base_image,
+                )
+                step_extra = derived_params.get(step.name, {})
+
+                # Build flat param dict: component fields (base), then context + derived overlay
+                from gcp_ml_framework.components.base import _INTERNAL_FIELDS
+                component_fields = {}
+                for name in step.component.model_fields:
+                    if name in _INTERNAL_FIELDS:
+                        continue
+                    val = getattr(step.component, name)
+                    if val is None:
+                        continue
+                    component_fields[name] = val
+                # Component fields are the base; context and derived params override them
+                merged = {**component_fields, **ctx_params, **step_extra}
+
+                # Wire cross-step data flow from tracked outputs
+                if last_dataset_output is not None:
+                    merged["dataset_uri"] = last_dataset_output
+                if last_model_output is not None:
+                    merged["model_uri"] = last_model_output
+
+                # Inject run_date from pipeline param
+                merged["run_date"] = run_date
+
+                # Filter to only params the component declares as KFP inputs
+                accepted = set(component_fn.component_spec.inputs or {})
+                call_kwargs = {}
+                for k, v in merged.items():
+                    if k not in accepted:
+                        continue
+                    # Serialize non-string values to JSON strings for KFP
+                    if isinstance(v, (dict, list)):
+                        call_kwargs[k] = json.dumps(v)
+                    elif not isinstance(v, str):
+                        call_kwargs[k] = str(v)
+                    else:
+                        call_kwargs[k] = v
+
+                task = component_fn(**call_kwargs)
+                task.set_display_name(step.name)
+                if prev_task is not None:
+                    task.after(prev_task)
+                prev_task = task
+
+                # Track output — train steps produce model outputs, others produce datasets.
+                # WriteFeatures is metadata-only and should not overwrite dataset output.
+                if component_fn.component_spec.outputs:
+                    is_train = isinstance(step.component, TrainModel)
+                    is_metadata_only = isinstance(step.component, WriteFeatures)
+                    task_output = task.outputs["output_uri"]
+                    if is_train:
+                        last_model_output = task_output
+                    elif not is_metadata_only:
+                        last_dataset_output = task_output
+
+        return _pipeline
+
+    def _build_context_params(
+        self, context: "MLContext", pipeline_def: "PipelineDefinition"
+    ) -> dict:
+        return {
+            "project": context.gcp_project,
+            "region": context.region,
+            "project_name": context.naming.project,
+            "branch": context.naming.branch,
+            "environment": context.git_state.value,
+            "dataset": context.bq_dataset,
+            "gcs_prefix": context.gcs_prefix,
+            "feature_store_id": context.feature_store_id,
+            "staging_bucket": context.naming.gcs_bucket,
+            "experiment_name": context.naming.vertex_experiment(pipeline_def.name),
+            "artifact_registry": context.naming.artifact_registry_repo(
+                context.artifact_registry_host,
+                context.gcp_project,
+            ),
+        }
+
+    def _build_derived_params(
+        self,
+        context: "MLContext",
+        pipeline_def: "PipelineDefinition",
+        steps: list,
+        pipeline_dir: "Path | None" = None,
+    ) -> dict:
+        """Compute per-step derived params that aren't simple dataclass fields."""
+        derived: dict[str, dict] = {}
+        for step in steps:
+            comp = step.component
+            extra: dict = {}
+
+            # WriteFeatures / ReadFeatures: need feature_view_id and feature_group_id
+            if hasattr(comp, "entity") and hasattr(comp, "feature_group"):
+                fv_id = context.naming.feature_view_id(comp.entity, comp.feature_group)
+                extra["feature_view_id"] = fv_id
+                extra["feature_group_id"] = fv_id
+
+            # TrainModel: needs job_name and model_output_uri
+            if isinstance(comp, TrainModel):
+                extra["job_name"] = context.naming.vertex_training_job_name(pipeline_def.name)
+                extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
+
+            # RegisterModel: needs model_display_name
+            if isinstance(comp, RegisterModel):
+                extra["model_display_name"] = context.naming.vertex_model_name(pipeline_def.name)
+
+            # DeployModel: needs model_display_name and endpoint_display_name
+            if hasattr(comp, "endpoint_name"):
+                extra["model_display_name"] = context.naming.vertex_model_name(pipeline_def.name)
+                extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
+                    comp.endpoint_name
+                )
+
+            if extra:
+                derived[step.name] = extra
+        return derived

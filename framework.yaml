@@ -1,0 +1,23 @@
+team: mlplatform
+
+# TODO: enforce project name is same as repo name or folder name 
+project: second_run 
+
+gcp:
+  dev_project_id: YOUR_DEV_PROJECT_ID
+  # TODO: deploy was using staging project id
+  staging_project_id: YOUR_STAGING_PROJECT_ID
+  prod_project_id: YOUR_PROD_PROJECT_ID
+  region: us-east4
+  service_account_email: YOUR_SERVICE_ACCOUNT_EMAIL
+  composer_environment_name: YOUR_COMPOSER_ENV_NAME
+  composer_dags_path:
+    dev: "YOUR_COMPOSER_DAGS_PATH"
+    # dev: ""
+    staging: ""
+    prod: ""
+  artifact_registry_host: us-east4-docker.pkg.dev
+
+secrets:
+  secret_prefix:             # defaults to namespace token; override only if needed
+
