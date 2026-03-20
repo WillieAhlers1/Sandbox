@@ -45,6 +45,7 @@ cd terraform/envs/dev && terraform init && terraform plan
 - `scripts/` — Build and bootstrap scripts
 - `framework.yaml` — Project config (team, project name, GCP settings)
 - `.env` — Local env vars for Docker builds (AR_HOST, GCP_PROJECT, AR_REPO)
+- `docs/tasks/` — Task tracking (todo.md, lessons.md)
 
 ## Important Notes
 
@@ -55,7 +56,9 @@ cd terraform/envs/dev && terraform init && terraform plan
 - `project_name` contains underscores (`second_run`) — Terraform normalizes to hyphens via `local.project_slug` for GCP resource IDs.
 - `dags/` and `compiled_pipelines/` are generated artifacts — regenerate with `gml compile` or `gml deploy`.
 
-# INSTRUCTIONS:
+---
+
+# INSTRUCTIONS
 
 ### 1. Plan Mode Default
 - Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
