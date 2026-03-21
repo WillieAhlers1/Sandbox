@@ -1,7 +1,7 @@
 # version_1 Development Roadmap
 
 **Date:** 2026-03-20
-**Status:** Phase 1 + Phase 2 + Phase 2.5 + Phase 3 + Phase 4 COMPLETE — Phase 5 next
+**Status:** Phase 1 + Phase 2 + Phase 2.5 + Phase 3 + Phase 4 COMPLETE — Phase 4.5 next
 **Branch:** version_1
 **Focus:** Dev environment, framework as package, TDD, real GCP validation
 **Decisions:** See `docs/tasks/decisions.md` for architectural rationale (ADR-001 through ADR-011)
@@ -21,25 +21,27 @@ Transform version_1 from "right architecture, can't run" to a unified ML platfor
 ## Dependency Graph & Parallelism
 
 ```
-Phase 1: Critical Fixes + Test Foundation [START HERE — blocks everything]
+Phase 1: Critical Fixes + Test Foundation [DONE]
     │
-    ├──→ Phase 2: Unified Task Architecture [SEQUENTIAL after Phase 1]
+    ├──→ Phase 2: Unified Task Architecture [DONE]
     │       │
-    │       ├──→ Phase 4: Training Pipeline E2E [needs Phase 2 + 3]
+    │       ├──→ Phase 4: Training Pipeline E2E [DONE]
     │       │       │
-    │       │       └──→ Phase 5: Complete Pipeline + Experiments [needs Phase 4]
+    │       │       └──→ Phase 4.5: Phases 1-4 Fixes [NEXT — blocks Phase 5]
+    │       │               │
+    │       │               └──→ Phase 5: Complete Pipeline + Experiments [needs Phase 4.5]
     │       │
     │       ├──→ Phase 6: Advanced Features [needs Phase 2, PARALLEL with 4/5]
     │       │
     │       └──→ Phase 7: DBT Integration [needs Phase 2, PARALLEL with 4/5/6]
     │
-    ├──→ Phase 3: Cloud Build + Docker [PARALLEL with Phase 2]
+    ├──→ Phase 3: Cloud Build + Docker [DONE]
     │
     └──→ Phase 8: Polish [PARALLEL with everything after Phase 1]
 ```
 
 **Execution tracks:**
-- **Track A (critical path):** Phase 1 → Phase 2 → Phase 4 → Phase 5
+- **Track A (critical path):** Phase 1 → Phase 2 → Phase 4 → **Phase 4.5** → Phase 5
 - **Track B (parallel after Phase 1):** Phase 3 (Cloud Build)
 - **Track C (parallel after Phase 2):** Phase 6, Phase 7
 - **Track D (parallel after Phase 1):** Phase 8
@@ -706,8 +708,8 @@ This is the largest phase — a fundamental architecture change touching ~20 fil
 
 | SA | Identity (sandbox) | Used by | In `.env`? | Why / Why not |
 |---|---|---|---|---|
-| **Pipeline SA** | `gc-sa-for-vertex-ai-pipelines@...` | `runner.py` (Vertex job submission), `smart_compiler.py` (DAG generation) | **YES → rename** | Framework passes this SA to `job.submit()` and `RunPipelineJobOperator`. Must be configurable. |
-| **Composer SA** | `gc-sa-for-composer-env@...` | Airflow runtime (runs DAGs), Terraform IAM (impersonation) | **NO** | Framework uploads DAGs to GCS bucket — uses caller's gcloud auth, not Composer SA. Impersonation (Composer→Pipeline) is a Terraform IAM binding, not a framework concern. |
+| **Pipeline SA** | `<pipeline-sa-name>@<project>.iam.gserviceaccount.com` | `runner.py` (Vertex job submission), `smart_compiler.py` (DAG generation) | **YES → rename** | Framework passes this SA to `job.submit()` and `RunPipelineJobOperator`. Must be configurable. |
+| **Composer SA** | `<composer-sa-name>@<project>.iam.gserviceaccount.com` | Airflow runtime (runs DAGs), Terraform IAM (impersonation) | **NO** | Framework uploads DAGs to GCS bucket — uses caller's gcloud auth, not Composer SA. Impersonation (Composer→Pipeline) is a Terraform IAM binding, not a framework concern. |
 | **Cloud Build SA** | `{project_number}@cloudbuild.gserviceaccount.com` | `gcloud builds submit` (automatic) | **NO** | Auto-created, auto-used. `gml build` delegates to `gcloud` which handles auth implicitly. |
 
 ### Tasks
@@ -823,12 +825,760 @@ for dev and `gml deploy` + Composer for GCP execution.
 
 ---
 
+## Phase 4.5: Phases 1-4 Fixes ✅ COMPLETE
+
+**Status:** All 10 sub-tasks completed. 174 tests passing, ruff clean, both pipelines compile.
+
+**Why:** Audit revealed the unified architecture is partially implemented. ML components lack `@ml_task` decorators (relying on BaseComponent default). The `execute() → run()` lifecycle — the core data-scientist contract — is broken on all ML components except TrainModel. Four `@task` components silently become no-ops in compiled Airflow DAGs because they lack `render_operator()`. ReadFeatures is an empty shell. The training_pipeline is 1 step, not 5 — proving only the happy path. This phase fixes all structural gaps so Phase 5 builds on a solid foundation.
+
+**Depends on:** Phase 4
+**Blocks:** Phase 5
+
+---
+
+### Summary of Issues Found
+
+| # | Issue | Impact | Fix |
+|---|-------|--------|-----|
+| 1 | TrainModel, EvaluateModel, RegisterModel, DeployModel have no `@ml_task` decorator | Work by accident (BaseComponent defaults to ML_TASK), but violates the decorator architecture | Add explicit `@ml_task` to each |
+| 2 | `execute()` bypasses `run()` on EvaluateModel, RegisterModel, DeployModel | Data scientists who subclass and override `run()` get `NotImplementedError` — their code never executes | Refactor: move current `execute()` body into `run()`, make `execute()` call `self.run()` |
+| 3 | BQTransform has no `render_operator()` | Becomes `lambda: None` (no-op) in compiled Airflow DAGs; Phase 2.2 explicitly planned this | Add `render_operator()` → `BigQueryInsertJobOperator` |
+| 4 | SmartCompiler fallback is `lambda: None` (line 328) | @task components without `render_operator()` silently do nothing in production DAGs | Replace with clear error: require `render_operator()` on @task components in compiled DAGs |
+| 5 | ReadFeatures has no `execute()`, no `run()`, orphaned utility | Raises `NotImplementedError` at runtime — completely broken | Remove class + orphaned `run_read_features()` utility |
+| 6 | BigQueryExtract is redundant with BQQuery | Phase 2.2 planned "BQQuery (merges BigQueryExtract + BQQueryTask)" — never done. No `render_operator()`, not used in any pipeline | Delete component + `run_bigquery_extract()` utility |
+| 7 | GCSExtract has no `render_operator()`, unused | Not used in any pipeline, no functional tests, would be no-op in compiled DAGs | Delete component + `run_gcs_extract()` utility; re-add with `render_operator()` when needed |
+| 8 | `PipelineBuilder` with 8 named stage methods still exists (REQS 11.0 says delete) | Data scientists see `.ingest()`, `.train()` etc. and think stages/order matter. They don't — SmartCompiler ignores `stage` entirely. 10 ways to add a step when there should be 1. | Delete `PipelineBuilder`, named methods, `stage` field, `_STAGE_MAP_BY_NAME`. Keep only `Pipeline.add()` |
+| 9 | `stage` field on `PipelineStep` is dead code | Set on every step, consumed by nothing. SmartCompiler routes on `task_type`, compiler routes on `isinstance()`. Stage implies hierarchy that doesn't exist. | Remove `stage` from `PipelineStep`, remove `_infer_stage()` |
+| 10 | No multi-step mixed pipeline exists to prove architecture | training_pipeline has 1 step (TrainModel) — only tests the happy path | Create `verification_pipeline` with @task + @ml_task steps |
+| 11 | Email.render_operator() signature mismatch | SmartCompiler passes `pipeline_dir=` kwarg but Email.render_operator() doesn't accept it — will crash at runtime | Add `**kwargs` or `pipeline_dir` param to Email.render_operator() |
+| 12 | WriteFeatures has no `render_operator()` | After 4.5.4 makes SmartCompiler raise NotImplementedError, WriteFeatures becomes unusable in compiled pipelines | Add `render_operator()` — metadata-only, renders as PythonOperator or custom operator |
+| 13 | `utils/sql_compat.py` is dead DuckDB code | Completely orphaned — nothing imports it. Contradicts "no DuckDB" policy | Delete file |
+| 14 | `utils/logging.py` is dead stdlib logging | Completely orphaned — loguru used everywhere. Nothing imports it | Delete file |
+| 15 | `PipelineDefinition.ml_task_groups` never called | Dead property — duplicates SmartCompiler._group_steps() logic | Delete property |
+| 16 | `components/__init__.py` has no re-exports | discussion.md envisions `from gcp_ml_framework.components import BQQuery, TrainModel` — currently requires 3-level deep imports | Add import facade |
+| 17 | `cmd_deploy.py` swallows compilation errors | `except SystemExit: pass` on line 58 — deploy continues after compile failure | Fix error handling |
+| 18 | `cmd_init.py` scaffolds non-existent CLI commands | References `gml promote`, `gml deploy dags`, `gml run --compile-only` — none exist | Fix scaffolded CI templates |
+| 19 | Duplicated `_load_pipeline()` in cmd_compile.py + cmd_run.py | Identical function copy-pasted in two CLI modules | Extract to shared helper |
+
+---
+
+### 4.5.1 Add Explicit `@ml_task` Decorators to ML Components
+
+**What:** The 4 ML components rely on `BaseComponent._task_type = TaskType.ML_TASK` (the default on `base.py:50`). This works by accident but contradicts the decorator architecture. The `@task` side is correct — all 6 `@task` components have explicit decorators. The `@ml_task` side was missed.
+
+**Files to change (1-line per file):**
+
+- [ ] `gcp_ml_framework/components/ml/train.py` — add `@ml_task` decorator + import
+  ```python
+  from gcp_ml_framework.decorators import ml_task
+
+  @ml_task
+  class TrainModel(BaseComponent):
+  ```
+
+- [ ] `gcp_ml_framework/components/ml/evaluate.py` — add `@ml_task` decorator + import
+  ```python
+  from gcp_ml_framework.decorators import ml_task
+
+  @ml_task
+  class EvaluateModel(BaseComponent):
+  ```
+
+- [ ] `gcp_ml_framework/components/ml/register.py` — add `@ml_task` decorator + import
+  ```python
+  from gcp_ml_framework.decorators import ml_task
+
+  @ml_task
+  class RegisterModel(BaseComponent):
+  ```
+
+- [ ] `gcp_ml_framework/components/ml/deploy.py` — add `@ml_task` decorator + import
+  ```python
+  from gcp_ml_framework.decorators import ml_task
+
+  @ml_task
+  class DeployModel(BaseComponent):
+  ```
+
+**Tests to update:**
+- [ ] `tests/components/test_decorators.py` — verify ML components have explicit `@ml_task` (update `test_default_task_types` to confirm `_task_type` is set by decorator, not by inheritance)
+
+**Verify:**
+- [ ] `uv run -- pytest tests/components/test_decorators.py -v` — all pass
+- [ ] `uv run -- ruff check gcp_ml_framework/components/ml/` — clean
+
+---
+
+### 4.5.2 Fix `execute()` → `run()` Lifecycle on ML Components
+
+**What:** The architecture promises: "data scientists subclass a component and override `run()`. The component's `execute()` wraps `run()` with I/O lifecycle." Only `TrainModel` follows this — its `execute()` creates a temp dir, calls `self.run()`, then uploads to GCS. The other 3 ML components override `execute()` directly and never call `run()`. A data scientist who subclasses `EvaluateModel` and overrides `run()` gets `NotImplementedError` because `execute()` goes straight to a utility function.
+
+**The fix:** Move each component's current `execute()` body into `run()`. Make `execute()` the lifecycle wrapper that calls `self.run()`. Default `run()` does what `execute()` used to do. Data scientists override `run()` to customize.
+
+**TrainModel** — already correct (no changes needed):
+```python
+# execute() creates temp dir → calls self.run() → uploads to GCS ✅
+```
+
+**EvaluateModel** (`gcp_ml_framework/components/ml/evaluate.py`):
+
+- [ ] Move current `execute()` body into `run()`:
+  ```python
+  def execute(self) -> None:
+      """Container lifecycle: call run(), handle output URI."""
+      self.run()
+
+  def run(self) -> None:
+      """Evaluate model against dataset. Override for custom evaluation logic."""
+      from gcp_ml_framework.utils.evaluate import run_evaluate
+
+      run_evaluate(
+          project=self.project,
+          region=self.region,
+          model_uri=self.model_uri,
+          eval_dataset_uri=self.dataset_uri,
+          metrics=self.metrics,
+          gate=self.gate,
+          experiment_name=self.experiment_name,
+          output_uri_path=self.output_uri_path,
+      )
+  ```
+
+**RegisterModel** (`gcp_ml_framework/components/ml/register.py`):
+
+- [ ] Move current `execute()` body into `run()`, keep output_uri_path writing in `execute()`:
+  ```python
+  def execute(self) -> None:
+      """Container lifecycle: call run(), write output URI."""
+      resource_name = self.run()
+      if self.output_uri_path:
+          Path(self.output_uri_path).parent.mkdir(parents=True, exist_ok=True)
+          Path(self.output_uri_path).write_text(resource_name)
+
+  def run(self) -> str:
+      """Register model in Vertex AI Model Registry. Override for custom registration.
+
+      Returns:
+          The registered model's resource name.
+      """
+      from google.cloud import aiplatform
+
+      aiplatform.init(project=self.project, location=self.region)
+      model = aiplatform.Model.upload(
+          display_name=self.model_display_name,
+          artifact_uri=self.model_uri,
+          serving_container_image_uri=self.serving_container_image,
+          labels=self.labels,
+          description=self.description,
+      )
+      return model.resource_name
+  ```
+
+**DeployModel** (`gcp_ml_framework/components/ml/deploy.py`):
+
+- [ ] Move current `execute()` body into `run()`:
+  ```python
+  def execute(self) -> None:
+      """Container lifecycle: call run()."""
+      self.run()
+
+  def run(self) -> None:
+      """Deploy model to Vertex AI Endpoint. Override for custom deployment logic."""
+      from gcp_ml_framework.utils.vertex import run_deploy
+
+      run_deploy(
+          project=self.project,
+          region=self.region,
+          model_uri=self.model_uri,
+          model_display_name=self.model_display_name,
+          endpoint_display_name=self.endpoint_display_name,
+          serving_container_image=self.serving_container_image,
+          machine_type=self.machine_type,
+          min_replica_count=self.min_replica_count,
+          max_replica_count=self.max_replica_count,
+          traffic_split=self.traffic_split,
+          output_uri_path=self.output_uri_path,
+      )
+  ```
+
+**Note on @task components:** BQQuery, Email, BigQueryExtract, GCSExtract, BQTransform, WriteFeatures — NOT changing. These are framework-provided components used as-is (not subclassed by data scientists). Their `execute()` directly doing work is correct for their use case. The `run()` override pattern is for ML components where custom business logic is expected.
+
+**Tests:**
+- [ ] `tests/components/test_evaluate.py`:
+  - `test_evaluate_model_execute_calls_run` — mock `run()`, verify `execute()` calls it
+  - `test_evaluate_model_subclass_run_override` — subclass overrides `run()`, verify custom code executes
+- [ ] `tests/components/test_register.py`:
+  - `test_register_model_execute_calls_run` — mock `run()`, verify `execute()` calls it
+  - `test_register_model_run_returns_resource_name` — mock aiplatform, verify return value
+  - `test_register_model_execute_writes_output_uri` — verify `execute()` writes `run()` return value to output_uri_path
+- [ ] `tests/components/test_deploy.py`:
+  - `test_deploy_model_execute_calls_run` — mock `run()`, verify `execute()` calls it
+  - `test_deploy_model_subclass_run_override` — subclass overrides `run()`, verify custom code executes
+
+**Verify:**
+- [ ] `uv run -- pytest tests/components/ -v` — all pass
+- [ ] `uv run -- ruff check gcp_ml_framework/components/ml/` — clean
+
+---
+
+### 4.5.3 Fix `render_operator()` Across All @task Components
+
+**What:** Phase 2.2 (todo.md line 417) explicitly planned: "Keep BQTransform as-is (already a component, add render_operator for Airflow path)". This was never done. BQTransform is a `@task` component that runs SQL transformations — it should render as a `BigQueryInsertJobOperator` in compiled Airflow DAGs, exactly like BQQuery does.
+
+**File:** `gcp_ml_framework/components/transformation/bq_transform.py`
+
+- [ ] Add `render_operator()` method:
+  ```python
+  def render_operator(
+      self, context: MLContext, pipeline_dir: Path | None = None,
+  ) -> tuple[str, set[str]]:
+      """Return (operator_code, imports) for Airflow DAG generation."""
+      imports = {
+          "from airflow.providers.google.cloud.operators.bigquery"
+          " import BigQueryInsertJobOperator",
+      }
+
+      sql = self._get_sql()
+      # Resolve framework template variables
+      sql = sql.replace("{bq_dataset}", context.bq_dataset)
+      sql = sql.replace("{gcs_prefix}", context.gcs_prefix)
+      sql = sql.replace("{run_date}", "{{ ds }}")
+      escaped_sql = sql.replace("\\", "\\\\").replace("'''", "\\'\\'\\'")
+
+      dest = {
+          "projectId": context.gcp_project,
+          "datasetId": context.bq_dataset,
+          "tableId": self.output_table,
+      }
+
+      code = f"""BigQueryInsertJobOperator(
+          task_id="{{{{ task_id }}}}",
+          configuration={{"query": {{
+              "query": '''{escaped_sql}''',
+              "useLegacySql": False,
+              "destinationTable": {dest!r},
+              "writeDisposition": "{self.write_disposition}",
+              "createDisposition": "CREATE_IF_NEEDED",
+          }}}},
+          gcp_conn_id="google_cloud_default",
+      )"""
+
+      return code, imports
+  ```
+
+- [ ] Add TYPE_CHECKING import for MLContext (same pattern as bq_query.py)
+
+**Tests:**
+- [ ] `tests/components/test_bq_transform.py`:
+  - `test_bq_transform_has_render_operator` — method exists and is callable
+  - `test_bq_transform_render_operator_returns_bq_operator` — output contains `BigQueryInsertJobOperator`
+  - `test_bq_transform_render_operator_resolves_templates` — `{bq_dataset}` → context.bq_dataset, `{run_date}` → `{{ ds }}`
+  - `test_bq_transform_render_operator_includes_destination` — destination table present in output
+
+**3b. Fix Email.render_operator() signature mismatch (runtime crash)**
+
+**What:** SmartCompiler._render_task_step() (line 318) calls `component.render_operator(context, pipeline_dir=pipeline_dir)`. But Email.render_operator() only accepts `(self, context: MLContext)` — no `pipeline_dir` kwarg. This means compiling ANY pipeline containing Email will crash with `TypeError: render_operator() got an unexpected keyword argument 'pipeline_dir'`.
+
+**File:** `gcp_ml_framework/components/operators/email.py`
+
+- [ ] Add `pipeline_dir` kwarg to match SmartCompiler's call signature:
+  ```python
+  def render_operator(self, context: MLContext, pipeline_dir: Path | None = None) -> tuple[str, set[str]]:
+  ```
+- [ ] Add `from pathlib import Path` to TYPE_CHECKING imports
+
+**3c. Add render_operator() to WriteFeatures**
+
+**What:** WriteFeatures is `@task` but has no `render_operator()`. After 4.5.4 makes SmartCompiler raise NotImplementedError for missing render_operator(), WriteFeatures becomes unusable in compiled pipelines. WriteFeatures is a metadata-only operation (registers a BQ table as a Feature Store FeatureGroup) — render as a PythonOperator that calls the Vertex AI Feature Store API.
+
+**File:** `gcp_ml_framework/components/feature_store/write_features.py`
+
+- [ ] Add `render_operator()` method:
+  ```python
+  def render_operator(
+      self, context: MLContext, pipeline_dir: Path | None = None,
+  ) -> tuple[str, set[str]]:
+      """Return (operator_code, imports) for Airflow DAG generation."""
+      imports = {"from airflow.operators.python import PythonOperator"}
+
+      code = f"""PythonOperator(
+          task_id="{{{{ task_id }}}}",
+          python_callable=_write_features_{self.feature_group_id or self.component_name},
+      )"""
+
+      return code, imports
+  ```
+  Note: Feature Store registration is a GCP SDK call with no native Airflow operator — PythonOperator is the correct choice here.
+
+**Tests:**
+- [ ] `tests/components/test_email.py`:
+  - `test_email_render_operator_accepts_pipeline_dir` — verify no crash when called with `pipeline_dir=None`
+- [ ] `tests/components/test_write_features.py`:
+  - `test_write_features_has_render_operator` — method exists
+  - `test_write_features_render_operator_returns_python_operator` — output contains `PythonOperator`
+
+**Verify:**
+- [ ] `uv run -- pytest tests/components/test_bq_transform.py tests/components/test_email.py -v` — all pass
+- [ ] `uv run -- ruff check gcp_ml_framework/components/ -v` — clean
+
+---
+
+### 4.5.4 Fix SmartCompiler No-Op Fallback
+
+**What:** `smart_compiler.py:324-329` has a `lambda: None` fallback for @task components without `render_operator()`. This silently makes components do nothing in production DAGs. Replace with a clear error so developers know they need to implement `render_operator()`.
+
+**File:** `gcp_ml_framework/pipeline/smart_compiler.py`
+
+- [ ] Replace the fallback (lines 324-329):
+  ```python
+  # BEFORE:
+  # Fallback: generate a PythonOperator that calls execute()
+  imports = {"from airflow.operators.python import PythonOperator"}
+  code = f"""{safe_name} = PythonOperator(
+      task_id="{safe_name}",
+      python_callable=lambda: None,  # TODO: wire component.execute()
+  )"""
+
+  # AFTER:
+  raise NotImplementedError(
+      f"Component {type(component).__name__} is decorated with @task but does not implement "
+      f"render_operator(). All @task components used in compiled pipelines must implement "
+      f"render_operator() to generate native Airflow operator code. "
+      f"Either add render_operator() to {type(component).__name__} or use a component "
+      f"that already has it (e.g. BQQuery, BQTransform, Email)."
+  )
+  ```
+
+**Tests:**
+- [ ] `tests/pipeline/test_smart_compiler.py`:
+  - `test_task_without_render_operator_raises` — @task component without render_operator() → `NotImplementedError` with helpful message
+
+**Verify:**
+- [ ] `uv run -- pytest tests/pipeline/test_smart_compiler.py -v` — all pass
+- [ ] Existing SmartCompiler tests still pass (they use BQQuery/Email which have render_operator)
+
+---
+
+### 4.5.5 Remove Redundant & Broken Components
+
+**What:** Three components and their utilities need removal:
+
+| Component | Problem | Rationale |
+|-----------|---------|-----------|
+| **ReadFeatures** | No `execute()`, no `run()`, broken at runtime | Empty shell — `run_read_features()` utility exists but is orphaned (never called). Re-add when Feature Store reads are actually needed. |
+| **BigQueryExtract** | Redundant with BQQuery, no `render_operator()` | Phase 2.2 explicitly planned: "BQQuery (merges BigQueryExtract + BQQueryTask)". BQQuery already has `render_operator()`, `execute()`, `resolve_sql()` — it's the complete version. BigQueryExtract is the leftover that should have been deleted. Not used in any pipeline. |
+| **GCSExtract** | No `render_operator()`, not used in any pipeline | Would be a silent no-op in compiled DAGs. No pipeline references it. No functional tests. Can be re-added with proper `render_operator()` when a pipeline actually needs GCS-to-GCS copy. |
+
+**Complete file deletion list:**
+
+- [ ] Delete `gcp_ml_framework/components/ingestion/bigquery_extract.py` — entire file (redundant with BQQuery)
+- [ ] Delete `gcp_ml_framework/components/ingestion/gcs_extract.py` — entire file (unused, no render_operator)
+- [ ] Delete `gcp_ml_framework/utils/bigquery_extract.py` — utility only served BigQueryExtract
+- [ ] Delete `gcp_ml_framework/utils/sql_compat.py` — dead DuckDB SQL translation code; nothing imports it; contradicts "no DuckDB" architecture
+- [ ] Delete `gcp_ml_framework/utils/logging.py` — dead stdlib logging; nothing imports it; loguru used everywhere
+- [ ] Delete `gcp_ml_framework/utils/gcs_extract.py` — utility only served GCSExtract
+
+**Files to edit:**
+
+- [ ] `gcp_ml_framework/components/feature_store/write_features.py`:
+  - Delete `ReadFeatures` class (lines 51-65)
+  - Keep WriteFeatures (functional, actively used by compiler + local_runner)
+
+- [ ] `gcp_ml_framework/utils/feature_store.py`:
+  - Delete orphaned `run_read_features()` function (lines 66-102)
+  - Keep `run_write_features()` (called by WriteFeatures.execute())
+
+- [ ] `gcp_ml_framework/pipeline/builder.py`:
+  - Remove from `_STAGE_MAP_BY_NAME`:
+    ```python
+    "BigQueryExtract": "ingest",   # delete
+    "GCSExtract": "ingest",        # delete
+    "ReadFeatures": "read_features", # delete
+    ```
+  - Update `ingest()` docstring: `"""Add a data ingestion step (BQQuery, etc.)."""`
+  - Delete `read_features()` method (lines 159-161)
+  - Delete `PipelineDefinition.ml_task_groups` property — dead code, duplicates SmartCompiler._group_steps() logic, never called anywhere
+
+- [ ] `tests/components/test_decorators.py`:
+  - Remove imports: `BigQueryExtract`, `GCSExtract`, `ReadFeatures`
+  - Remove assertions: lines 113-114 (BigQueryExtract, GCSExtract), line 117 (ReadFeatures)
+  - Update docstring (line 104)
+
+- [ ] `tests/pipeline/test_builder.py`:
+  - Remove `.read_features(comp)` calls (lines 38, 100)
+  - Remove `"read_features"` from expected stages list (line 112)
+
+- [ ] `gcp_ml_framework/components/ingestion/__init__.py` — verify empty / no exports to clean up
+
+**What stays (NOT removing):**
+
+| Component | Why keep |
+|-----------|----------|
+| **BQQuery** | Has `render_operator()`, `execute()`, `resolve_sql()` — complete @task component |
+| **BQTransform** | Getting `render_operator()` in 4.5.3 — actively needed for verification_pipeline |
+| **Email** | Has `render_operator()`, complete @task component |
+| **WriteFeatures** | Has `execute()`, actively referenced by compiler + local_runner for metadata-only handling |
+
+**Verify:**
+- [ ] `uv run -- pytest tests/ -m unit -v` — all pass
+- [ ] `uv run -- ruff check gcp_ml_framework/ tests/` — clean
+- [ ] Zero references to removed components:
+  ```bash
+  grep -r "BigQueryExtract\|GCSExtract\|ReadFeatures\|run_bigquery_extract\|run_gcs_extract\|run_read_features" \
+    gcp_ml_framework/ tests/ pipelines/ --include="*.py"
+  ```
+
+---
+
+### 4.5.6 Collapse Pipeline API (REQS 11.0)
+
+**What:** REQS 11.0 says: "Collapse specialized methods into a single step() method to clarify that a pipeline is simply an ordered sequence of steps, and any component type can be used at any position." We kept all 8 named methods and `PipelineBuilder` as a parent class "for backward compatibility" — but there's nothing to be backward-compatible WITH. The old `DAGBuilder` consumers were deleted in Phase 2.5. Zero pipelines use `.ingest()` or `.train()`. Every pipeline (including discussion.md examples) uses `Pipeline.add()`.
+
+The `stage` field on `PipelineStep` is dead code: set on every step, consumed by zero downstream systems. SmartCompiler groups on `task_type`. PipelineCompiler wires data on `isinstance()`. LocalRunner wires data on `isinstance()`. Generated DAGs and YAMLs never reference `stage`.
+
+**What stays:** `Pipeline`, `PipelineStep`, `PipelineDefinition`, `.add()`, `.build()`
+**What goes:** `PipelineBuilder`, all named methods, `stage`, `_STAGE_MAP_BY_NAME`, `_infer_stage()`
+
+**File:** `gcp_ml_framework/pipeline/builder.py`
+
+- [ ] Remove `_STAGE_MAP_BY_NAME` dict
+- [ ] Remove `_infer_stage()` function
+- [ ] Remove `stage` field from `PipelineStep`
+- [ ] Delete `PipelineBuilder` class entirely (all 8 named methods + `_add()` + `step()` + `build()`)
+- [ ] Make `Pipeline` a standalone class (not extending `PipelineBuilder`):
+  ```python
+  class Pipeline:
+      """Unified pipeline builder. A pipeline is an ordered sequence of steps.
+
+      Usage:
+          pipeline = (
+              Pipeline(name="training", schedule="@daily")
+              .add(BQQuery(sql="SELECT ..."), name="Ingest")
+              .add(TrainModel(), name="Train")
+              .add(Email(to=["team@co.com"]), name="Notify")
+              .build()
+          )
+      """
+
+      def __init__(
+          self,
+          name: str,
+          schedule: str | None = "@daily",
+          description: str = "",
+          tags: list[str] | None = None,
+      ) -> None:
+          self._name = name
+          self._schedule = schedule
+          self._description = description
+          self._tags = tags or []
+          self._steps: list[PipelineStep] = []
+
+      def add(self, component: BaseComponent, name: str | None = None) -> Pipeline:
+          """Add a component to the pipeline.
+
+          The task_type is read from the component's _task_type ClassVar
+          (set by @task or @ml_task decorator).
+          """
+          step_name = name or f"{type(component).__name__}_{len(self._steps)}"
+          task_type = getattr(component, "_task_type", TaskType.ML_TASK)
+          self._steps.append(
+              PipelineStep(name=step_name, component=component, task_type=task_type)
+          )
+          return self
+
+      def build(self) -> PipelineDefinition:
+          if not self._steps:
+              raise ValueError(
+                  f"Pipeline '{self._name}' has no steps. "
+                  "Add at least one step before calling .build()."
+              )
+          return PipelineDefinition(
+              name=self._name,
+              schedule=self._schedule,
+              steps=list(self._steps),
+              description=self._description,
+              tags=self._tags,
+          )
+  ```
+- [ ] Update module docstring to remove PipelineBuilder examples and named method references
+
+**Exports to update:**
+
+- [ ] `gcp_ml_framework/__init__.py` — remove `PipelineBuilder` from imports and `__all__`
+- [ ] `gcp_ml_framework/pipeline/__init__.py` — remove `PipelineBuilder`, add `Pipeline` to imports and `__all__`
+- [ ] `gcp_ml_framework/components/__init__.py` — add import facade for data scientist convenience:
+  ```python
+  from gcp_ml_framework.components.ml.train import TrainModel
+  from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+  from gcp_ml_framework.components.ml.register import RegisterModel
+  from gcp_ml_framework.components.ml.deploy import DeployModel
+  from gcp_ml_framework.components.operators.bq_query import BQQuery
+  from gcp_ml_framework.components.operators.email import Email
+  from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+  from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+  ```
+  This enables the discussion.md target: `from gcp_ml_framework.components import BQQuery, TrainModel`
+
+**Tests to update:**
+
+- [ ] Delete `tests/pipeline/test_builder.py` entirely — all tests use `PipelineBuilder` with named methods (`.ingest()`, `.train()`, `.read_features()`, etc.). Every test in this file tests the API we're removing.
+- [ ] `tests/pipeline/test_unified_builder.py` — absorb the following from test_builder.py (rewritten for `Pipeline.add()`):
+  - `test_build_empty_pipeline_raises` — `Pipeline("x").build()` → ValueError
+  - `test_step_names_default` — auto-generated names use component class name (`BQQuery_0`, `TrainModel_1`)
+  - `test_custom_step_names` — `.add(comp, name="my_step")` preserves custom names
+  - `test_pipeline_definition_step_names` — `.step_names` property returns name list
+- [ ] `tests/pipeline/test_compiler.py` — replace `PipelineBuilder(name=...).ingest(comp).build()` with `Pipeline(name=...).add(comp).build()`:
+  - Line 45: `PipelineBuilder(name="test-pipe").ingest(comp).build()` → `Pipeline(name="test-pipe").add(comp).build()`
+  - Line 79: `PipelineBuilder(name="env-pipe").ingest(comp).build()` → `Pipeline(name="env-pipe").add(comp).build()`
+  - Line 99: `PipelineBuilder(name="train-pipe").train(train, name="train_0").build()` → `Pipeline(name="train-pipe").add(train, name="train_0").build()`
+  - Update imports: `PipelineBuilder` → `Pipeline`
+
+**Verify:**
+- [ ] `uv run -- pytest tests/pipeline/ -v` — all pass
+- [ ] `uv run -- ruff check gcp_ml_framework/pipeline/ tests/pipeline/` — clean
+- [ ] `grep -r "PipelineBuilder\|_STAGE_MAP\|_infer_stage\|\.ingest(\|\.transform(\|\.train(\|\.evaluate(\|\.deploy(\|\.write_features(\|\.read_features(\|\.step(" gcp_ml_framework/ tests/ pipelines/ --include="*.py"` — zero hits
+
+---
+
+### 4.5.7 Create `verification_pipeline`
+
+**What:** The current training_pipeline has 1 step (TrainModel). It only proves the @ml_task happy path. We need a mixed @task + @ml_task pipeline to prove the SmartCompiler actually works end-to-end. This pipeline is intentionally simple — its purpose is architectural verification, not ML sophistication.
+
+**Pipeline structure:**
+
+```python
+# pipelines/verification_pipeline/pipeline.py
+from gcp_ml_framework import Pipeline
+from gcp_ml_framework.components.operators.bq_query import BQQuery
+from gcp_ml_framework.components.transformation.bq_transform import BQTransform
+from pipelines.verification_pipeline.steps.train_verify_model import TrainVerifyModelStep
+
+pipeline = (
+    Pipeline(name="verification_pipeline", schedule="@daily")
+    .add(
+        BQQuery(
+            sql="SELECT * FROM `{bq_dataset}.housing_data_table` WHERE 1=1",
+            destination_table="verification_raw",
+            component_name="ingest_raw",
+        ),
+        name="Ingest Raw Data",
+    )
+    .add(
+        BQTransform(
+            sql="SELECT *, CURRENT_TIMESTAMP() AS processed_at FROM `{bq_dataset}.verification_raw`",
+            output_table="verification_features",
+            component_name="transform_features",
+        ),
+        name="Transform Features",
+    )
+    .add(
+        TrainVerifyModelStep(
+            component_name="train_verify_model",
+            machine_type="n2-standard-4",
+        ),
+        name="Train Model",
+    )
+    .build()
+)
+```
+
+**What this proves:**
+- `Pipeline.add()` with mixed @task (BQQuery, BQTransform) + @ml_task (TrainModel subclass)
+- SmartCompiler groups: `[TASK(BQQuery), TASK(BQTransform)] → DAG operators` + `[ML_TASK(Train)] → KFP YAML`
+- BQQuery.render_operator() → BigQueryInsertJobOperator
+- BQTransform.render_operator() → BigQueryInsertJobOperator (new from 4.5.3)
+- TrainModel subclass → KFP container component
+- Compiled DAG has BQ operators + RunPipelineJobOperator
+
+**Files to create:**
+
+- [ ] `pipelines/verification_pipeline/__init__.py` — empty
+- [ ] `pipelines/verification_pipeline/pipeline.py` — as above
+- [ ] `pipelines/verification_pipeline/steps/__init__.py` — empty
+- [ ] `pipelines/verification_pipeline/steps/train_verify_model.py`:
+  ```python
+  """Simple training step for verification — trains on verification_features table."""
+  import pickle
+  from pathlib import Path
+
+  from loguru import logger
+  from gcp_ml_framework.components.ml.train import TrainModel
+
+
+  class TrainVerifyModelStep(TrainModel):
+      """Minimal training step for architecture verification."""
+
+      def run(self) -> None:
+          from google.cloud import bigquery
+          from second_run.estimator import HousePredictionModel
+
+          logger.info(f"[train_verify_model] project={self.project}, dataset={self.dataset}")
+          client = bigquery.Client(project=self.project)
+          query = f"SELECT * FROM `{self.dataset}.verification_features`"
+          df = client.query(query).to_dataframe()
+
+          model = HousePredictionModel()
+          model.fit(df, df["price"])
+
+          local_path = Path(self._work_dir) / "model.pkl"
+          with open(local_path, "wb") as f:
+              pickle.dump(model, f)
+          logger.info(f"[train_verify_model] Model saved to {local_path}")
+  ```
+
+- [ ] `pipelines/verification_pipeline/sql/` — NOT needed (SQL is inline for simplicity)
+
+**Verify compilation:**
+- [ ] `UV_ENV_FILE=.env uv run -- gml compile verification_pipeline`
+- [ ] Check compiled YAML: `compiled_pipelines/verification_pipeline.yaml` contains container component for train step
+- [ ] Check compiled DAG: `dags/mlplatform_second_run_*_verification_pipeline.py` contains:
+  - `BigQueryInsertJobOperator` for Ingest Raw Data
+  - `BigQueryInsertJobOperator` for Transform Features
+  - `RunPipelineJobOperator` for Train Model
+  - Sequential dependencies: ingest → transform → train
+
+---
+
+### 4.5.8 Tests for Verification Pipeline
+
+**Tests to create:**
+
+- [ ] `tests/verification_pipeline/__init__.py`
+- [ ] `tests/verification_pipeline/test_compile.py`:
+  - `test_verification_pipeline_compiles` — SmartCompiler produces YAML + DAG without error
+  - `test_verification_pipeline_dag_has_bq_operators` — generated DAG contains `BigQueryInsertJobOperator` (2 occurrences)
+  - `test_verification_pipeline_dag_has_vertex_operator` — generated DAG contains `RunPipelineJobOperator`
+  - `test_verification_pipeline_dag_has_dependencies` — generated DAG has `ingest >> transform >> train` chain
+  - `test_verification_pipeline_yaml_has_train_step` — YAML contains train container component
+  - `test_verification_pipeline_step_count` — pipeline.steps has exactly 3 steps
+  - `test_verification_pipeline_mixed_types` — pipeline has both TASK and ML_TASK step types
+
+**Verify:**
+- [ ] `uv run -- pytest tests/verification_pipeline/ -v` — all pass
+- [ ] `uv run -- pytest tests/ -m unit -v` — all pass (total count increase from 147)
+
+---
+
+### 4.5.9 Fix CLI Bugs
+
+**What:** Several CLI issues that should be fixed while we're cleaning up the architecture.
+
+**9a. cmd_deploy.py swallows compilation errors**
+
+**File:** `gcp_ml_framework/cli/cmd_deploy.py`
+
+The deploy command catches `SystemExit` from `compile_cmd` and silently continues:
+```python
+except SystemExit:
+    pass  # compile_cmd uses typer.Exit for flow control
+```
+If compilation fails, deploy should NOT continue deploying broken artifacts.
+
+- [ ] Fix error handling:
+  ```python
+  try:
+      compile_cmd(...)
+  except SystemExit as e:
+      if e.code != 0:
+          logger.error("Compilation failed — aborting deploy")
+          raise typer.Exit(1)
+  ```
+
+**9b. cmd_init.py scaffolds non-existent CLI commands**
+
+**File:** `gcp_ml_framework/cli/cmd_init.py`
+
+The scaffolded CI templates reference commands that don't exist:
+- `gml run --compile-only --all` — `--compile-only` flag doesn't exist
+- `gml deploy dags` / `gml deploy features` — deploy takes pipeline names, not sub-resources
+- `gml promote --from main --to prod` — `gml promote` doesn't exist
+
+- [ ] Fix scaffolded CI to use real CLI commands:
+  - `gml run --compile-only` → `gml compile --all`
+  - `gml deploy dags` → `gml deploy --all`
+  - Remove `gml promote` references (not implemented)
+- [ ] Fix `.python-version` from `3.11` to `3.12`
+
+**9c. Extract duplicated `_load_pipeline()`**
+
+**Files:** `gcp_ml_framework/cli/cmd_compile.py`, `gcp_ml_framework/cli/cmd_run.py`
+
+Identical `_load_pipeline()` function is copy-pasted in both modules.
+
+- [ ] Create `gcp_ml_framework/cli/_helpers.py` with the shared function
+- [ ] Update both `cmd_compile.py` and `cmd_run.py` to import from `_helpers`
+
+**Verify:**
+- [ ] `uv run -- pytest tests/cli/ -v` — all pass
+- [ ] `uv run -- ruff check gcp_ml_framework/cli/` — clean
+
+---
+
+### 4.5.10 Full Verification
+
+- [ ] `uv run -- pytest tests/ -m unit -v` — all pass
+- [ ] `uv run -- ruff check gcp_ml_framework/ tests/` — zero errors
+- [ ] `UV_ENV_FILE=.env uv run -- gml compile --all` — compiles both pipelines
+- [ ] `UV_ENV_FILE=.env uv run -- gml compile verification_pipeline` — produces YAML with BQ + Vertex operators
+- [ ] Inspect generated DAG: confirm 2 BigQueryInsertJobOperators + 1 RunPipelineJobOperator
+- [ ] `UV_ENV_FILE=.env uv run -- gml run verification_pipeline --local` — executes all 3 steps in-process (requires BQ data from Phase 4 seed)
+- [ ] Zero grep hits for dead code:
+  ```bash
+  grep -r "sql_compat\|bq_to_duckdb\|from gcp_ml_framework.utils.logging\|get_logger\|ml_task_groups" \
+    gcp_ml_framework/ tests/ --include="*.py"
+  ```
+
+---
+
+### Phase 4.5 Definition of Done ✅
+
+- [x] All 4 ML components have explicit `@ml_task` decorators
+- [x] `execute()` calls `run()` on all ML components (EvaluateModel, RegisterModel, DeployModel fixed; TrainModel already correct)
+- [x] Data scientist subclass pattern works: override `run()` → custom code executes
+- [x] All @task components have consistent `render_operator()`:
+  - [x] BQTransform has `render_operator()` → `BigQueryInsertJobOperator`
+  - [x] Email.render_operator() accepts `pipeline_dir` kwarg (signature matches SmartCompiler)
+  - [x] WriteFeatures has `render_operator()` → `PythonOperator`
+- [x] SmartCompiler raises `NotImplementedError` for @task components without `render_operator()` (no silent no-ops)
+- [x] Redundant components and dead code removed:
+  - [x] ReadFeatures deleted (broken shell, orphaned utility)
+  - [x] BigQueryExtract deleted (redundant with BQQuery, per Phase 2.2 merge plan)
+  - [x] GCSExtract deleted (unused, no render_operator, no pipeline references)
+  - [x] Corresponding utility files deleted (`utils/bigquery_extract.py`, `utils/gcs_extract.py`)
+  - [x] Dead utility files deleted (`utils/sql_compat.py`, `utils/logging.py`)
+  - [x] Orphaned `run_read_features()` deleted from `utils/feature_store.py`
+  - [x] Dead `PipelineDefinition.ml_task_groups` property deleted
+  - [x] All references cleaned from builder stage map, tests, docstrings
+- [x] Zero grep hits for `BigQueryExtract|GCSExtract|ReadFeatures|run_bigquery_extract|run_gcs_extract|run_read_features` in Python files
+- [x] Pipeline API collapsed (REQS 11.0):
+  - [x] `PipelineBuilder` class deleted — `Pipeline` is standalone with only `.add()` and `.build()`
+  - [x] Named stage methods deleted (`.ingest()`, `.transform()`, `.train()`, `.evaluate()`, `.deploy()`, `.write_features()`, `.read_features()`, `.step()`)
+  - [x] `stage` field removed from `PipelineStep`
+  - [x] `_STAGE_MAP_BY_NAME` and `_infer_stage()` deleted
+  - [x] Zero grep hits for `PipelineBuilder|_STAGE_MAP|_infer_stage|\.ingest\(|\.transform\(|\.train\(|\.evaluate\(|\.deploy\(` in Python files (excluding docs/comments)
+  - [x] Exports updated: `PipelineBuilder` removed from `__init__.py` files
+  - [x] `tests/pipeline/test_builder.py` deleted; useful tests moved to `test_unified_builder.py`
+- [x] Component import facade: `from gcp_ml_framework.components import BQQuery, TrainModel` works
+- [x] `Pipeline` exported from `gcp_ml_framework.pipeline`
+- [x] CLI fixes:
+  - [x] `cmd_deploy.py` does not swallow compilation errors
+  - [x] `cmd_init.py` scaffolds only real CLI commands
+  - [x] `cmd_init.py` writes `.python-version` as `3.12`
+  - [x] `_load_pipeline()` extracted to shared `_helpers.py`
+- [x] `verification_pipeline` exists with mixed @task + @ml_task steps (BQQuery → BQTransform → TrainModel)
+- [x] Compiled DAG contains native Airflow operators + RunPipelineJobOperator
+- [x] All tests pass, ruff clean
+- [ ] `gml run verification_pipeline --local` — skipped (requires seeded BQ data; Phase 4 E2E scope)
+- [x] Zero grep hits for dead code: `sql_compat|bq_to_duckdb|gcp_ml_framework.utils.logging|ml_task_groups`
+
+---
+
 ## Phase 5: Complete Training Pipeline + Experiment Tracking
 
 **Why:** Reference implementation showing the full ML lifecycle. Proves the framework is data-scientist-ready.
 
 **ADRs:** ADR-007
-**Depends on:** Phase 4
+**Depends on:** Phase 4.5
 
 ---
 
@@ -1156,7 +1906,7 @@ Priority methods:
 
 | ID | Requirement | Priority | Status | Phase | Notes |
 |---|---|---|---|---|---|
-| 1.0 | Unified Component Lifecycle | P0 | **DONE** | — | Container components, BaseComponent lifecycle |
+| 1.0 | Unified Component Lifecycle | P0 | Partial | **Phase 4.5** | BaseComponent lifecycle exists but execute()→run() broken on 3/4 ML components — Phase 4.5.2 fixes |
 | 2.0 | Underscore Normalization | P1 | **DONE** | — | Terraform local.project_slug |
 | 3.0 | Cleanout Invalid DAGs | P1 | Not Done | **Phase 8** | Verify gml teardown handles this |
 | 4.0 | Docker Build Tag Issue | P1 | **DONE** | — | Tags are {branch}-{short_sha} |
@@ -1166,7 +1916,7 @@ Priority methods:
 | 8.0 | Replace Argparse with Typer | P0 | **DONE** | — | BaseComponent.cli(), gml CLI |
 | 9.0 | Structured Logging | P1 | Partial | **Phase 8** | Replace print() with loguru |
 | 10.0 | Google-Style Docstrings | P2 | Partial | **Phase 8** | Public API priority |
-| 11.0 | Simplify PipelineBuilder API | P0 | **DONE** | **Phase 2** | Unified Pipeline with .add(), old PipelineBuilder kept as alias |
+| 11.0 | Simplify PipelineBuilder API | P0 | Partial | **Phase 4.5** | Pipeline.add() exists but PipelineBuilder + named methods still present — Phase 4.5.6 deletes them |
 | 12.0 | Refactor CLI Entrypoints | P0 | **DONE** | — | python -m step_module --help |
 | 13.0 | Flatten ComponentConfig | P0 | **DONE** | **Phase 1** | Merged into BaseComponent |
 | 14.0 | Expose Standard Variables | P0 | Partial | **Phase 6** | GML_* env vars in containers |

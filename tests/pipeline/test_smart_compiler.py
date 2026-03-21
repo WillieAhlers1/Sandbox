@@ -37,11 +37,11 @@ class TestGroupSteps:
         steps = [
             PipelineStep(
                 name="a", component=DummyML(),
-                stage="train", task_type=TaskType.ML_TASK,
+                task_type=TaskType.ML_TASK,
             ),
             PipelineStep(
                 name="b", component=DummyML(),
-                stage="evaluate", task_type=TaskType.ML_TASK,
+                task_type=TaskType.ML_TASK,
             ),
         ]
         compiler = SmartCompiler()
@@ -55,16 +55,16 @@ class TestGroupSteps:
             PipelineStep(
                 name="a",
                 component=DummyTask(component_name="a"),
-                stage="ingest", task_type=TaskType.TASK,
+                task_type=TaskType.TASK,
             ),
             PipelineStep(
                 name="b", component=DummyML(),
-                stage="train", task_type=TaskType.ML_TASK,
+                task_type=TaskType.ML_TASK,
             ),
             PipelineStep(
                 name="c",
                 component=DummyTask(component_name="c"),
-                stage="notify", task_type=TaskType.TASK,
+                task_type=TaskType.TASK,
             ),
         ]
         compiler = SmartCompiler()
@@ -78,12 +78,12 @@ class TestGroupSteps:
         steps = [
             PipelineStep(
                 name="a", component=DummyML(),
-                stage="train", task_type=TaskType.ML_TASK,
+                task_type=TaskType.ML_TASK,
             ),
             PipelineStep(
                 name="b",
                 component=DummyTask(component_name="b"),
-                stage="notify", task_type=TaskType.TASK,
+                task_type=TaskType.TASK,
             ),
         ]
         compiler = SmartCompiler()
@@ -214,7 +214,6 @@ class TestStepGroup:
                 PipelineStep(
                     name="a",
                     component=DummyTask(component_name="a"),
-                    stage="ingest",
                     task_type=TaskType.TASK,
                 ),
             ],
@@ -306,3 +305,29 @@ class TestGeneratedDag:
         source = result.dag_path.read_text()
         assert "schedule=None" not in source
         assert "@daily" in source
+
+
+# ---------------------------------------------------------------------------
+# @task without render_operator()
+# ---------------------------------------------------------------------------
+
+
+class TestTaskWithoutRenderOperator:
+    def test_task_without_render_operator_raises(self, mock_context, tmp_path):
+        """@task component without render_operator() raises NotImplementedError."""
+
+        @task
+        class NoRenderTask(BaseComponent):
+            component_name: str = "no_render"
+
+        defn = (
+            Pipeline(name="fail_test", schedule="@daily")
+            .add(NoRenderTask(component_name="no_render"), name="bad_step")
+            .build()
+        )
+        compiler = SmartCompiler(
+            output_dir=tmp_path / "compiled",
+            dags_dir=tmp_path / "dags",
+        )
+        with pytest.raises(NotImplementedError, match="render_operator"):
+            compiler.compile(defn, mock_context)

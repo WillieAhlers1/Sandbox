@@ -6,7 +6,7 @@ import pytest
 
 from gcp_ml_framework.components.base import BaseComponent
 from gcp_ml_framework.components.ml.train import TrainModel
-from gcp_ml_framework.pipeline.builder import PipelineBuilder
+from gcp_ml_framework.pipeline.builder import Pipeline
 from gcp_ml_framework.pipeline.compiler import PipelineCompiler
 
 pytestmark = pytest.mark.unit
@@ -42,7 +42,7 @@ class TestBuildContextParamsKeys:
         """Returned dict contains project, region, environment, and other context keys."""
         compiler = PipelineCompiler(output_dir=tmp_path)
         comp = DummyComponent()
-        defn = PipelineBuilder(name="test-pipe").ingest(comp).build()
+        defn = Pipeline(name="test-pipe").add(comp).build()
 
         params = compiler._build_context_params(mock_context, defn)
 
@@ -76,7 +76,7 @@ class TestBuildContextParamsEnvironment:
         """environment value matches context.environment.value."""
         compiler = PipelineCompiler(output_dir=tmp_path)
         comp = DummyComponent()
-        defn = PipelineBuilder(name="env-pipe").ingest(comp).build()
+        defn = Pipeline(name="env-pipe").add(comp).build()
 
         params = compiler._build_context_params(mock_context, defn)
 
@@ -96,7 +96,7 @@ class TestBuildDerivedParamsTrain:
         """TrainModel step gets job_name and model_output_uri from derived params."""
         compiler = PipelineCompiler(output_dir=tmp_path)
         train = TrainModel(component_name="train_step")
-        defn = PipelineBuilder(name="train-pipe").train(train, name="train_0").build()
+        defn = Pipeline(name="train-pipe").add(train, name="train_0").build()
 
         derived = compiler._build_derived_params(
             mock_context, defn, defn.steps, pipeline_dir=None

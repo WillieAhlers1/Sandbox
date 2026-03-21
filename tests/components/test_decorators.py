@@ -100,21 +100,26 @@ class TestDefaultTaskTypes:
         assert RegisterModel._task_type == TaskType.ML_TASK
         assert DeployModel._task_type == TaskType.ML_TASK
 
+    def test_ml_components_have_explicit_decorator(self):
+        """ML components should have @ml_task applied directly, not inherited."""
+        from gcp_ml_framework.components.ml.deploy import DeployModel
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+        from gcp_ml_framework.components.ml.register import RegisterModel
+        from gcp_ml_framework.components.ml.train import TrainModel
+
+        for cls in [TrainModel, EvaluateModel, RegisterModel, DeployModel]:
+            assert "_task_type" in cls.__dict__, (
+                f"{cls.__name__} should have @ml_task decorator (own _task_type), "
+                f"not just inherit from BaseComponent"
+            )
+
     def test_data_components_are_task(self):
-        """BigQueryExtract, BQTransform, WriteFeatures, ReadFeatures, GCSExtract are @task."""
-        from gcp_ml_framework.components.feature_store.write_features import (
-            ReadFeatures,
-            WriteFeatures,
-        )
-        from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-        from gcp_ml_framework.components.ingestion.gcs_extract import GCSExtract
+        """BQTransform, WriteFeatures are @task."""
+        from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
         from gcp_ml_framework.components.transformation.bq_transform import BQTransform
 
-        assert BigQueryExtract._task_type == TaskType.TASK
-        assert GCSExtract._task_type == TaskType.TASK
         assert BQTransform._task_type == TaskType.TASK
         assert WriteFeatures._task_type == TaskType.TASK
-        assert ReadFeatures._task_type == TaskType.TASK
 
     def test_operator_components_are_task(self):
         """BQQuery and Email are @task."""

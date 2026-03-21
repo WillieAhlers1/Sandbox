@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import typer
 
 from gcp_ml_framework.cli._helpers import console, err_console, load_context
+
+logger = logging.getLogger(__name__)
 
 
 def deploy(
@@ -55,8 +58,10 @@ def deploy(
             output_dir=output_dir,
             dags_dir=dags_dir,
         )
-    except SystemExit:
-        pass  # compile_cmd uses typer.Exit for flow control
+    except SystemExit as e:
+        if e.code != 0:
+            logger.error("Compilation failed — aborting deploy")
+            raise typer.Exit(1)
 
     # Resolve artifact names to match
     match_names = {name} if name and not all_pipelines else set()

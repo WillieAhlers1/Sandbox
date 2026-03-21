@@ -3,8 +3,10 @@
 from pydantic import Field
 
 from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import ml_task
 
 
+@ml_task
 class EvaluateModel(BaseComponent):
     """
     Evaluate a model against a held-out dataset and apply metric gates.
@@ -30,7 +32,11 @@ class EvaluateModel(BaseComponent):
     component_name: str = "evaluate_model"
 
     def execute(self) -> None:
-        """Container lifecycle: delegate to utils.evaluate.run_evaluate()."""
+        """Container lifecycle: call run()."""
+        self.run()
+
+    def run(self) -> None:
+        """Evaluate model against dataset. Override for custom evaluation logic."""
         from gcp_ml_framework.utils.evaluate import run_evaluate
 
         run_evaluate(

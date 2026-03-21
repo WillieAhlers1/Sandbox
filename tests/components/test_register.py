@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -114,3 +114,42 @@ class TestRegisterModelExecute:
 
         assert output_file.exists()
         assert output_file.read_text() == "projects/123/locations/us-central1/models/456"
+
+
+# ---------------------------------------------------------------------------
+# execute()→run() lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestRegisterModelLifecycle:
+    """Verify execute()→run() lifecycle."""
+
+    def test_execute_calls_run(self, mock_aiplatform: MagicMock):
+        """execute() should delegate to run()."""
+        mock_model = MagicMock()
+        mock_model.resource_name = "projects/123/locations/us/models/456"
+        mock_aiplatform.Model.upload.return_value = mock_model
+
+        rm = RegisterModel(project="test-project", region="us-central1")
+        return_val = "projects/123/locations/us/models/456"
+        with patch.object(RegisterModel, "run", return_value=return_val) as mock_run:
+            rm.execute()
+            mock_run.assert_called_once()
+
+    def test_execute_writes_run_return_value(self, mock_aiplatform: MagicMock, tmp_path: Path):
+        """execute() writes the return value of run() to output_uri_path."""
+        mock_model = MagicMock()
+        mock_model.resource_name = "projects/123/locations/us/models/456"
+        mock_aiplatform.Model.upload.return_value = mock_model
+
+        output_file = tmp_path / "output" / "uri"
+        rm = RegisterModel(
+            project="test-project",
+            region="us-central1",
+            model_uri="gs://bucket/model",
+            model_display_name="test-model",
+            output_uri_path=str(output_file),
+        )
+        rm.execute()
+        assert output_file.exists()
+        assert output_file.read_text() == "projects/123/locations/us/models/456"

@@ -191,7 +191,7 @@ class PipelineCompiler:
             comp = step.component
             extra: dict = {}
 
-            # WriteFeatures / ReadFeatures: need feature_view_id and feature_group_id
+            # WriteFeatures: need feature_view_id and feature_group_id
             if hasattr(comp, "entity") and hasattr(comp, "feature_group"):
                 fv_id = context.naming.feature_view_id(comp.entity, comp.feature_group)
                 extra["feature_view_id"] = fv_id

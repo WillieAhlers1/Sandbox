@@ -1,9 +1,18 @@
-"""WriteFeatures / ReadFeatures — Feature Store integration components."""
+"""WriteFeatures — Feature Store integration component."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from pydantic import Field
 
 from gcp_ml_framework.components.base import BaseComponent
 from gcp_ml_framework.decorators import task
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from gcp_ml_framework.context import MLContext
 
 
 @task
@@ -46,25 +55,26 @@ class WriteFeatures(BaseComponent):
             output_uri_path=self.output_uri_path,
         )
 
+    def render_operator(
+        self, context: MLContext, pipeline_dir: Path | None = None,
+    ) -> tuple[str, set[str]]:
+        """Return (operator_code, imports) for Airflow DAG generation.
 
+        WriteFeatures is a metadata-only GCP SDK call with no native Airflow
+        operator, so we render as a PythonOperator stub. The actual Feature Store
+        registration happens via the Vertex AI SDK at runtime.
+        """
+        imports = {"from airflow.operators.python import PythonOperator"}
 
-@task
-class ReadFeatures(BaseComponent):
-    """
-    Read feature values from the Vertex AI Feature Store for training or serving.
+        func_name = f"_write_features_{self.feature_group_id or self.component_name}"
+        code = f"""PythonOperator(
+        task_id="{{{{ task_id }}}}",
+        python_callable={func_name},
+    )"""
 
-    For training: reads from the BQ source table (offline, point-in-time safe).
-    For serving:  reads from the Bigtable online store (low-latency).
-    """
-
-    entity: str
-    feature_group: str
-    feature_ids: list[str] = Field(default_factory=list)
-    output_table: str = "features_read"
-    component_name: str = "read_features"
+        return code, imports
 
 
 
 if __name__ == "__main__":
-    # Default to WriteFeatures; ReadFeatures can be invoked via its own module
     WriteFeatures.cli()

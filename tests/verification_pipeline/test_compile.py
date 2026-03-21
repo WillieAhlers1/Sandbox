@@ -1,0 +1,126 @@
+"""Unit tests for verification_pipeline compilation."""
+
+from __future__ import annotations
+
+import pytest
+
+from gcp_ml_framework.decorators import TaskType
+from gcp_ml_framework.pipeline.smart_compiler import SmartCompiler
+
+pytestmark = pytest.mark.unit
+
+
+class TestVerificationPipelineDefinition:
+    """Verify the pipeline definition is correct."""
+
+    def test_step_count(self):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        assert len(pipeline.steps) == 3
+
+    def test_step_names(self):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        assert pipeline.step_names == [
+            "Ingest Raw Data",
+            "Transform Features",
+            "Train Model",
+        ]
+
+    def test_mixed_types(self):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        assert pipeline.has_mixed_types is True
+
+    def test_task_types(self):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        assert pipeline.steps[0].task_type == TaskType.TASK
+        assert pipeline.steps[1].task_type == TaskType.TASK
+        assert pipeline.steps[2].task_type == TaskType.ML_TASK
+
+
+class TestVerificationPipelineCompile:
+    """Verify SmartCompiler produces correct output."""
+
+    def test_compiles_without_error(self, mock_context, tmp_path):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        compiler = SmartCompiler(
+            output_dir=tmp_path / "compiled",
+            dags_dir=tmp_path / "dags",
+        )
+        try:
+            result = compiler.compile(pipeline, mock_context)
+            assert result.dag_path.exists()
+        except ImportError:
+            pytest.skip("kfp not installed")
+
+    def test_produces_yaml(self, mock_context, tmp_path):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        compiler = SmartCompiler(
+            output_dir=tmp_path / "compiled",
+            dags_dir=tmp_path / "dags",
+        )
+        try:
+            result = compiler.compile(pipeline, mock_context)
+            assert len(result.yaml_paths) >= 1
+        except ImportError:
+            pytest.skip("kfp not installed")
+
+    def test_dag_has_bq_operators(self, mock_context, tmp_path):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        compiler = SmartCompiler(
+            output_dir=tmp_path / "compiled",
+            dags_dir=tmp_path / "dags",
+        )
+        try:
+            result = compiler.compile(pipeline, mock_context)
+        except ImportError:
+            pytest.skip("kfp not installed")
+        source = result.dag_path.read_text()
+        assert source.count("BigQueryInsertJobOperator") >= 2
+
+    def test_dag_has_vertex_operator(self, mock_context, tmp_path):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        compiler = SmartCompiler(
+            output_dir=tmp_path / "compiled",
+            dags_dir=tmp_path / "dags",
+        )
+        try:
+            result = compiler.compile(pipeline, mock_context)
+        except ImportError:
+            pytest.skip("kfp not installed")
+        source = result.dag_path.read_text()
+        assert "RunPipelineJobOperator" in source
+
+    def test_dag_has_dependencies(self, mock_context, tmp_path):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        compiler = SmartCompiler(
+            output_dir=tmp_path / "compiled",
+            dags_dir=tmp_path / "dags",
+        )
+        try:
+            result = compiler.compile(pipeline, mock_context)
+        except ImportError:
+            pytest.skip("kfp not installed")
+        source = result.dag_path.read_text()
+        assert ">>" in source
+
+    def test_dag_is_valid_python(self, mock_context, tmp_path):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        compiler = SmartCompiler(
+            output_dir=tmp_path / "compiled",
+            dags_dir=tmp_path / "dags",
+        )
+        try:
+            result = compiler.compile(pipeline, mock_context)
+        except ImportError:
+            pytest.skip("kfp not installed")
+        source = result.dag_path.read_text()
+        compile(source, "<test_dag>", "exec")

@@ -70,3 +70,35 @@ class TestEvaluateModelExecute:
             experiment_name="exp-001",
             output_uri_path="/tmp/output_uri",
         )
+
+
+# ---------------------------------------------------------------------------
+# execute()→run() lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateModelLifecycle:
+    """Verify execute()→run() lifecycle."""
+
+    @patch("gcp_ml_framework.utils.evaluate.run_evaluate")
+    def test_execute_calls_run(self, mock_run_evaluate: MagicMock):
+        """execute() should delegate to run(), not call utility directly."""
+        em = EvaluateModel(
+            project="test-project",
+            region="us-central1",
+        )
+        with patch.object(EvaluateModel, "run") as mock_run:
+            em.execute()
+            mock_run.assert_called_once()
+
+    @patch("gcp_ml_framework.utils.evaluate.run_evaluate")
+    def test_subclass_run_override(self, mock_run_evaluate: MagicMock):
+        """Data scientist subclass overriding run() should have custom code execute."""
+        class CustomEval(EvaluateModel):
+            def run(self) -> None:
+                self._custom_called = True
+
+        ce = CustomEval(project="test-project", region="us-central1")
+        ce.execute()
+        assert ce._custom_called is True
+        mock_run_evaluate.assert_not_called()

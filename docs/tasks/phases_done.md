@@ -253,7 +253,7 @@ python -c "import yaml; yaml.safe_load(open('cloudbuild.yaml'))" → valid YAML
 
 ### Task 4.1-4.2 — Environment + Data
 - Verified `.env` has correct GCP config (project, region, SA, Composer details)
-- Seeded BigQuery data via `seed_bq.sh` (50 rows in `mlplatform_second_run_version_1.housing_data_table`)
+- Seeded BigQuery data via `seed_bq.sh` (50 rows in `{namespace}.housing_data_table`)
 
 ### Task 4.3-4.4 — Local Execution
 - Fixed critical SQL bug: hardcoded `demo_housing_data` → `{dataset}` template
@@ -306,4 +306,78 @@ uv run -- pytest tests/ -m unit -v                    → 146 passed, 0.60s
 uv run -- ruff check gcp_ml_framework/ tests/         → All checks passed!
 UV_ENV_FILE=.env uv run -- gml run --help              → --local, --all, --run-date (no --vertex)
 UV_ENV_FILE=.env uv run -- gml run training_pipeline   → DAG triggered, state: running
+```
+
+---
+
+## Phase 4.5: Phases 1-4 Fixes
+
+**Completed:** 2026-03-21
+**Verification:** 176 unit tests passing (30 new), ruff clean, both pipelines compile and run E2E on GCP
+**REQS addressed:** 11.0 (Pipeline API collapse), execute()→run() lifecycle, render_operator() consistency, dead code cleanup
+
+### Task 4.5.1 — Add Explicit @ml_task Decorators
+- Added `@ml_task` to TrainModel, EvaluateModel, RegisterModel, DeployModel
+- Previously relied on BaseComponent default — now explicit per decorator architecture
+
+### Task 4.5.2 — Fix execute()→run() Lifecycle
+- EvaluateModel, RegisterModel, DeployModel: moved execute() body into run(), execute() calls self.run()
+- Data scientist subclass pattern now works: override run() → custom code executes
+- TrainModel already correct (no changes)
+
+### Task 4.5.3 — Fix render_operator() Across @task Components
+- BQTransform: added render_operator() → BigQueryInsertJobOperator
+- Email: fixed signature to accept pipeline_dir kwarg
+- WriteFeatures: added render_operator() → PythonOperator
+
+### Task 4.5.4 — Fix SmartCompiler No-Op Fallback
+- Replaced `lambda: None` with NotImplementedError for @task components without render_operator()
+
+### Task 4.5.5 — Remove Redundant & Broken Components
+- Deleted: ReadFeatures, BigQueryExtract, GCSExtract (classes + utility files)
+- Deleted: utils/sql_compat.py, utils/logging.py (orphaned dead code)
+- Deleted: orphaned run_read_features() from utils/feature_store.py
+- Cleaned all references from tests, docstrings, stage maps
+
+### Task 4.5.6 — Collapse Pipeline API (REQS 11.0)
+- Deleted PipelineBuilder class with all 8 named methods
+- Removed stage field from PipelineStep, deleted _STAGE_MAP_BY_NAME and _infer_stage()
+- Pipeline is standalone with only .add() and .build()
+- Added component import facade: `from gcp_ml_framework.components import BQQuery, TrainModel`
+
+### Task 4.5.7 — Create verification_pipeline
+- Mixed @task + @ml_task pipeline: BQQuery → BQTransform → TrainVerifyModelStep
+- Proves SmartCompiler correctly groups [TASK, TASK] + [ML_TASK]
+
+### Task 4.5.8 — Tests for verification_pipeline
+- 10 tests: definition (step count, names, mixed types, task types) + compilation (compiles, YAML, BQ operators, Vertex operator, dependencies, valid Python)
+
+### Task 4.5.9 — Fix CLI Bugs
+- cmd_deploy.py: fixed error handling (was swallowing compilation failures)
+- cmd_init.py: fixed templates to use real CLI commands, Python 3.12
+- Extracted shared load_pipeline() to _helpers.py
+
+### Task 4.5.10 — Full Verification + Audit
+- 176 tests passing, ruff clean
+- Both pipelines compile: training_pipeline + verification_pipeline
+- Generated DAGs: 2 BigQueryInsertJobOperators + RunPipelineJobOperator
+- Zero dead code references
+- Fixed 2 runtime bugs found during E2E audit:
+  - BQQuery.execute() now resolves {bq_dataset} templates + sets destination table
+  - run_bq_transform() guards empty output_uri_path
+- Both pipelines run successfully on real GCP (local + Composer triggered)
+- Security audit: all sensitive strings scrubbed from tracked files
+
+### Final Verification
+```
+uv run -- pytest tests/ -v                            → 176 passed
+uv run -- ruff check gcp_ml_framework/ tests/         → All checks passed!
+UV_ENV_FILE=.env uv run -- gml compile --all           → 2 YAML + 2 DAGs
+UV_ENV_FILE=.env uv run -- gml build training_pipeline → SUCCESS (Cloud Build)
+UV_ENV_FILE=.env uv run -- gml build verification_pipeline → SUCCESS (Cloud Build)
+UV_ENV_FILE=.env uv run -- gml deploy --all            → DAGs + YAML uploaded
+UV_ENV_FILE=.env uv run -- gml run training_pipeline   → Composer DAG triggered
+UV_ENV_FILE=.env uv run -- gml run verification_pipeline → Composer DAG triggered
+UV_ENV_FILE=.env uv run -- gml run training_pipeline --local → BQ + train + GCS ✓
+UV_ENV_FILE=.env uv run -- gml run verification_pipeline --local → 3 steps on real GCP ✓
 ```

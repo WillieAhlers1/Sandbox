@@ -1,11 +1,17 @@
 """BQTransform — run a SQL transformation in BigQuery and write to a BQ table."""
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import model_validator
 
 from gcp_ml_framework.components.base import BaseComponent
 from gcp_ml_framework.decorators import task
+
+if TYPE_CHECKING:
+    from gcp_ml_framework.context import MLContext
 
 
 @task
@@ -39,7 +45,7 @@ class BQTransform(BaseComponent):
     component_name: str = "bq_transform"
 
     @model_validator(mode="after")
-    def _check_sql_source(self) -> "BQTransform":
+    def _check_sql_source(self) -> BQTransform:
         if not self.sql_file and not self.sql:
             raise ValueError("BQTransform requires either sql_file or sql")
         return self
@@ -67,6 +73,40 @@ class BQTransform(BaseComponent):
             output_uri_path=self.output_uri_path,
         )
 
+    def render_operator(
+        self, context: MLContext, pipeline_dir: Path | None = None,
+    ) -> tuple[str, set[str]]:
+        """Return (operator_code, imports) for Airflow DAG generation."""
+        from gcp_ml_framework.components.operators.bq_query import _resolve_templates
+
+        imports = {
+            "from airflow.providers.google.cloud.operators.bigquery"
+            " import BigQueryInsertJobOperator",
+        }
+
+        sql = self._get_sql()
+        resolved_sql = _resolve_templates(sql, context)
+        escaped_sql = resolved_sql.replace("\\", "\\\\").replace("'''", "\\'\\'\\'")
+
+        dest = {
+            "projectId": context.gcp_project,
+            "datasetId": context.bq_dataset,
+            "tableId": self.output_table,
+        }
+
+        code = f"""BigQueryInsertJobOperator(
+        task_id="{{{{ task_id }}}}",
+        configuration={{"query": {{
+            "query": '''{escaped_sql}''',
+            "useLegacySql": False,
+            "destinationTable": {dest!r},
+            "writeDisposition": "{self.write_disposition}",
+            "createDisposition": "CREATE_IF_NEEDED",
+        }}}},
+        gcp_conn_id="google_cloud_default",
+    )"""
+
+        return code, imports
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ def run_bq_transform(
     logger.info(f"Running BQ transform → {dest}")
     client.query(rendered, job_config=cfg).result()
 
-    Path(output_uri_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_uri_path, "w") as f:
-        f.write(dest)
+    if output_uri_path:
+        Path(output_uri_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_uri_path, "w") as f:
+            f.write(dest)

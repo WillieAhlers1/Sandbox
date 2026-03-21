@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from gcp_ml_framework.cli._helpers import console, err_console, load_context
+from gcp_ml_framework.cli._helpers import console, err_console, load_context, load_pipeline
 
 
 def compile_cmd(
@@ -74,30 +74,10 @@ def _compile_pipeline(
     """Compile a pipeline.py via SmartCompiler."""
     from gcp_ml_framework.pipeline.smart_compiler import SmartCompiler
 
-    pipeline_def = _load_pipeline(pipeline_dir)
+    pipeline_def = load_pipeline(pipeline_dir)
     compiler = SmartCompiler(output_dir=output_dir, dags_dir=dags_dir)
     result = compiler.compile(pipeline_def, ctx, pipeline_dir=pipeline_dir)
 
     for yaml_path in result.yaml_paths:
         console.print(f"[green]Compiled KFP YAML:[/green] {yaml_path}")
     console.print(f"[green]Generated DAG:[/green] {result.dag_path}")
-
-
-def _load_pipeline(pipeline_dir: Path):
-    """Import a pipeline.py and return its `pipeline` object."""
-    import importlib.util
-    import sys
-
-    spec = importlib.util.spec_from_file_location(
-        "_pipeline", pipeline_dir / "pipeline.py"
-    )
-    if spec is None or spec.loader is None:
-        raise FileNotFoundError(f"No pipeline.py found in {pipeline_dir}")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_pipeline"] = mod
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    if not hasattr(mod, "pipeline"):
-        raise AttributeError(
-            f"{pipeline_dir}/pipeline.py must define a `pipeline` variable"
-        )
-    return mod.pipeline

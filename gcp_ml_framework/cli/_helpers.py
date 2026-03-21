@@ -34,6 +34,26 @@ def load_context(
         raise typer.Exit(1) from exc
 
 
+def load_pipeline(pipeline_dir: Path):
+    """Import a pipeline.py and return its `pipeline` object."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "_pipeline", pipeline_dir / "pipeline.py"
+    )
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(f"No pipeline.py found in {pipeline_dir}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_pipeline"] = mod
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    if not hasattr(mod, "pipeline"):
+        raise AttributeError(
+            f"{pipeline_dir}/pipeline.py must define a `pipeline` variable"
+        )
+    return mod.pipeline
+
+
 def print_kv_table(title: str, data: dict[str, str]) -> None:
     table = Table(title=title, show_header=False, box=None, padding=(0, 2))
     table.add_column("Key", style="dim")

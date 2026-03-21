@@ -15,6 +15,8 @@ from gcp_ml_framework.components.base import BaseComponent
 from gcp_ml_framework.decorators import task
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from gcp_ml_framework.context import MLContext
 
 
@@ -57,7 +59,9 @@ class Email(BaseComponent):
             f"To: {self.to}, Subject: {self.subject}"
         )
 
-    def render_operator(self, context: MLContext) -> tuple[str, set[str]]:
+    def render_operator(
+        self, context: MLContext, pipeline_dir: Path | None = None,
+    ) -> tuple[str, set[str]]:
         """Return (operator_code, imports) for Airflow DAG generation."""
         imports = {
             "from airflow.operators.email import EmailOperator",

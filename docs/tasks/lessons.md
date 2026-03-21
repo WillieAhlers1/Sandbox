@@ -45,6 +45,16 @@
 - **Rule**: To emit `{{ ds }}` (valid Jinja2) from a Python f-string, use exactly 4 braces: `{{{{ ds }}}}`. Each `{{` in an f-string produces one literal `{`.
 - **Why**: Triple braces `{{{ ds }}}` look like `{{` (Jinja2 expression start) + `{ ds }` (malformed dict literal) + `}` (extra). Jinja2 parses the inner `{` as a dict and fails when it sees `ds` without a `:`. The count is: 2n braces in f-string → n literal braces in output.
 
+## 2026-03-20: Component execute() must resolve SQL templates
+- **Pattern**: `BQQuery.execute()` used `self.sql` raw without resolving `{bq_dataset}` template variables. The `resolve_sql()` method existed but was only used by `render_operator()` (DAG generation). Local execution via `gml run --local` sent literal `{bq_dataset}` to BigQuery.
+- **Rule**: Every component's `execute()` must resolve ALL template variables in its inputs using the component's own fields (`self.dataset`, `self.run_date`, etc.). Template resolution must work in BOTH paths: `render_operator()` (Airflow DAG) and `execute()` (local/container).
+- **Why**: Two separate code paths for the same data (SQL) is a recipe for divergence. The DAG path worked because `_resolve_templates()` uses MLContext. The local path must use `self.*` fields. Both must produce the same resolved SQL.
+
+## 2026-03-20: Guard output_uri_path writes with emptiness check
+- **Pattern**: `run_bq_transform()` always wrote to `output_uri_path` even when it was empty string `""`. @task components like BQTransform don't produce KFP output artifacts — their `output_uri_path` is empty by default.
+- **Rule**: Always guard `output_uri_path` writes with `if output_uri_path:`. Not all components produce file-based outputs.
+- **Why**: @task components run as Airflow operators in production (no output_uri_path needed). Only @ml_task components running inside KFP containers need to write output URIs for cross-step data flow.
+
 ## 2026-03-20: Remove BuildKit cache mounts when targeting Cloud Build
 - **Pattern**: Old Dockerfiles used `RUN --mount=type=cache,target=/root/.cache/uv` for local build caching. Cloud Build runs on ephemeral VMs — BuildKit cache mounts provide zero benefit and add complexity.
 - **Rule**: When migrating from local Docker builds to Cloud Build, remove `--mount=type=cache` directives. Use `--cache-from` with AR `:latest` tags instead — this is the Cloud Build caching pattern.

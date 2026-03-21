@@ -85,3 +85,32 @@ class TestDeployModelExecute:
             traffic_split={"new": 50, "current": 50},
             output_uri_path="/tmp/output_uri",
         )
+
+
+# ---------------------------------------------------------------------------
+# execute()→run() lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestDeployModelLifecycle:
+    """Verify execute()→run() lifecycle."""
+
+    @patch("gcp_ml_framework.utils.vertex.run_deploy")
+    def test_execute_calls_run(self, mock_run_deploy: MagicMock):
+        """execute() should delegate to run()."""
+        dm = DeployModel(endpoint_name="test-ep", project="test-project", region="us-central1")
+        with patch.object(DeployModel, "run") as mock_run:
+            dm.execute()
+            mock_run.assert_called_once()
+
+    @patch("gcp_ml_framework.utils.vertex.run_deploy")
+    def test_subclass_run_override(self, mock_run_deploy: MagicMock):
+        """Data scientist subclass overriding run() should have custom code execute."""
+        class CustomDeploy(DeployModel):
+            def run(self) -> None:
+                self._custom_called = True
+
+        cd = CustomDeploy(endpoint_name="test-ep", project="test-project", region="us-central1")
+        cd.execute()
+        assert cd._custom_called is True
+        mock_run_deploy.assert_not_called()

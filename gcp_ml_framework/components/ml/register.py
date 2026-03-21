@@ -5,8 +5,10 @@ from pathlib import Path
 from pydantic import Field
 
 from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import ml_task
 
 
+@ml_task
 class RegisterModel(BaseComponent):
     """
     Upload a trained model to Vertex AI Model Registry.
@@ -27,7 +29,19 @@ class RegisterModel(BaseComponent):
     description: str = ""
     component_name: str = "register_model"
 
-    def execute(self):
+    def execute(self) -> None:
+        """Container lifecycle: call run(), write output URI."""
+        resource_name = self.run()
+        if self.output_uri_path:
+            Path(self.output_uri_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.output_uri_path).write_text(resource_name)
+
+    def run(self) -> str:
+        """Register model in Vertex AI Model Registry. Override for custom registration.
+
+        Returns:
+            The registered model's resource name.
+        """
         from google.cloud import aiplatform
 
         aiplatform.init(project=self.project, location=self.region)
@@ -38,9 +52,7 @@ class RegisterModel(BaseComponent):
             labels=self.labels,
             description=self.description,
         )
-        if self.output_uri_path:
-            Path(self.output_uri_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(self.output_uri_path).write_text(model.resource_name)
+        return model.resource_name
 
 
 if __name__ == "__main__":

@@ -9,8 +9,10 @@ from loguru import logger
 from pydantic import Field, PrivateAttr
 
 from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import ml_task
 
 
+@ml_task
 class TrainModel(BaseComponent):
     """
     Train a model directly inside the KFP pipeline container.

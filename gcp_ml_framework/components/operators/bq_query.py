@@ -88,10 +88,21 @@ class BQQuery(BaseComponent):
         from google.cloud import bigquery
 
         client = bigquery.Client(project=self.project)
-        sql = self.sql or Path(self.sql_file).read_text()  # type: ignore[arg-type]
+        sql = self._load_sql()
+        sql = sql.format(
+            bq_dataset=self.dataset,
+            gcs_prefix=getattr(self, "gcs_prefix", ""),
+            namespace=getattr(self, "namespace", ""),
+            run_date=self.run_date,
+        )
         job_config = bigquery.QueryJobConfig(
             write_disposition=self.write_disposition,
         )
+        if self.destination_table:
+            job_config.destination = (
+                f"{self.project}.{self.dataset}.{self.destination_table}"
+            )
+            job_config.create_disposition = self.create_disposition
         job = client.query(sql, job_config=job_config)
         job.result()  # block until done
 

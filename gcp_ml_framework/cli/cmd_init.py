@@ -120,9 +120,8 @@ jobs:
       - run: uv run ruff check gcp_ml_framework tests
       - run: uv run mypy gcp_ml_framework
       - run: uv run pytest tests/unit/ -v
-      - run: gml run --compile-only --all
-      - run: gml deploy dags
-      - run: gml deploy features
+      - run: gml compile --all
+      - run: gml deploy --all
 """
 
 _CI_STAGE_YAML = """\
@@ -152,9 +151,8 @@ jobs:
           service_account: ${{{{ secrets.SA_EMAIL_STAGING }}}}
       - run: uv sync
       - run: uv run pytest tests/unit/ tests/integration/ -v
-      - run: gml deploy dags
-      - run: gml deploy features
-      - run: gml run --vertex --all --sync
+      - run: gml deploy --all
+      - run: gml run --all
 """
 
 _PROMOTE_YAML = """\
@@ -181,7 +179,9 @@ jobs:
           GML_GCP__STAGING_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_STAGING }}}}
           GML_GCP__PROD_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_PROD }}}}
       - run: uv sync
-      - run: gml promote --from main --to prod --tag ${{{{ github.ref_name }}}}
+      # TODO: gml promote is not yet implemented
+      # - run: gml promote --from main --to prod --tag ${{{{ github.ref_name }}}}
+      - run: gml deploy --all
 """
 
 _TEARDOWN_YAML = """\
@@ -258,7 +258,7 @@ def init_project(
         staging_project=staging_project,
         prod_project=prod_project,
     ))
-    _write(root / ".python-version", "3.11\n")
+    _write(root / ".python-version", "3.12\n")
     _write(root / ".gitignore", _GITIGNORE)
     _write(root / ".env.example", Path(__file__).parent.parent.parent / ".env.example")
     _write(root / "feature_schemas" / "user.yaml", _FEATURE_SCHEMA_YAML)

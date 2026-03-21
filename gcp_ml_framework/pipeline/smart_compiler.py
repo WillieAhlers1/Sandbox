@@ -321,10 +321,11 @@ with DAG(
             final_code = f"{safe_name} = {code}"
             return final_code, imports, safe_name
 
-        # Fallback: generate a PythonOperator that calls execute()
-        imports = {"from airflow.operators.python import PythonOperator"}
-        code = f"""{safe_name} = PythonOperator(
-    task_id="{safe_name}",
-    python_callable=lambda: None,  # TODO: wire component.execute()
-)"""
-        return code, imports, safe_name
+        # No render_operator — fail loud
+        raise NotImplementedError(
+            f"Component {type(component).__name__} is decorated with @task but does not "
+            f"implement render_operator(). All @task components used in compiled pipelines "
+            f"must implement render_operator() to generate native Airflow operator code. "
+            f"Either add render_operator() to {type(component).__name__} or use a component "
+            f"that already has it (e.g. BQQuery, BQTransform, Email)."
+        )

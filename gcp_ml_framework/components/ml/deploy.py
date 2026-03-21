@@ -3,8 +3,10 @@
 from pydantic import Field
 
 from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import ml_task
 
 
+@ml_task
 class DeployModel(BaseComponent):
     """
     Upload a trained model to Vertex AI Model Registry and deploy it to an Endpoint.
@@ -34,7 +36,11 @@ class DeployModel(BaseComponent):
     component_name: str = "deploy_model"
 
     def execute(self) -> None:
-        """Container lifecycle: delegate to utils.vertex.run_deploy()."""
+        """Container lifecycle: call run()."""
+        self.run()
+
+    def run(self) -> None:
+        """Deploy model to Vertex AI Endpoint. Override for custom deployment logic."""
         from gcp_ml_framework.utils.vertex import run_deploy
 
         run_deploy(

@@ -53,3 +53,22 @@ class TestEmailResolve:
         email = Email(to=["a@b.com"], subject="Test", body="Data in {bq_dataset}")
         resolved = email.resolve_body(mock_context)
         assert mock_context.bq_dataset in resolved
+
+
+# ---------------------------------------------------------------------------
+# render_operator()
+# ---------------------------------------------------------------------------
+
+
+class TestEmailRenderOperator:
+    def test_render_operator_accepts_pipeline_dir(self, mock_context):
+        """render_operator() must accept pipeline_dir kwarg (SmartCompiler passes it)."""
+        email = Email(to=["a@b.com"], subject="Test")
+        code, imports = email.render_operator(mock_context, pipeline_dir=None)
+        assert "EmailOperator" in code
+
+    def test_render_operator_returns_email_operator(self, mock_context):
+        email = Email(to=["a@b.com"], subject="Test", body="Hello")
+        code, imports = email.render_operator(mock_context)
+        assert "EmailOperator" in code
+        assert any("EmailOperator" in imp for imp in imports)
