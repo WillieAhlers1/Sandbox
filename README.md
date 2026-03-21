@@ -7,7 +7,7 @@ A pip-installable ML platform framework where data scientists define pipelines w
 - **Unified task model** — `@task` (lightweight Airflow operators) and `@ml_task` (Vertex AI container components) decorators. Data scientists learn one system.
 - **Smart compiler** — auto-groups consecutive `@ml_task` steps into a Vertex AI pipeline and wraps everything in an Airflow DAG.
 - **Composer as sole orchestrator** — all pipeline execution goes through Cloud Composer. No direct Vertex AI submission from CLI.
-- **2-layer Docker** — `base-python` (cached, changes rarely) → `{pipeline-name}` image (all deps + source).
+- **3-image Docker** — `base-python` (cached) → `{pipeline}` (training: all deps + source) + `{pipeline}-serving` (serving: slim, runtime deps only).
 - **Cloud Build for all builds** — `gml build` wraps `gcloud builds submit`. No Docker Desktop required.
 - **Environment via env var** — `GML_ENVIRONMENT` set by CI/CD or `.env`. Not derived from git.
 - **Branch isolation** — every branch gets its own BQ dataset, GCS paths, DAG, and Vertex AI pipeline namespace.
@@ -78,6 +78,7 @@ second_run/                 # Shared business logic package (estimators, feature
 docker/                     # Dockerfiles
     base/base-python/       #   Base image: Python 3.12 + uv
     pipeline/               #   Pipeline image: base + all deps + source
+    serving/                #   Serving image: slim, runtime deps + model classes
 terraform/                  # Infrastructure as code
     envs/{dev,staging,prod} #   Per-environment Terraform configs
     modules/                #   Reusable modules (storage, AR, IAM, composer)
@@ -86,6 +87,7 @@ tests/                      # Three-tier test suite
     components/             #   Component unit tests
     pipeline/               #   Builder, compiler, smart compiler tests
     cli/                    #   CLI command tests
+    serving/                #   Serving handler tests
     training_pipeline/      #   Pipeline-specific tests + E2E
 scripts/                    # Build and bootstrap scripts
 docs/                       # Architecture decisions and task tracking
@@ -156,4 +158,6 @@ Requires a `terraform.tfvars` with `project_id`, `region`, `team`, `project_name
 - **Phase 2.5** — Deprecation cleanup: old DAG system removed, config simplified (127 tests)
 - **Phase 3** — Cloud Build + Docker: `gml build`, 2-layer hierarchy (132 tests)
 - **Phase 4** — Training pipeline E2E on GCP: full chain verified (146 tests)
-- **Phase 5** — *(next)* Complete pipeline + experiment tracking
+- **Phase 5** — Complete pipeline + experiment tracking: verification pipeline, model registration, endpoint deployment, monitoring config (210 tests)
+- **Phase 5.5** — Dedicated serving image (CPR): custom prediction container for models with project-specific classes (226 tests)
+- **Phase 6** — *(next)* Feature store, conditional/loop operators, standard container variables

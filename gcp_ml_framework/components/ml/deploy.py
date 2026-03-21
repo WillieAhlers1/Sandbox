@@ -11,7 +11,7 @@ class DeployModel(BaseComponent):
     """
     Upload a trained model to Vertex AI Model Registry and deploy it to an Endpoint.
 
-    Supports canary deployments via `traffic_split`.
+    Supports canary deployments via `traffic_split` and optional model monitoring.
 
     Example:
         DeployModel(
@@ -35,6 +35,14 @@ class DeployModel(BaseComponent):
     traffic_split: dict[str, int] = Field(default_factory=lambda: {"new": 100})
     component_name: str = "deploy_model"
 
+    # Monitoring (optional)
+    enable_monitoring: bool = False
+    monitoring_alert_email: str = ""
+    monitoring_log_sample_rate: float = 0.8
+    monitoring_monitor_interval: int = 3600
+    monitoring_skew_thresholds: dict[str, float] = Field(default_factory=dict)
+    monitoring_drift_thresholds: dict[str, float] = Field(default_factory=dict)
+
     def execute(self) -> None:
         """Container lifecycle: call run()."""
         self.run()
@@ -55,6 +63,12 @@ class DeployModel(BaseComponent):
             max_replica_count=self.max_replica_count,
             traffic_split=self.traffic_split,
             output_uri_path=self.output_uri_path,
+            enable_monitoring=self.enable_monitoring,
+            monitoring_alert_email=self.monitoring_alert_email,
+            monitoring_log_sample_rate=self.monitoring_log_sample_rate,
+            monitoring_monitor_interval=self.monitoring_monitor_interval,
+            monitoring_skew_thresholds=self.monitoring_skew_thresholds,
+            monitoring_drift_thresholds=self.monitoring_drift_thresholds,
         )
 
 

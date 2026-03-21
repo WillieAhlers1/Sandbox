@@ -16,7 +16,7 @@ class TestVerificationPipelineDefinition:
     def test_step_count(self):
         from pipelines.verification_pipeline.pipeline import pipeline
 
-        assert len(pipeline.steps) == 3
+        assert len(pipeline.steps) == 6
 
     def test_step_names(self):
         from pipelines.verification_pipeline.pipeline import pipeline
@@ -25,6 +25,9 @@ class TestVerificationPipelineDefinition:
             "Ingest Raw Data",
             "Transform Features",
             "Train Model",
+            "Evaluate Model",
+            "Register Model",
+            "Deploy Model",
         ]
 
     def test_mixed_types(self):
@@ -35,9 +38,35 @@ class TestVerificationPipelineDefinition:
     def test_task_types(self):
         from pipelines.verification_pipeline.pipeline import pipeline
 
-        assert pipeline.steps[0].task_type == TaskType.TASK
-        assert pipeline.steps[1].task_type == TaskType.TASK
-        assert pipeline.steps[2].task_type == TaskType.ML_TASK
+        types = [s.task_type for s in pipeline.steps]
+        assert types == [
+            TaskType.TASK,
+            TaskType.TASK,
+            TaskType.ML_TASK,
+            TaskType.ML_TASK,
+            TaskType.ML_TASK,
+            TaskType.ML_TASK,
+        ]
+
+
+class TestEvaluateVerifyStep:
+    """Verify verification pipeline evaluation step."""
+
+    def test_instantiation(self):
+        from pipelines.verification_pipeline.steps.evaluate_verify_model import (
+            EvaluateVerifyStep,
+        )
+
+        step = EvaluateVerifyStep()
+        assert step.component_name == "evaluate_verify_model"
+
+    def test_is_evaluate_model_subclass(self):
+        from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+        from pipelines.verification_pipeline.steps.evaluate_verify_model import (
+            EvaluateVerifyStep,
+        )
+
+        assert issubclass(EvaluateVerifyStep, EvaluateModel)
 
 
 class TestVerificationPipelineCompile:

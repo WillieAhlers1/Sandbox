@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+from gcp_ml_framework.components.ml.register import RegisterModel
 from gcp_ml_framework.components.ml.train import TrainModel
 
 if TYPE_CHECKING:
@@ -89,9 +90,11 @@ class LocalRunner:
 
             # Track outputs for cross-step wiring
             if instance.output_uri_path:
-                is_train = isinstance(instance, TrainModel)
+                is_model_producer = isinstance(
+                    instance, (TrainModel, RegisterModel)
+                )
                 is_metadata_only = isinstance(instance, WriteFeatures)
-                if is_train:
+                if is_model_producer:
                     last_model_output = instance.output_uri_path
                 elif not is_metadata_only:
                     last_dataset_output = instance.output_uri_path

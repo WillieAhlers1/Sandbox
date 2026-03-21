@@ -56,8 +56,13 @@ class HousePredictionModel:
         raw["parking"] = raw["parking"].fillna(0)
 
         # Boolean-like columns: ensure 0/1
-        for col in ["mainroad", "guestroom", "basement", "hotwaterheating", "airconditioning", "prefarea"]:
-            raw[col] = raw[col].map({True: 1, False: 0, "True": 1, "False": 0, "true": 1, "false": 0}).fillna(0).astype(int)
+        bool_cols = [
+            "mainroad", "guestroom", "basement",
+            "hotwaterheating", "airconditioning", "prefarea",
+        ]
+        bool_map = {True: 1, False: 0, "True": 1, "False": 0, "true": 1, "false": 0}
+        for col in bool_cols:
+            raw[col] = raw[col].map(bool_map).fillna(0).astype(int)
 
         # Furnishing status: categorical encoder
         raw["furnishingstatus"] = raw["furnishingstatus"].astype(str).fillna("none")

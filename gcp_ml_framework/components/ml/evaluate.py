@@ -1,5 +1,9 @@
 """EvaluateModel — evaluate a trained model and apply metric gates."""
 
+import json
+from pathlib import Path
+
+from loguru import logger
 from pydantic import Field
 
 from gcp_ml_framework.components.base import BaseComponent
@@ -32,8 +36,34 @@ class EvaluateModel(BaseComponent):
     component_name: str = "evaluate_model"
 
     def execute(self) -> None:
-        """Container lifecycle: call run()."""
+        """Container lifecycle: call run(), then log metrics to experiments."""
         self.run()
+
+        # Experiment tracking (best-effort) — resume the same run as TrainModel
+        if self.experiment_name and self.project and self.region:
+            try:
+                from google.cloud import aiplatform
+
+                aiplatform.init(
+                    project=self.project,
+                    location=self.region,
+                    experiment=self.experiment_name,
+                )
+                run_id = f"train-{self.run_date or 'no-date'}"
+                aiplatform.start_run(run=run_id, resume=True)
+
+                if self.output_uri_path and Path(self.output_uri_path).exists():
+                    metrics = json.loads(Path(self.output_uri_path).read_text())
+                    aiplatform.log_metrics(metrics)
+                    logger.info(
+                        "Logged eval metrics to experiment: %s",
+                        self.experiment_name,
+                    )
+            except Exception:
+                logger.warning(
+                    "Experiment metric logging failed (non-fatal)",
+                    exc_info=True,
+                )
 
     def run(self) -> None:
         """Evaluate model against dataset. Override for custom evaluation logic."""

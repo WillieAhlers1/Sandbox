@@ -8,7 +8,7 @@ from typing import Any
 from loguru import logger
 from pydantic import Field, PrivateAttr
 
-from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.components.base import _INTERNAL_FIELDS, BaseComponent
 from gcp_ml_framework.decorators import ml_task
 
 
@@ -32,6 +32,7 @@ class TrainModel(BaseComponent):
     model_output_uri: str = ""
     job_name: str = ""
     run_id: str = ""
+    experiment_name: str = ""
 
     # Private attr for execute() to pass work dir to run()
     _work_dir: str = PrivateAttr(default="")
@@ -70,6 +71,35 @@ class TrainModel(BaseComponent):
                 Path(self.output_uri_path).parent.mkdir(parents=True, exist_ok=True)
                 with open(self.output_uri_path, "w") as f:
                     f.write(self.model_output_uri)
+
+        # Experiment tracking (best-effort)
+        if self.experiment_name and self.project and self.region:
+            try:
+                from google.cloud import aiplatform
+
+                aiplatform.init(
+                    project=self.project,
+                    location=self.region,
+                    experiment=self.experiment_name,
+                )
+                run_id = f"train-{self.run_date or 'no-date'}"
+                aiplatform.start_run(run=run_id, resume=True)
+                params = {
+                    k: str(v)
+                    for k, v in self.model_dump().items()
+                    if k not in _INTERNAL_FIELDS
+                    and k != "output_uri_path"
+                    and v not in ("", None, [], {})
+                }
+                aiplatform.log_params(params)
+                logger.info(
+                    "Logged training params to experiment: %s",
+                    self.experiment_name,
+                )
+            except Exception:
+                logger.warning(
+                    "Experiment tracking failed (non-fatal)", exc_info=True
+                )
 
 
 

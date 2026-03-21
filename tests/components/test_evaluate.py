@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -102,3 +104,90 @@ class TestEvaluateModelLifecycle:
         ce.execute()
         assert ce._custom_called is True
         mock_run_evaluate.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Experiment tracking (5.4)
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateModelExperiments:
+    """Verify experiment tracking in execute()."""
+
+    def test_evaluate_logs_metrics_to_experiment(self, tmp_path):
+        """EvaluateModel.execute() logs metrics to Vertex AI Experiments."""
+        import google.cloud
+
+        mock_aip = MagicMock()
+        token = "google.cloud.aiplatform"
+        original_module = sys.modules.get(token)
+        original_attr = getattr(google.cloud, "aiplatform", None)
+        sys.modules[token] = mock_aip
+        google.cloud.aiplatform = mock_aip
+        try:
+            # Write fake metrics file for execute() to read
+            output_file = tmp_path / "metrics.json"
+            output_file.write_text(json.dumps({"rmse": 42.0, "r2": 0.95}))
+
+            class _NoOpEval(EvaluateModel):
+                def run(self) -> None:
+                    pass  # skip actual evaluation
+
+            em = _NoOpEval(
+                experiment_name="test-exp",
+                project="test-proj",
+                region="us-east4",
+                run_date="2026-03-21",
+                output_uri_path=str(output_file),
+            )
+            em.execute()
+
+            mock_aip.init.assert_called_once()
+            mock_aip.start_run.assert_called_once_with(
+                run="train-2026-03-21", resume=True
+            )
+            mock_aip.log_metrics.assert_called_once_with(
+                {"rmse": 42.0, "r2": 0.95}
+            )
+        finally:
+            if original_module is None:
+                sys.modules.pop(token, None)
+            else:
+                sys.modules[token] = original_module
+            if original_attr is not None:
+                google.cloud.aiplatform = original_attr
+            elif hasattr(google.cloud, "aiplatform"):
+                delattr(google.cloud, "aiplatform")
+
+    def test_evaluate_experiment_failure_non_fatal(self, tmp_path):
+        """Experiment tracking failure doesn't prevent evaluation."""
+        import google.cloud
+
+        mock_aip = MagicMock()
+        mock_aip.init.side_effect = Exception("API error")
+        token = "google.cloud.aiplatform"
+        original_module = sys.modules.get(token)
+        original_attr = getattr(google.cloud, "aiplatform", None)
+        sys.modules[token] = mock_aip
+        google.cloud.aiplatform = mock_aip
+        try:
+            class _NoOpEval(EvaluateModel):
+                def run(self) -> None:
+                    pass
+
+            em = _NoOpEval(
+                experiment_name="test-exp",
+                project="test-proj",
+                region="us-east4",
+            )
+            # Should not raise
+            em.execute()
+        finally:
+            if original_module is None:
+                sys.modules.pop(token, None)
+            else:
+                sys.modules[token] = original_module
+            if original_attr is not None:
+                google.cloud.aiplatform = original_attr
+            elif hasattr(google.cloud, "aiplatform"):
+                delattr(google.cloud, "aiplatform")

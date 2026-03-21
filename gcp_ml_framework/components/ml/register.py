@@ -45,13 +45,26 @@ class RegisterModel(BaseComponent):
         from google.cloud import aiplatform
 
         aiplatform.init(project=self.project, location=self.region)
-        model = aiplatform.Model.upload(
-            display_name=self.model_display_name,
-            artifact_uri=self.model_uri,
-            serving_container_image_uri=self.serving_container_image,
-            labels=self.labels,
-            description=self.description,
-        )
+        upload_kwargs: dict = {
+            "display_name": self.model_display_name,
+            "artifact_uri": self.model_uri,
+            "serving_container_image_uri": self.serving_container_image,
+            "labels": self.labels,
+            "description": self.description,
+        }
+        # CPR config for custom serving containers (not pre-built Vertex AI images)
+        if not self.serving_container_image.startswith(
+            "us-docker.pkg.dev/vertex-ai/"
+        ):
+            upload_kwargs.update({
+                "serving_container_predict_route": "/predict",
+                "serving_container_health_route": "/health",
+                "serving_container_command": [
+                    "python", "-m", "gcp_ml_framework.serving.handler",
+                ],
+                "serving_container_ports": [8080],
+            })
+        model = aiplatform.Model.upload(**upload_kwargs)
         return model.resource_name
 
 

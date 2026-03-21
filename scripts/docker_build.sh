@@ -127,6 +127,32 @@ _build_pipeline() {
         --build-arg "BASE_IMAGE=$(_full_tag base-python)"
 }
 
+# ── Layer 2: per-pipeline serving images ─────────────────────────────────────
+
+_build_serving() {
+    # Build a slim serving image for a pipeline directory.
+    local pipeline_dir="$1"
+    local pipeline_name
+    pipeline_name=$(basename "$pipeline_dir")
+
+    # Skip directories without a pipeline.py
+    if [ ! -f "${pipeline_dir}/pipeline.py" ]; then
+        return
+    fi
+
+    local dockerfile="docker/serving/Dockerfile"
+    if [ ! -f "$dockerfile" ]; then
+        echo "[docker_build] serving Dockerfile not found — skipping"
+        return
+    fi
+
+    local image_name
+    image_name=$(_slugify "$pipeline_name")-serving
+
+    _build "$(_full_tag "$image_name")" "$dockerfile" "." \
+        --build-arg "BASE_IMAGE=$(_full_tag base-python)"
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -140,6 +166,11 @@ main() {
     # Layer 1: one image per pipeline
     for pipeline_dir in "${PIPELINES_DIR}"/*/; do
         _build_pipeline "$pipeline_dir"
+    done
+
+    # Layer 2: serving images
+    for pipeline_dir in "${PIPELINES_DIR}"/*/; do
+        _build_serving "$pipeline_dir"
     done
 
     echo ""

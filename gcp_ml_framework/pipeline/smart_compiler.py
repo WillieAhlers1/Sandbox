@@ -175,10 +175,22 @@ class SmartCompiler:
         task_names: list[str] = []
         yaml_index = 0
 
+        # Track outputs across groups for @task→@ml_task bridging
+        last_dataset_output: str | None = None
+        last_model_output: str | None = None
+
         for group in groups:
             if group.task_type == TaskType.ML_TASK:
+                # Build bridged params from tracked @task outputs
+                bridged: dict[str, str] = {}
+                if last_dataset_output:
+                    bridged["dataset_uri"] = last_dataset_output
+                if last_model_output:
+                    bridged["model_uri"] = last_model_output
+
                 block, group_imports, name = self._render_ml_group(
-                    group, pipeline_def, context, yaml_paths[yaml_index]
+                    group, pipeline_def, context,
+                    yaml_paths[yaml_index], bridged,
                 )
                 yaml_index += 1
                 task_blocks.append(block)
@@ -186,6 +198,11 @@ class SmartCompiler:
                 task_names.append(name)
             else:
                 for step in group.steps:
+                    # Track deterministic outputs from @task steps
+                    output = self._compute_task_output(step, context)
+                    if output:
+                        last_dataset_output = output
+
                     block, step_imports, name = self._render_task_step(
                         step, context, pipeline_dir
                     )
@@ -256,12 +273,36 @@ with DAG(
     {deps_str}
 '''
 
+    def _compute_task_output(
+        self,
+        step: PipelineStep,
+        context: MLContext,
+    ) -> str | None:
+        """Compute the deterministic output reference for a @task step.
+
+        @task steps (BQQuery, BQTransform) produce outputs known at compile
+        time — the BQ table reference. This is used for @task→@ml_task bridging.
+        """
+        component = step.component
+        if hasattr(component, "destination_table") and component.destination_table:
+            return (
+                f"{context.gcp_project}.{context.bq_dataset}"
+                f".{component.destination_table}"
+            )
+        if hasattr(component, "output_table") and component.output_table:
+            return (
+                f"{context.gcp_project}.{context.bq_dataset}"
+                f".{component.output_table}"
+            )
+        return None
+
     def _render_ml_group(
         self,
         group: _StepGroup,
         pipeline_def: PipelineDefinition,
         context: MLContext,
         yaml_path: Path,
+        bridged_params: dict[str, str] | None = None,
     ) -> tuple[str, set[str], str]:
         """Render an ML_TASK group as a RunPipelineJobOperator."""
         imports = {
@@ -290,6 +331,12 @@ with DAG(
         )
         service_account = context.pipeline_service_account
 
+        # Build parameter_values dict with bridged params
+        param_values: dict[str, str] = {"run_date": "{{ ds }}"}
+        if bridged_params:
+            param_values.update(bridged_params)
+        param_values_repr = repr(param_values)
+
         code = f"""{task_id} = RunPipelineJobOperator(
     task_id="{task_id}",
     project_id="{context.gcp_project}",
@@ -300,7 +347,7 @@ with DAG(
     enable_caching=False,
     deferrable=True,
     service_account="{service_account}",
-    parameter_values={{"run_date": "{{{{ ds }}}}"}},
+    parameter_values={param_values_repr},
 )"""
         return code, imports, task_id
 

@@ -54,6 +54,31 @@ steps:
   - name: "gcr.io/cloud-builders/docker"
     args: ["push", "--all-tags", "${_AR_REPO}/${_PIPELINE}"]
 
+  # Step 6: Pull cached serving image (for layer caching)
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args: ["-c", "docker pull ${_AR_REPO}/${_PIPELINE}-serving:latest || true"]
+
+  # Step 7: Build serving image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_AR_REPO}/${_PIPELINE}-serving:${_TAG}"
+      - "-t"
+      - "${_AR_REPO}/${_PIPELINE}-serving:latest"
+      - "--cache-from"
+      - "${_AR_REPO}/${_PIPELINE}-serving:latest"
+      - "--build-arg"
+      - "BASE_IMAGE=${_AR_REPO}/base-python:${_TAG}"
+      - "-f"
+      - "docker/serving/Dockerfile"
+      - "."
+
+  # Step 8: Push serving image
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "--all-tags", "${_AR_REPO}/${_PIPELINE}-serving"]
+
 substitutions:
   _TAG: "latest"
   _PIPELINE: "training-pipeline"

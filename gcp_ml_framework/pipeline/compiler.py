@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+from gcp_ml_framework.components.ml.deploy import DeployModel
 from gcp_ml_framework.components.ml.register import RegisterModel
 from gcp_ml_framework.components.ml.train import TrainModel
 
@@ -75,7 +76,6 @@ class PipelineCompiler:
         steps = pipeline_def.steps
         pipeline_root = context.naming.gcs_pipeline_root(pipeline_def.name)
         ctx_params = self._build_context_params(context, pipeline_def)
-        derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir)
 
         # Resolve the per-pipeline image (named after the pipeline directory)
         pipeline_image_name = pipeline_def.name.replace("_", "-")
@@ -84,13 +84,27 @@ class PipelineCompiler:
             gcp_project=context.gcp_project,
             image_name=pipeline_image_name,
         )
+        serving_image = context.naming.image_uri(
+            registry_host=context.artifact_registry_host,
+            gcp_project=context.gcp_project,
+            image_name=f"{pipeline_image_name}-serving",
+        )
+
+        derived_params = self._build_derived_params(
+            context, pipeline_def, steps, pipeline_dir,
+            serving_image=serving_image,
+        )
 
         @dsl.pipeline(
             name=pipeline_def.name,
             description=pipeline_def.description,
             pipeline_root=pipeline_root,
         )
-        def _pipeline(run_date: str = ""):
+        def _pipeline(
+            run_date: str = "",
+            dataset_uri: str = "",
+            model_uri: str = "",
+        ):
             prev_task = None
             last_dataset_output = None  # output from data-producing steps (ingest/transform)
             last_model_output = None  # output from train step
@@ -115,6 +129,13 @@ class PipelineCompiler:
                     component_fields[name] = val
                 # Component fields are the base; context and derived params override them
                 merged = {**component_fields, **ctx_params, **step_extra}
+
+                # Inject bridged params from pipeline inputs
+                # (may be overridden by cross-step wiring below)
+                if dataset_uri:
+                    merged["dataset_uri"] = dataset_uri
+                if model_uri:
+                    merged["model_uri"] = model_uri
 
                 # Wire cross-step data flow from tracked outputs
                 if last_dataset_output is not None:
@@ -145,13 +166,15 @@ class PipelineCompiler:
                     task.after(prev_task)
                 prev_task = task
 
-                # Track output — train steps produce model outputs, others produce datasets.
+                # Track output — train/register → model output, others → dataset.
                 # WriteFeatures is metadata-only and should not overwrite dataset output.
                 if component_fn.component_spec.outputs:
-                    is_train = isinstance(step.component, TrainModel)
+                    is_model_producer = isinstance(
+                        step.component, (TrainModel, RegisterModel)
+                    )
                     is_metadata_only = isinstance(step.component, WriteFeatures)
                     task_output = task.outputs["output_uri"]
-                    if is_train:
+                    if is_model_producer:
                         last_model_output = task_output
                     elif not is_metadata_only:
                         last_dataset_output = task_output
@@ -184,6 +207,7 @@ class PipelineCompiler:
         pipeline_def: "PipelineDefinition",
         steps: list,
         pipeline_dir: "Path | None" = None,
+        serving_image: str = "",
     ) -> dict:
         """Compute per-step derived params that aren't simple dataclass fields."""
         derived: dict[str, dict] = {}
@@ -212,6 +236,11 @@ class PipelineCompiler:
                 extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
                     comp.endpoint_name
                 )
+
+            # RegisterModel/DeployModel: default serving container if not set
+            if isinstance(comp, (RegisterModel, DeployModel)):
+                if not comp.serving_container_image:
+                    extra["serving_container_image"] = serving_image
 
             if extra:
                 derived[step.name] = extra

@@ -84,6 +84,12 @@ class TestDeployModelExecute:
             max_replica_count=5,
             traffic_split={"new": 50, "current": 50},
             output_uri_path="/tmp/output_uri",
+            enable_monitoring=False,
+            monitoring_alert_email="",
+            monitoring_log_sample_rate=0.8,
+            monitoring_monitor_interval=3600,
+            monitoring_skew_thresholds={},
+            monitoring_drift_thresholds={},
         )
 
 
@@ -114,3 +120,52 @@ class TestDeployModelLifecycle:
         cd.execute()
         assert cd._custom_called is True
         mock_run_deploy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Monitoring fields (5.5)
+# ---------------------------------------------------------------------------
+
+
+class TestDeployModelMonitoring:
+    """Verify monitoring fields and passthrough to run_deploy()."""
+
+    def test_monitoring_defaults(self):
+        """Monitoring is disabled by default."""
+        dm = DeployModel(endpoint_name="test")
+        assert dm.enable_monitoring is False
+        assert dm.monitoring_alert_email == ""
+        assert dm.monitoring_log_sample_rate == 0.8
+        assert dm.monitoring_monitor_interval == 3600
+        assert dm.monitoring_skew_thresholds == {}
+        assert dm.monitoring_drift_thresholds == {}
+
+    def test_monitoring_enabled(self):
+        """Monitoring fields accepted when enabled."""
+        dm = DeployModel(
+            endpoint_name="test",
+            enable_monitoring=True,
+            monitoring_alert_email="a@b.com",
+            monitoring_skew_thresholds={"area": 0.3},
+        )
+        assert dm.enable_monitoring is True
+        assert dm.monitoring_alert_email == "a@b.com"
+        assert dm.monitoring_skew_thresholds == {"area": 0.3}
+
+    @patch("gcp_ml_framework.utils.vertex.run_deploy")
+    def test_monitoring_fields_passed_to_run_deploy(self, mock_run_deploy: MagicMock):
+        """run() passes all monitoring fields to run_deploy()."""
+        dm = DeployModel(
+            endpoint_name="test-ep",
+            project="test-project",
+            region="us-east4",
+            enable_monitoring=True,
+            monitoring_alert_email="team@co.com",
+            monitoring_skew_thresholds={"area": 0.3},
+        )
+        dm.execute()
+
+        call_kwargs = mock_run_deploy.call_args[1]
+        assert call_kwargs["enable_monitoring"] is True
+        assert call_kwargs["monitoring_alert_email"] == "team@co.com"
+        assert call_kwargs["monitoring_skew_thresholds"] == {"area": 0.3}
