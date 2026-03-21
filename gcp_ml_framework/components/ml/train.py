@@ -8,7 +8,7 @@ from typing import Any
 from loguru import logger
 from pydantic import Field, PrivateAttr
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
+from gcp_ml_framework.components.base import BaseComponent
 
 
 class TrainModel(BaseComponent):
@@ -34,13 +34,9 @@ class TrainModel(BaseComponent):
     # Private attr for execute() to pass work dir to run()
     _work_dir: str = PrivateAttr(default="")
 
-    machine_type: str = "n2-standard-4"
-    accelerator_type: str = ""
-    accelerator_count: int = 0
     trainer_args: list[str] = Field(default_factory=list)
     hyperparameters: dict[str, Any] = Field(default_factory=dict)
     component_name: str = ""
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
     def execute(self) -> None:
         """Container lifecycle: create temp dir, call run(), upload to GCS, write output URI."""

@@ -16,7 +16,6 @@ err_console = Console(stderr=True)
 
 
 def load_context(
-    framework_yaml: Path | None = None,
     pipeline_yaml: Path | None = None,
     branch: str | None = None,
 ) -> MLContext:
@@ -26,7 +25,6 @@ def load_context(
         if branch:
             kwargs["branch"] = branch
         cfg = load_config(
-            framework_yaml=framework_yaml,
             pipeline_yaml=pipeline_yaml,
             **kwargs,
         )

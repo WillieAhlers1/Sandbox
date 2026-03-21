@@ -55,6 +55,16 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "pipeline_sa_name" {
+  description = "Name of the pre-existing pipeline service account"
+  type        = string
+}
+
+variable "composer_sa_name" {
+  description = "Name of the pre-existing Composer service account"
+  type        = string
+}
+
 # Change: Normalize project_name underscores in Terraform
 locals {
   project_slug = replace(var.project_name, "_", "-")
@@ -63,9 +73,9 @@ locals {
 # --- Modules ---
 # NOTE: IAM and Composer modules are skipped for this enterprise project.
 # Pre-existing SAs and Composer environment are used instead:
-#   Pipeline SA: gc-sa-for-vertex-ai-pipelines@YOUR_PROJECT_ID.iam.gserviceaccount.com
-#   Composer SA: gc-sa-for-composer-env@YOUR_PROJECT_ID.iam.gserviceaccount.com
-#   Composer env: mlopshousingpoc (shared, private, VPC SC perimeter)
+#   Pipeline SA: <pipeline_sa_name>@<project_id>.iam.gserviceaccount.com
+#   Composer SA: <composer_sa_name>@<project_id>.iam.gserviceaccount.com
+#   Composer env: <your-composer-environment> (shared, private, VPC SC perimeter)
 
 module "storage" {
   source      = "../../modules/storage"
@@ -101,14 +111,14 @@ module "artifact_registry" {
 resource "google_project_iam_member" "composer_vertex" {
   project = var.project_id
   role    = "roles/aiplatform.user"
-  member  = "serviceAccount:gc-sa-for-composer-env@${var.project_id}.iam.gserviceaccount.com"
+  member  = "serviceAccount:${var.composer_sa_name}@${var.project_id}.iam.gserviceaccount.com"
 }
 
 # Allow Composer SA to act as the Pipeline SA when submitting Vertex jobs
 resource "google_service_account_iam_member" "composer_acts_as_pipeline" {
-  service_account_id = "projects/${var.project_id}/serviceAccounts/gc-sa-for-vertex-ai-pipelines@${var.project_id}.iam.gserviceaccount.com"
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.pipeline_sa_name}@${var.project_id}.iam.gserviceaccount.com"
   role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:gc-sa-for-composer-env@${var.project_id}.iam.gserviceaccount.com"
+  member             = "serviceAccount:${var.composer_sa_name}@${var.project_id}.iam.gserviceaccount.com"
 }
 
 # --- Outputs ---

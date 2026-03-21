@@ -7,9 +7,9 @@ This keeps components decoupled from config loading and testable in isolation.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from gcp_ml_framework.config import FrameworkConfig, GitState
+from gcp_ml_framework.config import Environment, FrameworkConfig
 from gcp_ml_framework.naming import NamingConvention
 
 
@@ -18,14 +18,14 @@ class MLContext(BaseModel):
     Immutable runtime context derived from FrameworkConfig + NamingConvention.
 
     All GCP resource names are available via `ctx.naming.*`.
-    The active GCP project for the current git state is `ctx.gcp_project`.
+    The active GCP project for the current environment is `ctx.gcp_project`.
 
     Usage:
         ctx = MLContext.from_config(cfg)
         ctx.naming.bq_dataset        # branch-namespaced BQ dataset
         ctx.naming.gcs_prefix        # gs://{bucket}/{branch}/
         ctx.gcp_project              # resolved GCP project ID
-        ctx.git_state                # GitState.DEV | STAGING | PROD | PROD_EXP
+        ctx.environment              # Environment.DEV | STAGING | PROD | EXPERIMENT
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -33,10 +33,10 @@ class MLContext(BaseModel):
     naming: NamingConvention
     gcp_project: str
     region: str
-    git_state: GitState
+    environment: Environment
     composer_dags_path: dict[str, str]
     artifact_registry_host: str
-    service_account_email: str | None
+    pipeline_service_account_email: str | None
     composer_environment_name: str
     feature_store_online_node_count: int
     secret_project_id: str
@@ -57,17 +57,17 @@ class MLContext(BaseModel):
 
         # Auto-derive Composer env name: explicit config > {team}-{project}-{env}
         composer_env_name = cfg.gcp.composer_environment_name or (
-            f"{naming.team}-{naming.project}-{cfg.git_state.value}"
+            f"{naming.team}-{naming.project}-{cfg.environment}"
         )
 
         return cls(
             naming=naming,
             gcp_project=gcp_project,
             region=cfg.gcp.region,
-            git_state=cfg.git_state,
+            environment=Environment(cfg.environment),
             composer_dags_path=cfg.gcp.composer_dags_path,
             artifact_registry_host=cfg.gcp.artifact_registry_host,
-            service_account_email=cfg.gcp.service_account_email,
+            pipeline_service_account_email=cfg.gcp.pipeline_service_account_email,
             composer_environment_name=composer_env_name,
             feature_store_online_node_count=cfg.feature_store.online_serving_fixed_node_count,
             secret_project_id=cfg.secrets.project_id or gcp_project,
@@ -101,18 +101,19 @@ class MLContext(BaseModel):
     def pipeline_service_account(self) -> str:
         """Pipeline SA email — derived from naming convention if not explicitly set.
 
-        Follows Terraform convention: {team}-{project}-{env}-pipeline@{project}.iam.gserviceaccount.com
+        Follows Terraform convention:
+        {team}-{project}-{env}-pipeline@{project}.iam.gserviceaccount.com
         """
-        if self.service_account_email:
-            return self.service_account_email
-        env = self.git_state.value  # dev, staging, prod
+        if self.pipeline_service_account_email:
+            return self.pipeline_service_account_email
+        env = self.environment.value  # dev, staging, prod
         return (
             f"{self.naming.team}-{self.naming.project}-{env}-pipeline"
             f"@{self.gcp_project}.iam.gserviceaccount.com"
         )
 
     def is_production(self) -> bool:
-        return self.git_state in (GitState.PROD, GitState.PROD_EXP)
+        return self.environment in (Environment.PROD, Environment.EXPERIMENT)
 
     def summary(self) -> dict[str, str]:
         """Human-readable summary for `gml context show`."""
@@ -121,7 +122,7 @@ class MLContext(BaseModel):
             "project": self.naming.project,
             "branch (raw)": self.raw_branch,
             "branch (slug)": self.naming.branch,
-            "git_state": self.git_state.value,
+            "environment": self.environment.value,
             "gcp_project": self.gcp_project,
             "region": self.region,
             "namespace": self.namespace,
@@ -130,5 +131,9 @@ class MLContext(BaseModel):
             "bq_dataset": self.bq_dataset,
             "feature_store_id": self.feature_store_id,
             "secret_prefix": self.secret_prefix,
-            "composer_dags_path": str(self.composer_dags_path) if self.composer_dags_path else "(not configured)",
+            "composer_dags_path": (
+                str(self.composer_dags_path)
+                if self.composer_dags_path
+                else "(not configured)"
+            ),
         }

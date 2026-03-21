@@ -1,10 +1,10 @@
 """BigQueryExtract — run a SQL query and export results to GCS as Parquet."""
 
-from pydantic import Field
+from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import task
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
 
-
+@task
 class BigQueryExtract(BaseComponent):
     """
     Execute a BigQuery SQL query and write results to GCS as Parquet.
@@ -30,7 +30,6 @@ class BigQueryExtract(BaseComponent):
     output_table: str
     write_disposition: str = "WRITE_TRUNCATE"
     component_name: str = "bigquery_extract"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
     def execute(self) -> None:
         """Container lifecycle: delegate to utils.bigquery_extract.run_bigquery_extract()."""

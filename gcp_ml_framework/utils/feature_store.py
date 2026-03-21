@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from loguru import logger
@@ -25,6 +24,8 @@ def run_write_features(
     from google.cloud.aiplatform_v1beta1 import FeatureRegistryServiceClient
     from google.cloud.aiplatform_v1beta1.types import (
         feature_group as feature_group_pb2,
+    )
+    from google.cloud.aiplatform_v1beta1.types import (
         feature_registry_service,
     )
 
@@ -91,7 +92,8 @@ def run_read_features(
     pq.write_table(pa.Table.from_pandas(df), tmp)
     sc = storage.Client(project=project)
     bucket_name = gcs_prefix[5:].split("/")[0]
-    blob_path = "/".join(gcs_prefix[5:].split("/")[1:]) + f"features/{entity}_{feature_group}/features.parquet"
+    prefix = "/".join(gcs_prefix[5:].split("/")[1:])
+    blob_path = f"{prefix}features/{entity}_{feature_group}/features.parquet"
     sc.bucket(bucket_name).blob(blob_path).upload_from_filename(tmp)
     output_uri = f"gs://{bucket_name}/{blob_path}"
 

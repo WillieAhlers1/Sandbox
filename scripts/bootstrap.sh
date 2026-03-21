@@ -10,6 +10,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/../.env" ]]; then
+  set -a; source "${SCRIPT_DIR}/../.env"; set +a
+fi
+
 PROJECT=""
 REGION=""
 
@@ -26,9 +31,9 @@ if [[ -z "$PROJECT" ]]; then
   exit 1
 fi
 
-# Resolve region: CLI flag > framework.yaml > default
+# Resolve region: CLI flag > env var > default
 if [[ -z "$REGION" ]]; then
-  REGION=$(grep '^\s*region:' framework.yaml 2>/dev/null | head -1 | awk '{print $2}')
+  REGION="${GML_GCP__REGION:-}"
 fi
 REGION="${REGION:-us-central1}"
 
@@ -51,8 +56,8 @@ gcloud services enable \
 
 # ── Artifact Registry ─────────────────────────────────────────────────────────
 echo "==> Creating Artifact Registry repository..."
-TEAM=$(grep "^team:" framework.yaml | awk '{print $2}')
-PROJECT_NAME=$(grep "^project:" framework.yaml | awk '{print $2}')
+TEAM="${GML_TEAM:?GML_TEAM must be set in .env}"
+PROJECT_NAME="${GML_PROJECT:?GML_PROJECT must be set in .env}"
 REPO_NAME="${TEAM}-${PROJECT_NAME}"
 
 gcloud artifacts repositories create "$REPO_NAME" \

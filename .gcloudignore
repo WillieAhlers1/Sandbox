@@ -1,0 +1,39 @@
+# Terraform state and configs
+.terraform/
+*.tfstate*
+*.tfvars
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*credentials*
+*secret*
+
+# AI/IDE/tooling
+.claude/
+REQS.docx
+
+# Python caches
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.pyc
+
+# Node
+node_modules/
+
+# Build artifacts (not needed in build context)
+compiled_pipelines/
+dags/
+
+# Virtual environments
+.venv/
+
+# Tests (not needed in container)
+tests/
+
+# Docs (not needed in container)
+docs/

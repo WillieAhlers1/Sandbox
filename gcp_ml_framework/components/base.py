@@ -16,25 +16,16 @@ The execute() lifecycle wraps run() with I/O (GCS upload/download, temp dirs, et
 import inspect
 import json
 from collections.abc import Callable
+from typing import ClassVar
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict
 from pydantic_core import PydanticUndefined
 
-
-class ComponentConfig(BaseModel):
-    """Per-component resource configuration, applied as KFP resource specs."""
-
-    machine_type: str = "n2-standard-4"
-    accelerator_type: str | None = None
-    accelerator_count: int = 0
-    timeout_seconds: int = 3600
-    retry_count: int = 1
-    cache_enabled: bool = True
-
+from gcp_ml_framework.decorators import TaskType
 
 # Fields that are never exposed as CLI flags or KFP params
 _INTERNAL_FIELDS = frozenset({
-    "component_name", "component_version", "config",
+    "component_name", "component_version", "timeout_seconds", "retry_count", "cache_enabled",
 })
 
 # Fields excluded from KFP input params (output_uri_path is handled via dsl.OutputPath)
@@ -55,10 +46,20 @@ class BaseComponent(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    # --- Task type (set by @task / @ml_task decorators) ---
+    _task_type: ClassVar[TaskType] = TaskType.ML_TASK
+
     # --- Internal fields (not passed as params) ---
     component_name: str = ""
     component_version: str = "v1"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
+    timeout_seconds: int = 3600
+    retry_count: int = 1
+    cache_enabled: bool = True
+
+    # --- Resource fields ---
+    machine_type: str = "n2-standard-4"
+    accelerator_type: str = ""
+    accelerator_count: int = 0
 
     # --- Universal params (present on every component) ---
     project: str = ""
@@ -68,6 +69,7 @@ class BaseComponent(BaseModel):
     environment: str = ""
     output_uri_path: str = ""
     run_date: str = ""
+    dataset: str = ""
 
     @classmethod
     def cli(cls) -> None:
@@ -158,7 +160,8 @@ class BaseComponent(BaseModel):
         output_uri_path is handled specially via dsl.OutputPath.
 
         Args:
-            step_module: Dotted module path (e.g. "pipelines.training_pipeline.steps.train_house_model").
+            step_module: Dotted module path
+                (e.g. "pipelines.training_pipeline.steps.train_house_model").
             base_image: Pre-built Docker image. Falls back to python:3.12-slim.
         """
         from kfp import dsl
@@ -166,14 +169,17 @@ class BaseComponent(BaseModel):
         image = base_image or "python:3.12-slim"
 
         # Collect param names from model_fields (skip _KFP_EXCLUDED_FIELDS)
-        param_names = [n for n in self.model_fields if n not in _KFP_EXCLUDED_FIELDS]
+        param_names = [n for n in type(self).model_fields if n not in _KFP_EXCLUDED_FIELDS]
 
         # All param names in order: model fields + output_uri (KFP output artifact)
         all_names = param_names + ["output_uri"]
 
         # Build inspect.Signature: all str params + output_uri
         sig_params = [
-            inspect.Parameter(n, inspect.Parameter.POSITIONAL_OR_KEYWORD, default="", annotation=str)
+            inspect.Parameter(
+                n, inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default="", annotation=str,
+            )
             for n in param_names
         ]
         sig_params.append(

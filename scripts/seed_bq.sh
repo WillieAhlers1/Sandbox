@@ -6,7 +6,7 @@
 # and loads all seed files.
 #
 # Usage:
-#   ./scripts/seed_bq.sh                              # uses framework.yaml + current branch
+#   ./scripts/seed_bq.sh                              # uses .env + current branch
 #   ./scripts/seed_bq.sh --dataset my_dataset          # override dataset name
 #   ./scripts/seed_bq.sh --project YOUR_GCP_PROJECT     # override project
 #   ./scripts/seed_bq.sh --location us-east4           # override BQ dataset location

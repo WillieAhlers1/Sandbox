@@ -1,2 +1,2 @@
 SELECT *
-FROM demo_housing_data.housing_data_table
+FROM {dataset}.housing_data_table

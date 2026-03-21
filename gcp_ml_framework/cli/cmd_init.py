@@ -12,78 +12,56 @@ console = Console()
 
 # ── Templates ──────────────────────────────────────────────────────────────────
 
-_FRAMEWORK_YAML = """\
-team: {team}
-project: {project}
-gcp:
-  dev_project_id: {dev_project}
-  staging_project_id: {staging_project}
-  prod_project_id: {prod_project}
-  region: us-central1
-  composer_dags_path:
-    dev: ""              # fill in after Terraform provisions Composer
-    staging: ""
-    prod: ""
-  artifact_registry_host: us-central1-docker.pkg.dev
+_DOT_ENV = """\
+# GCP ML Framework — project config
+# This file is gitignored — never commit real values.
 
-secrets:
-  secret_prefix:             # defaults to namespace token; override only if needed
+# --- Identity (required) ---
+GML_TEAM={team}
+GML_PROJECT={project}
+
+# --- Environment ---
+GML_ENVIRONMENT=dev
+
+# --- GCP Project IDs ---
+GML_GCP__DEV_PROJECT_ID={dev_project}
+GML_GCP__STAGING_PROJECT_ID={staging_project}
+GML_GCP__PROD_PROJECT_ID={prod_project}
+
+# --- GCP Region ---
+GML_GCP__REGION=us-central1
+
+# --- Cloud Composer (fill after Terraform provisions) ---
+# GML_GCP__COMPOSER_ENVIRONMENT_NAME=
+# GML_GCP__COMPOSER_DAGS_PATH__DEV=gs://composer-bucket/dags
 """
 
 _PIPELINE_PY = """\
-from gcp_ml_framework.pipeline.builder import PipelineBuilder
-from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-from gcp_ml_framework.components.transformation.bq_transform import BQTransform
-from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+from gcp_ml_framework import Pipeline
+from gcp_ml_framework.components.operators.bq_query import BQQuery
 from gcp_ml_framework.components.ml.train import TrainModel
 from gcp_ml_framework.components.ml.evaluate import EvaluateModel
 from gcp_ml_framework.components.ml.deploy import DeployModel
 
 pipeline = (
-    PipelineBuilder(name="{name}", schedule="@daily")
-    .ingest(
-        BigQueryExtract(
-            query="SELECT * FROM `{{bq_dataset}}.raw_events` WHERE dt = '{{run_date}}'",
-            output_table="raw_events_extract",
-        )
-    )
-    .transform(
-        BQTransform(
-            sql_file="sql/{name}_features.sql",
-            output_table="{name}_features",
-        )
-    )
-    .write_features(
-        WriteFeatures(
-            entity="user",
-            feature_group="{name}_signals",
-            entity_id_column="user_id",
-        )
-    )
-    .train(
-        TrainModel(
-            trainer_image="{{artifact_registry}}/{name}-trainer:latest",
-            machine_type="n2-standard-4",
-        )
-    )
-    .evaluate(
-        EvaluateModel(
-            metrics=["auc", "f1"],
-            gate={{"auc": 0.75}},
-        )
-    )
-    .deploy(
-        DeployModel(
-            endpoint_name="{name}-endpoint",
-        )
-    )
+    Pipeline(name="{name}", schedule="@daily")
+    .add(BQQuery(
+        sql_file="sql/{name}_features.sql",
+        destination_table="{name}_features",
+    ))
+    .add(TrainModel(machine_type="n2-standard-4"))
+    .add(EvaluateModel(
+        metrics=["auc", "f1"],
+        gate={{"auc": 0.75}},
+    ))
+    .add(DeployModel(endpoint_name="{name}-endpoint"))
     .build()
 )
 """
 
 _PIPELINE_CONFIG_YAML = """\
 # Pipeline-level config overrides.
-# These are merged on top of framework.yaml.
+# These are merged on top of .env defaults.
 # Only set values that differ from the framework defaults.
 
 # feature_store:
@@ -235,66 +213,6 @@ jobs:
       - run: gml teardown --branch ${{{{ github.head_ref }}}} --confirm
 """
 
-_DAG_PY = """\
-from gcp_ml_framework.dag.builder import DAGBuilder
-from gcp_ml_framework.dag.tasks.bq_query import BQQueryTask
-from gcp_ml_framework.dag.tasks.email import EmailTask
-
-dag = (
-    DAGBuilder(
-        name="{name}",
-        schedule="@daily",
-        description="{name} data pipeline",
-        tags=["{name}"],
-    )
-    .task(
-        BQQueryTask(sql_file="sql/extract.sql", destination_table="staged_{name}"),
-        name="extract",
-        depends_on=[],
-    )
-    .task(
-        BQQueryTask(sql_file="sql/transform.sql", destination_table="{name}_output"),
-        name="transform",
-        depends_on=["extract"],
-    )
-    .task(
-        EmailTask(
-            to=["team@company.com"],
-            subject="[{{namespace}}] {name} completed — {{run_date}}",
-            body=(
-                "The {name} pipeline has completed.\\n\\n"
-                "Output table: {{bq_dataset}}.{name}_output\\n"
-                "Execution date: {{run_date}}"
-            ),
-        ),
-        name="notify",
-        depends_on=["transform"],
-    )
-    .build()
-)
-"""
-
-_DAG_CONFIG_YAML = """\
-schedule: "@daily"
-tags:
-  - {name}
-"""
-
-_DAG_EXTRACT_SQL = """\
--- Extract raw data for {name}
-SELECT
-    *
-FROM `{{bq_dataset}}.raw_{name}`
-WHERE dt = '{{run_date}}'
-"""
-
-_DAG_TRANSFORM_SQL = """\
--- Transform staged data for {name}
-SELECT
-    *
-FROM `{{bq_dataset}}.staged_{name}`
-"""
-
 _GITIGNORE = """\
 .env
 __pycache__/
@@ -323,7 +241,7 @@ def init_project(
     """
     Scaffold a new gcp-ml-framework project.
 
-    Creates framework.yaml, feature_schemas/, CI/CD workflows, and an example pipeline.
+    Creates .env, feature_schemas/, CI/CD workflows, and an example pipeline.
 
     Example:
         gml init project dsci churn-pred --dev-project my-gcp-dev
@@ -334,7 +252,7 @@ def init_project(
     root = output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
 
-    _write(root / "framework.yaml", _FRAMEWORK_YAML.format(
+    _write(root / ".env", _DOT_ENV.format(
         team=team, project=project,
         dev_project=dev_project,
         staging_project=staging_project,
@@ -360,46 +278,47 @@ def init_project(
 
     console.print(f"\n[bold green]Project scaffolded at {root}[/bold green]\n")
     console.print("Next steps:")
-    console.print("  1. Edit [cyan]framework.yaml[/cyan] — add your Composer env name")
+    console.print("  1. Edit [cyan].env[/cyan] — add your Composer env name")
     console.print(f"  2. Run [cyan]gml init pipeline {project}[/cyan] to add a pipeline")
     console.print("  3. Run [cyan]gml context show[/cyan] to verify your setup\n")
 
 
 @init_app.command("pipeline")
 def init_pipeline(
-    name: str = typer.Argument(..., help="Pipeline name (snake_case, e.g. 'churn_prediction')"),
-    dag: bool = typer.Option(False, "--dag", help="Scaffold a Composer DAG instead of a Vertex AI pipeline"),
+    name: str = typer.Argument(
+        ..., help="Pipeline name (snake_case, e.g. 'churn_prediction')"
+    ),
     output_dir: Path = typer.Option(Path("pipelines"), "--out", "-o"),
 ) -> None:
     """
     Scaffold a new pipeline inside an existing project.
 
-    Creates pipeline.py (default) or dag.py (--dag), config.yaml, and SQL templates.
+    Creates pipeline.py, config.yaml, and SQL templates.
 
     Examples:
         gml init pipeline churn_prediction
-        gml init pipeline sales_report --dag
     """
     pipeline_dir = output_dir / name
     pipeline_dir.mkdir(parents=True, exist_ok=True)
 
-    if dag:
-        _write(pipeline_dir / "dag.py", _DAG_PY.format(name=name))
-        _write(pipeline_dir / "config.yaml", _DAG_CONFIG_YAML.format(name=name))
-        sql_dir = pipeline_dir / "sql"
-        sql_dir.mkdir(exist_ok=True)
-        _write(sql_dir / "extract.sql", _DAG_EXTRACT_SQL.format(name=name))
-        _write(sql_dir / "transform.sql", _DAG_TRANSFORM_SQL.format(name=name))
-        console.print(f"\n[bold green]DAG '{name}' scaffolded at {pipeline_dir}[/bold green]\n")
-        console.print(f"  Edit [cyan]pipelines/{name}/dag.py[/cyan] to define your tasks.\n")
-    else:
-        _write(pipeline_dir / "pipeline.py", _PIPELINE_PY.format(name=name))
-        _write(pipeline_dir / "config.yaml", _PIPELINE_CONFIG_YAML)
-        sql_dir = pipeline_dir / "sql"
-        sql_dir.mkdir(exist_ok=True)
-        _write(sql_dir / f"{name}_features.sql", f"-- Feature SQL for {name}\nSELECT\n  entity_id,\n  -- add features here\nFROM `{{{{bq_dataset}}}}.raw_events`\n")
-        console.print(f"\n[bold green]Pipeline '{name}' scaffolded at {pipeline_dir}[/bold green]\n")
-        console.print(f"  Edit [cyan]pipelines/{name}/pipeline.py[/cyan] to define your steps.\n")
+    _write(pipeline_dir / "pipeline.py", _PIPELINE_PY.format(name=name))
+    _write(pipeline_dir / "config.yaml", _PIPELINE_CONFIG_YAML)
+    sql_dir = pipeline_dir / "sql"
+    sql_dir.mkdir(exist_ok=True)
+    _write(
+        sql_dir / f"{name}_features.sql",
+        f"-- Feature SQL for {name}\nSELECT\n  entity_id,\n"
+        "  -- add features here\n"
+        "FROM `{{bq_dataset}}.raw_events`\n",
+    )
+    console.print(
+        f"\n[bold green]Pipeline '{name}' scaffolded "
+        f"at {pipeline_dir}[/bold green]\n"
+    )
+    console.print(
+        f"  Edit [cyan]pipelines/{name}/pipeline.py[/cyan] "
+        "to define your steps.\n"
+    )
 
 
 def _write(path: Path, content) -> None:

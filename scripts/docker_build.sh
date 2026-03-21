@@ -114,9 +114,9 @@ _build_pipeline() {
         return
     fi
 
-    local dockerfile="docker/base/base-ml/Dockerfile"
+    local dockerfile="docker/pipeline/Dockerfile"
     if [ ! -f "$dockerfile" ]; then
-        echo "[docker_build] base-ml Dockerfile not found — skipping"
+        echo "[docker_build] pipeline Dockerfile not found — skipping"
         return
     fi
 

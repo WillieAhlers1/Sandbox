@@ -1,5 +1,5 @@
 # Pipeline-level config overrides.
-# These are merged on top of framework.yaml.
+# These are merged on top of .env defaults.
 # Only set values that differ from the framework defaults.
 
 # feature_store:

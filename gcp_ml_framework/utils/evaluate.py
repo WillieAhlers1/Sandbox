@@ -32,7 +32,7 @@ def run_evaluate(
     df = bq_client.query(f"SELECT * FROM `{eval_dataset_uri}`").to_dataframe()
     logger.info(f"Loaded {len(df)} rows from {eval_dataset_uri}")
 
-    X = df.drop(columns=["label", "user_id", "feature_timestamp"], errors="ignore")
+    x_features = df.drop(columns=["label", "user_id", "feature_timestamp"], errors="ignore")
     y = df["label"]
 
     # Download model.pkl from GCS
@@ -49,7 +49,10 @@ def run_evaluate(
 
     # Compute metrics
     computed: dict[str, float] = {}
-    proba = model.predict_proba(X)[:, 1] if hasattr(model, "predict_proba") else model.predict(X)
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(x_features)[:, 1]
+    else:
+        proba = model.predict(x_features)
     preds = (proba > 0.5).astype(int)
 
     if "auc" in metrics:

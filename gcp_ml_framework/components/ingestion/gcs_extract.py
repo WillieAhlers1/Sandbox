@@ -1,10 +1,10 @@
 """GCSExtract — copy files from a GCS source path to the branch staging prefix."""
 
-from pydantic import Field
+from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import task
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
 
-
+@task
 class GCSExtract(BaseComponent):
     """
     Copy one or more files from a GCS source URI into the branch staging prefix.
@@ -23,7 +23,6 @@ class GCSExtract(BaseComponent):
     source_uri: str
     destination_folder: str
     component_name: str = "gcs_extract"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
     def execute(self) -> None:
         """Container lifecycle: delegate to utils.gcs_extract.run_gcs_extract()."""

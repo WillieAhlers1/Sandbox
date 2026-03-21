@@ -2,11 +2,13 @@
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import model_validator
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
+from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import task
 
 
+@task
 class BQTransform(BaseComponent):
     """
     Execute a SQL file as a BigQuery job and materialise results to a table.
@@ -35,7 +37,6 @@ class BQTransform(BaseComponent):
     sql: str | None = None
     write_disposition: str = "WRITE_TRUNCATE"
     component_name: str = "bq_transform"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
     @model_validator(mode="after")
     def _check_sql_source(self) -> "BQTransform":

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import typer
 
 from gcp_ml_framework.cli._helpers import console, err_console, load_context
@@ -14,7 +12,6 @@ teardown_app = typer.Typer(help="Delete ephemeral DEV resources for a branch nam
 @teardown_app.command()
 def teardown(
     branch: str = typer.Option(..., "--branch", "-b", help="Git branch whose resources to delete"),
-    framework_yaml: Path | None = typer.Option(None, "--config", "-c"),
     confirm: bool = typer.Option(False, "--confirm", help="Skip interactive confirmation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="List resources that would be deleted"),
 ) -> None:
@@ -35,21 +32,19 @@ def teardown(
     Example:
         gml teardown --branch feature/user-embeddings --confirm
     """
-    from gcp_ml_framework.config import GitState, _resolve_git_state
+    from gcp_ml_framework.config import Environment
 
-    git_state = _resolve_git_state(branch)
-    if git_state in (GitState.STAGING, GitState.PROD, GitState.PROD_EXP):
+    ctx = load_context(branch=branch)
+    if ctx.environment in (Environment.STAGING, Environment.PROD, Environment.EXPERIMENT):
         err_console.print(
-            f"[red]ERROR:[/red] Branch '{branch}' resolves to {git_state.value.upper()} — "
+            f"[red]ERROR:[/red] Environment '{ctx.environment.value}' — "
             "teardown is only allowed for DEV branches."
         )
         raise typer.Exit(1)
 
-    ctx = load_context(framework_yaml=framework_yaml, branch=branch)
-
     # Resolve Composer DAG pattern for this namespace
     dag_pattern = f"{ctx.naming.namespace_bq}__*"
-    composer_path = ctx.composer_dags_path.get(ctx.git_state.value, "")
+    composer_path = ctx.composer_dags_path.get(ctx.environment.value, "")
 
     console.print(f"\n[bold yellow]Teardown plan for branch:[/bold yellow] {branch!r}")
     console.print(f"  Namespace    : {ctx.namespace}")
@@ -128,4 +123,7 @@ def _delete_composer_dags(ctx, composer_path: str) -> None:
             )
             console.print(f"  [green]Deleted Airflow metadata:[/green] {dag_id}")
         except Exception as e:
-            console.print(f"  [yellow]Warning:[/yellow] Could not delete Airflow metadata for {dag_id}: {e}")
+            console.print(
+                f"  [yellow]Warning:[/yellow] Could not delete "
+                f"Airflow metadata for {dag_id}: {e}"
+            )

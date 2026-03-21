@@ -2,7 +2,7 @@
 
 from pydantic import Field
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
+from gcp_ml_framework.components.base import BaseComponent
 
 
 class DeployModel(BaseComponent):
@@ -32,7 +32,6 @@ class DeployModel(BaseComponent):
     max_replica_count: int = 3
     traffic_split: dict[str, int] = Field(default_factory=lambda: {"new": 100})
     component_name: str = "deploy_model"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
     def execute(self) -> None:
         """Container lifecycle: delegate to utils.vertex.run_deploy()."""

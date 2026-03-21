@@ -9,8 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
-
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
 
@@ -40,7 +38,8 @@ class VertexRunner:
             from google.cloud import aiplatform  # type: ignore[import]
         except ImportError as exc:
             raise ImportError(
-                "google-cloud-aiplatform is required. Install with: pip install google-cloud-aiplatform"
+                "google-cloud-aiplatform is required. "
+                "Install with: pip install google-cloud-aiplatform"
             ) from exc
 
         aiplatform.init(

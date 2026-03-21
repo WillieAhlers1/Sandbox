@@ -1,0 +1,188 @@
+"""Unit tests for CLI module imports (smoke tests)."""
+
+from __future__ import annotations
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
+# ---------------------------------------------------------------------------
+# CLI module import
+# ---------------------------------------------------------------------------
+
+
+class TestCLIModuleImports:
+    """Verify the CLI module import chain works without errors."""
+
+    def test_cli_module_imports(self):
+        """'from gcp_ml_framework.cli.main import app' succeeds."""
+        from gcp_ml_framework.cli.main import app
+
+        assert app is not None
+
+
+# ---------------------------------------------------------------------------
+# Compiler module import
+# ---------------------------------------------------------------------------
+
+
+class TestCompilerModuleImports:
+    """Verify the compiler can be imported alongside the CLI."""
+
+    def test_compiler_module_imports(self):
+        """'from gcp_ml_framework.pipeline.compiler import PipelineCompiler' succeeds."""
+        from gcp_ml_framework.pipeline.compiler import PipelineCompiler
+
+        assert PipelineCompiler is not None
+
+
+# ---------------------------------------------------------------------------
+# Build command
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCommand:
+    """Tests for the gml build CLI command."""
+
+    def test_build_command_exists(self):
+        """gml build is registered as a CLI command."""
+        from gcp_ml_framework.cli.main import app
+
+        command_names = [cmd.name for cmd in app.registered_commands]
+        assert "build" in command_names
+
+    def test_build_module_imports(self):
+        """cmd_build module can be imported without error."""
+        from gcp_ml_framework.cli.cmd_build import build
+
+        assert callable(build)
+
+    def test_build_command_constructs_gcloud_args(self, mock_context):
+        """build_command() returns correct gcloud args for a pipeline."""
+        from gcp_ml_framework.cli.cmd_build import build_command
+
+        cmd = build_command(
+            ctx=mock_context,
+            pipeline_name="training_pipeline",
+            timeout=1200,
+        )
+        assert cmd[0:2] == ["gcloud", "builds"]
+        assert "submit" in cmd
+        assert "--config" in cmd
+        assert any("_PIPELINE=" in s for s in cmd)
+        assert any("_TAG=" in s for s in cmd)
+
+    def test_build_command_uses_correct_pipeline_slug(self, mock_context):
+        """Pipeline name is slugified (underscores to hyphens)."""
+        from gcp_ml_framework.cli.cmd_build import build_command
+
+        cmd = build_command(
+            ctx=mock_context, pipeline_name="training_pipeline", timeout=1200
+        )
+        joined = " ".join(cmd)
+        assert "training-pipeline" in joined
+
+    def test_build_command_timeout(self, mock_context):
+        """Custom timeout is passed to gcloud."""
+        from gcp_ml_framework.cli.cmd_build import build_command
+
+        cmd = build_command(ctx=mock_context, pipeline_name="x", timeout=3600)
+        assert any("3600" in s for s in cmd)
+
+
+# ---------------------------------------------------------------------------
+# Run command
+# ---------------------------------------------------------------------------
+
+
+class TestRunCommand:
+    """Tests for the gml run CLI command."""
+
+    def test_run_command_exists(self):
+        """gml run is registered as a CLI command."""
+        from gcp_ml_framework.cli.main import app
+
+        command_names = [cmd.name for cmd in app.registered_commands]
+        assert "run" in command_names
+
+    def test_run_module_imports(self):
+        """cmd_run module can be imported without error."""
+        from gcp_ml_framework.cli.cmd_run import run
+
+        assert callable(run)
+
+    def test_no_vertex_flag(self):
+        """--vertex flag must NOT exist on the run command."""
+        import inspect
+
+        from gcp_ml_framework.cli.cmd_run import run
+
+        sig = inspect.signature(run)
+        assert "vertex" not in sig.parameters
+
+    def test_no_sync_flag(self):
+        """--sync flag must NOT exist on the run command."""
+        import inspect
+
+        from gcp_ml_framework.cli.cmd_run import run
+
+        sig = inspect.signature(run)
+        assert "sync" not in sig.parameters
+
+    def test_no_no_cache_flag(self):
+        """--no-cache flag must NOT exist on the run command."""
+        import inspect
+
+        from gcp_ml_framework.cli.cmd_run import run
+
+        sig = inspect.signature(run)
+        assert "no_cache" not in sig.parameters
+
+    def test_composer_trigger_constructs_gcloud_args(self, mock_context):
+        """composer_trigger_command() returns correct gcloud args."""
+        from gcp_ml_framework.cli.cmd_run import composer_trigger_command
+
+        cmd = composer_trigger_command(ctx=mock_context, pipeline_name="training_pipeline")
+        assert cmd[0:2] == ["gcloud", "composer"]
+        assert "environments" in cmd
+        assert "run" in cmd
+        assert "dags" in cmd
+        assert "trigger" in cmd
+        assert "--" in cmd
+
+    def test_composer_trigger_uses_correct_dag_id(self, mock_context):
+        """DAG ID follows naming convention: {namespace_bq}__{pipeline_bq_safe}."""
+        from gcp_ml_framework.cli.cmd_run import composer_trigger_command
+
+        cmd = composer_trigger_command(ctx=mock_context, pipeline_name="training_pipeline")
+        expected_dag_id = mock_context.naming.dag_id("training_pipeline")
+        assert expected_dag_id in cmd
+
+    def test_composer_trigger_uses_context_env_name(self, mock_context):
+        """Composer environment name comes from context."""
+        from gcp_ml_framework.cli.cmd_run import composer_trigger_command
+
+        cmd = composer_trigger_command(ctx=mock_context, pipeline_name="x")
+        assert mock_context.composer_environment_name in cmd
+
+    def test_composer_trigger_uses_region_and_project(self, mock_context):
+        """Region and project are passed to gcloud."""
+        from gcp_ml_framework.cli.cmd_run import composer_trigger_command
+
+        cmd = composer_trigger_command(ctx=mock_context, pipeline_name="x")
+        assert "--location" in cmd
+        idx = cmd.index("--location")
+        assert cmd[idx + 1] == mock_context.region
+        assert "--project" in cmd
+        idx = cmd.index("--project")
+        assert cmd[idx + 1] == mock_context.gcp_project
+
+    def test_local_flag_still_exists(self):
+        """--local flag must exist on the run command."""
+        import inspect
+
+        from gcp_ml_framework.cli.cmd_run import run
+
+        sig = inspect.signature(run)
+        assert "local" in sig.parameters

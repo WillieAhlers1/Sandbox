@@ -20,8 +20,9 @@ class HouseTrainModelStep(TrainModel):
 
         TrainModel.execute() handles GCS upload of everything in _work_dir.
         """
-        from google.cloud import bigquery
         from importlib.resources import files
+
+        from google.cloud import bigquery
 
         from second_run.estimator import HousePredictionModel
 
@@ -30,11 +31,12 @@ class HouseTrainModelStep(TrainModel):
         # Read training data from BigQuery
         logger.info("[train_house_model] Reading training data from BigQuery...")
         client = bigquery.Client(project=self.project)
-        query = (
+        query_template = (
             files("pipelines.training_pipeline.sql")
             .joinpath("training_pipeline_features.sql")
             .read_text()
         )
+        query = query_template.format(dataset=self.dataset)
         df = client.query(query).to_dataframe()
 
         # Train model

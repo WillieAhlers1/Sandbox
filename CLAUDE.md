@@ -2,14 +2,23 @@
 
 ML pipeline project built on the GCP ML Framework (`gcp_ml_framework`).
 
+## Architecture
+
+- **Unified task model:** `@task` (Airflow operators) and `@ml_task` (Vertex AI containers) decorators
+- **Single Pipeline builder** replaces both `PipelineBuilder` and `DAGBuilder`
+- **Smart compiler** auto-groups consecutive `@ml_task` steps into Vertex AI pipeline, wraps all in Airflow DAG
+- **Environment via env var:** `GML_ENVIRONMENT` (set by CI/CD), NOT derived from git branch
+- **Component lifecycle:** `cli()` → `execute()` → `run()`. Data scientists override `run()` only.
+
 ## Stack
 
 - **Language:** Python 3.12
-- **Package manager:** uv
+- **Package manager:** uv (exclusively — no pip, no poetry)
 - **Pipeline orchestration:** KFP v2 on Vertex AI, triggered by Airflow (Cloud Composer)
 - **Infrastructure:** Terraform (per-environment under `terraform/envs/`)
 - **CI/CD:** GitHub Actions (`.github/workflows/`)
-- **Docker:** Multi-layer image hierarchy (`base-python` → `base-ml` / `component-base` → trainer images)
+- **Docker:** 2-layer hierarchy (`base-python` → `{pipeline-name}` image). Built via Google Cloud Build.
+- **Testing:** Three-tier — unit (mocked), integration (real GCP), e2e (full pipeline on Vertex AI)
 
 ## Key Commands
 
@@ -20,14 +29,23 @@ uv sync
 # Run CLI commands (loads .env)
 UV_ENV_FILE=.env uv run -- gml <command>
 
-# Compile pipelines to KFP YAML
+# Compile pipelines to KFP YAML + Airflow DAG
 UV_ENV_FILE=.env uv run -- gml compile --all
+
+# Build Docker images via Cloud Build
+UV_ENV_FILE=.env uv run -- gml build training_pipeline
 
 # Deploy (compile + verify images + upload DAGs + upload YAML to GCS)
 UV_ENV_FILE=.env uv run -- gml deploy --all
 
-# Build and push Docker images
-UV_ENV_FILE=.env uv run -- sh -c './scripts/docker_build.sh --push'
+# Run pipeline locally against real GCP dev resources
+UV_ENV_FILE=.env uv run -- gml run training_pipeline --local
+
+# Trigger deployed pipeline via Composer (default mode)
+UV_ENV_FILE=.env uv run -- gml run training_pipeline
+
+# Run tests
+uv run -- pytest tests/ -m unit -v
 
 # Terraform
 cd terraform/envs/dev && terraform init && terraform plan
@@ -36,25 +54,27 @@ cd terraform/envs/dev && terraform init && terraform plan
 ## Project Structure
 
 - `gcp_ml_framework/` — Framework library (CLI, components, pipeline builder, compiler, naming)
-- `pipelines/` — Pipeline definitions (each subdirectory is a pipeline)
-- `pipelines/*/trainer/` — Trainer code, gets its own Docker image
-- `docker/base/` — Dockerfiles: `base-python`, `base-ml`, `component-base`
+- `pipelines/` — Pipeline definitions (each subdirectory is a pipeline with `pipeline.py`)
+- `second_run/` — Shared business logic package (estimators, feature engineering)
+- `docker/` — Dockerfiles: `base-python` (base layer), `pipeline/` (all deps + source)
 - `dags/` — Auto-generated Airflow DAGs (do not edit manually)
 - `compiled_pipelines/` — Auto-generated KFP YAML (do not edit manually)
 - `terraform/` — Infrastructure as code (per-env: dev, staging, prod)
 - `scripts/` — Build and bootstrap scripts
-- `framework.yaml` — Project config (team, project name, GCP settings)
-- `.env` — Local env vars for Docker builds (AR_HOST, GCP_PROJECT, AR_REPO)
-- `docs/tasks/` — Task tracking (todo.md, lessons.md)
+- `.env` — All config (team, project, GCP settings, environment) — gitignored
+- `docs/discussion.md` — Architecture discussion log with all decisions
+- `docs/tasks/` — Task tracking (todo.md, decisions.md, lessons.md)
 
 ## Important Notes
 
-- `framework.yaml` is the source of truth for team/project naming. The CLI reads from it directly.
-- Image tags are auto-derived as `{branch}-{short_sha}` by both `naming.py` and `docker_build.sh`.
-- `IMAGE_TAG` in `.env` is not needed — `docker_build.sh` generates it from git.
+- `.env` is the source of truth for all config (team, project, GCP settings). All config comes from env vars.
+- Image tags are auto-derived as `{branch}-{short_sha}` by `naming.py`.
+- Environment is set via `GML_ENVIRONMENT` env var (values: LOCAL, DEV, TEST, STAGING, PROD, EXPERIMENT). Default: `dev`.
+- `get_git_branch()` is used ONLY for resource naming (branch isolation), NOT for environment resolution.
 - The dev environment uses pre-existing GCP service accounts (IAM module is skipped in `terraform/envs/dev/main.tf`).
 - `project_name` contains underscores (`second_run`) — Terraform normalizes to hyphens via `local.project_slug` for GCP resource IDs.
 - `dags/` and `compiled_pipelines/` are generated artifacts — regenerate with `gml compile` or `gml deploy`.
+- Local testing hits real GCP dev resources — NO DuckDB, NO mocks for `gml run --local`.
 
 ---
 
@@ -109,3 +129,4 @@ cd terraform/envs/dev && terraform init && terraform plan
 
 - **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 - **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
+- **USE UV FOR PYTHON and ENSURE RUFF HAS NO ERRORS WHEN EVER DEALING WITH PYTHON CODE**

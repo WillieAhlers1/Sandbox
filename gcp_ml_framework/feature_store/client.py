@@ -64,6 +64,8 @@ class FeatureStoreClient:
         )
         from google.cloud.aiplatform_v1beta1.types import (
             feature_group as feature_group_pb2,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
             feature_registry_service,
         )
 
@@ -117,7 +119,11 @@ class FeatureStoreClient:
         )
         from google.cloud.aiplatform_v1beta1.types import (
             feature_online_store as fos_pb2,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
             feature_online_store_admin_service,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
             feature_view as feature_view_pb2,
         )
 

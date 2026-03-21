@@ -2,7 +2,7 @@
 
 from pydantic import Field
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
+from gcp_ml_framework.components.base import BaseComponent
 
 
 class EvaluateModel(BaseComponent):
@@ -28,7 +28,6 @@ class EvaluateModel(BaseComponent):
     metrics: list[str] = Field(default_factory=lambda: ["auc"])
     gate: dict[str, float] = Field(default_factory=dict)
     component_name: str = "evaluate_model"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
     def execute(self) -> None:
         """Container lifecycle: delegate to utils.evaluate.run_evaluate()."""

@@ -9,9 +9,9 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from gcp_ml_framework.components.ml.train import TrainModel
-from gcp_ml_framework.components.ml.register import RegisterModel
 from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+from gcp_ml_framework.components.ml.register import RegisterModel
+from gcp_ml_framework.components.ml.train import TrainModel
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
@@ -106,7 +106,7 @@ class PipelineCompiler:
                 # Build flat param dict: component fields (base), then context + derived overlay
                 from gcp_ml_framework.components.base import _INTERNAL_FIELDS
                 component_fields = {}
-                for name in step.component.model_fields:
+                for name in type(step.component).model_fields:
                     if name in _INTERNAL_FIELDS:
                         continue
                     val = getattr(step.component, name)
@@ -166,7 +166,7 @@ class PipelineCompiler:
             "region": context.region,
             "project_name": context.naming.project,
             "branch": context.naming.branch,
-            "environment": context.git_state.value,
+            "environment": context.environment.value,
             "dataset": context.bq_dataset,
             "gcs_prefix": context.gcs_prefix,
             "feature_store_id": context.feature_store_id,

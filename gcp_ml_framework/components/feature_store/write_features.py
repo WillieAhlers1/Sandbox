@@ -2,9 +2,11 @@
 
 from pydantic import Field
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
+from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import task
 
 
+@task
 class WriteFeatures(BaseComponent):
     """
     Register a BQ table as a Vertex AI Feature Store v2 FeatureGroup.
@@ -30,7 +32,6 @@ class WriteFeatures(BaseComponent):
     feature_ids: list[str] = Field(default_factory=list)
     bq_source_table: str | None = None
     component_name: str = "write_features"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
     def execute(self) -> None:
         """Container lifecycle: delegate to utils.feature_store.run_write_features()."""
@@ -47,6 +48,7 @@ class WriteFeatures(BaseComponent):
 
 
 
+@task
 class ReadFeatures(BaseComponent):
     """
     Read feature values from the Vertex AI Feature Store for training or serving.
@@ -60,7 +62,6 @@ class ReadFeatures(BaseComponent):
     feature_ids: list[str] = Field(default_factory=list)
     output_table: str = "features_read"
     component_name: str = "read_features"
-    config: ComponentConfig = Field(default_factory=ComponentConfig)
 
 
 
