@@ -122,16 +122,13 @@ class RegisterModel(BaseComponent):
             "serving_container_image_uri": self.serving_container_image,
             "labels": self.labels,
             "description": self.description,
-            "sync": False,
         }
         if parent_model:
             upload_kwargs["parent_model"] = parent_model
             upload_kwargs["is_default_version"] = True
 
-        # sync=False returns immediately without polling the LRO, avoiding
-        # quota exhaustion from repeated GetOperation calls on shared projects.
         model = aiplatform.Model.upload(**upload_kwargs)
-        logger.info(f"Registered model (async): {model.resource_name}")
+        logger.info(f"Registered model: {model.resource_name}")
         return model.resource_name
 
 
