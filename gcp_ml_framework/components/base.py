@@ -27,7 +27,7 @@ from gcp_ml_framework.types import TaskType
 # Fields that are never exposed as CLI flags or KFP params
 _INTERNAL_FIELDS = frozenset({
     "component_name", "component_version", "timeout_seconds", "retry_count", "cache_enabled",
-    "image_name",
+    "image_name", "gcp_config",
 })
 
 # Fields excluded from KFP input params (output_uri_path is handled via dsl.OutputPath)
@@ -73,7 +73,7 @@ class BaseComponent(BaseSettings):
     output_uri_path: str = ""
     run_date: str = ""
     dataset: str = ""
-    gcp_config: GCPConfig = Field(default_factory=GCPConfig, description="GCP configuration (project_id, region, etc.)")
+
 
     
     @classmethod
