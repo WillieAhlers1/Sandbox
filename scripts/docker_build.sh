@@ -89,13 +89,17 @@ _resolve_image_name() {
     # Calls NamingConvention.docker_image_name()
     local pipeline_name="$1"
     local stem="$2"
-    python -c "
+    if [ -n "$pipeline_name" ]; then
+        python -c "
 from gcp_ml_framework.naming import NamingConvention
-print(NamingConvention.docker_image_name(
-    ${pipeline_name:+\"$pipeline_name\"}${pipeline_name:-None},
-    \"$stem\",
-))
+print(NamingConvention.docker_image_name(\"$pipeline_name\", \"$stem\"))
 "
+    else
+        python -c "
+from gcp_ml_framework.naming import NamingConvention
+print(NamingConvention.docker_image_name(None, \"$stem\"))
+"
+    fi
 }
 
 _full_tag() {
