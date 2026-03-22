@@ -11,46 +11,38 @@ def run_deploy(
     *,
     project: str,
     region: str,
-    model_uri: str,
     model_display_name: str,
     endpoint_display_name: str,
-    serving_container_image: str,
     machine_type: str,
     min_replica_count: int,
     max_replica_count: int,
     traffic_split: dict[str, int],
     output_uri_path: str,
 ) -> None:
-    """Upload a model to Vertex AI Model Registry and deploy to an Endpoint."""
+    """Look up a registered model and deploy it to a Vertex AI Endpoint.
+
+    The model must already be registered (via RegisterModel) — the serving
+    container image is captured during registration and does not need to be
+    provided here.
+    """
     from google.cloud import aiplatform
 
     aiplatform.init(project=project, location=region)
 
-    # Create a new version under an existing model if one exists
-    parent_model = None
+    # Look up the registered model by display name
     existing_models = aiplatform.Model.list(
         filter=f'display_name="{model_display_name}"',
         project=project,
         location=region,
     )
-    if existing_models:
-        parent_model = existing_models[0].resource_name
-        logger.info(
-            f"Found existing model '{model_display_name}' — "
-            f"creating new version under {parent_model}"
+    if not existing_models:
+        raise ValueError(
+            f"No registered model found with display_name='{model_display_name}'. "
+            "Ensure RegisterModel runs before DeployModel."
         )
 
-    upload_kwargs: dict = {
-        "display_name": model_display_name,
-        "artifact_uri": model_uri,
-        "serving_container_image_uri": serving_container_image,
-    }
-    if parent_model:
-        upload_kwargs["parent_model"] = parent_model
-        upload_kwargs["is_default_version"] = True
-
-    # Deploy needs the model to be fully registered, so we must wait (sync=True).
-    model = aiplatform.Model.upload(**upload_kwargs)
+    model = existing_models[0]
+    logger.info(f"Found registered model: {model.resource_name}")
 
     # Get or create endpoint
     existing = aiplatform.Endpoint.list(

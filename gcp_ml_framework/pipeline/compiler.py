@@ -6,10 +6,11 @@ for artifact promotion (STAGE → PROD copies the YAML, never recompiles).
 """
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+from gcp_ml_framework.components.ml.deploy import DeployModel
 from gcp_ml_framework.components.ml.register import RegisterModel
 from gcp_ml_framework.components.ml.train import TrainModel
 
@@ -76,8 +77,8 @@ class PipelineCompiler:
         pipeline_root = context.naming.gcs_pipeline_root(pipeline_def.name)
         ctx_params = self._build_context_params(context, pipeline_def)
 
-        # Default pipeline image — used when a component doesn't specify image_name
-        default_image = self._resolve_image_uri(context, pipeline_def.name, None)
+        # Default pipeline image — used when serving_dockerfile is not set
+        default_image = self._resolve_image_uri(context, None)
 
         derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir, default_image)
 
@@ -93,9 +94,9 @@ class PipelineCompiler:
             for step in steps:
                 # Derive step_module from the component's class module path
                 step_module = step.component.__class__.__module__
-                # Resolve per-component image: explicit image_name or pipeline default
+                # Resolve per-component image from runtime_dockerfile
                 step_image = self._resolve_image_uri(
-                    context, pipeline_def.name, step.component.image_name or None
+                    context, step.component.runtime_dockerfile
                 )
                 component_fn = step.component.as_kfp_component(
                     step_module=step_module,
@@ -158,26 +159,46 @@ class PipelineCompiler:
 
         return _pipeline
 
+    @staticmethod
+    def _parse_dockerfile_path(dockerfile_path: str) -> tuple[str | None, str]:
+        """Extract pipeline_name and dockerfile_stem from a dockerfile path.
+
+        The path is relative to the docker/ directory:
+            "pipelines/house_price/regression_serve.Dockerfile"
+            → pipeline_name="house_price", stem="regression_serve"
+
+            "train.Dockerfile"
+            → pipeline_name=None, stem="train"
+
+        Returns:
+            (pipeline_name, dockerfile_stem)
+        """
+        p = PurePosixPath(dockerfile_path)
+        stem = p.stem  # "regression_serve" from "regression_serve.Dockerfile"
+        parts = p.parts
+        if len(parts) >= 3 and parts[0] == "pipelines":
+            # docker/pipelines/{pipeline_name}/{file}.Dockerfile
+            return parts[1], stem
+        # Root-level: docker/{file}.Dockerfile
+        return None, stem
+
     def _resolve_image_uri(
         self,
         context: "MLContext",
-        pipeline_name: str,
-        image_name: str | None,
+        dockerfile_path: str | None,
     ) -> str:
-        """Resolve a Dockerfile stem to a full AR image URI.
+        """Resolve a dockerfile path to a full AR image URI.
 
         Uses NamingConvention.docker_image_uri() — the single source of truth
         for image naming shared with docker_build.sh.
 
         Args:
             context: Runtime context with AR host, project, naming.
-            pipeline_name: The pipeline's name (e.g., "house_price").
-            image_name: Dockerfile stem (e.g., "house_price_app"), or None for
-                        the pipeline's default training image.
+            dockerfile_path: Path relative to docker/ (e.g.,
+                "pipelines/house_price/regression_serve.Dockerfile"), or None
+                for the default training image.
         """
-        from gcp_ml_framework.naming import NamingConvention
-
-        if image_name is None:
+        if dockerfile_path is None:
             # Default: root-level train.Dockerfile
             return context.naming.docker_image_uri(
                 registry_host=context.artifact_registry_host,
@@ -185,12 +206,12 @@ class PipelineCompiler:
                 pipeline_name=None,
                 dockerfile_stem="train",
             )
-        # Pipeline-specific Dockerfile
+        pipeline_name, stem = self._parse_dockerfile_path(dockerfile_path)
         return context.naming.docker_image_uri(
             registry_host=context.artifact_registry_host,
             gcp_project=context.gcp_project,
             pipeline_name=pipeline_name,
-            dockerfile_stem=image_name,
+            dockerfile_stem=stem,
         )
 
     def _build_context_params(
@@ -239,30 +260,32 @@ class PipelineCompiler:
                 extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
 
             # RegisterModel: needs model_display_name + serving_container_image
-            # Resolution priority:
+            # Serving image resolution (uses serving_dockerfile, NOT runtime_dockerfile):
             #   1. serving_container_image (full URI) — use as-is
-            #   2. image_name (Dockerfile stem) — resolve via naming convention
+            #   2. serving_dockerfile — resolve via naming convention
             #   3. Neither set — fall back to pipeline default training image
             if isinstance(comp, RegisterModel):
                 extra["model_display_name"] = context.naming.vertex_model_name(
                     pipeline_def.name, comp.model_name or None
                 )
                 if not comp.serving_container_image:
-                    if comp.image_name:
-                        # Resolve Dockerfile stem → full AR URI
+                    if comp.serving_dockerfile:
                         extra["serving_container_image"] = self._resolve_image_uri(
-                            context, pipeline_def.name, comp.image_name
+                            context, comp.serving_dockerfile
                         )
                     elif default_image:
                         extra["serving_container_image"] = default_image
 
-            # DeployModel: needs model_display_name and endpoint_display_name
-            if hasattr(comp, "endpoint_name"):
+            # DeployModel: needs model_display_name and endpoint_display_name.
+            # Both are derived from pipeline_name + model_name via naming convention.
+            # No serving image needed — it's already captured during registration.
+            if isinstance(comp, DeployModel):
+                model_name_val = comp.model_name or None
                 extra["model_display_name"] = context.naming.vertex_model_name(
-                    pipeline_def.name, getattr(comp, "model_name", None) or None
+                    pipeline_def.name, model_name_val
                 )
                 extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
-                    comp.endpoint_name
+                    pipeline_def.name, model_name_val
                 )
 
             if extra:

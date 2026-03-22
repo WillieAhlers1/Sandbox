@@ -1,10 +1,22 @@
 from gcp_ml_framework import Pipeline
 from pipelines.house_price.steps.train_regression_model import HouseTrainModelStep
 from gcp_ml_framework.components.ml.register import RegisterModel
+from gcp_ml_framework.components.ml.deploy import DeployModel
 
 pipeline = (
     Pipeline(name="house_price", schedule="@daily")
-    .add(HouseTrainModelStep(component_name="Regression Model"))
-    .add(RegisterModel(model_name="regression"))
+    .add(HouseTrainModelStep(
+        component_name="Regression Model",
+        runtime_dockerfile="pipelines/house_price/base.Dockerfile",
+    ))
+    .add(RegisterModel(
+        model_name="regression",
+        runtime_dockerfile="pipelines/house_price/base.Dockerfile",
+        serving_dockerfile="pipelines/house_price/serve.Dockerfile",
+    ))
+    .add(DeployModel(
+        model_name="regression",
+        runtime_dockerfile="pipelines/house_price/base.Dockerfile",
+    ))
     .build()
 )

@@ -171,8 +171,20 @@ class NamingConvention(BaseModel):
             return f"{base}-{_slugify(model_name)}"
         return base
 
-    def vertex_endpoint_name(self, model_name: str) -> str:
-        return f"{self.namespace}-{_slugify(model_name)}-endpoint"
+    def vertex_endpoint_name(self, pipeline_name: str, model_name: str | None = None) -> str:
+        """Derive Vertex AI Endpoint display name.
+
+        Includes project, branch, pipeline, and model to guarantee uniqueness.
+        Each model is deployed as its own endpoint / web service.
+
+        Returns:
+            "{namespace}-{pipeline}-{model_name}-endpoint" or
+            "{namespace}-{pipeline}-endpoint" when model_name is not set.
+        """
+        base = f"{self.namespace}-{_slugify(pipeline_name)}"
+        if model_name:
+            return f"{base}-{_slugify(model_name)}-endpoint"
+        return f"{base}-endpoint"
 
     def vertex_training_job_name(self, job_name: str) -> str:
         return f"{self.namespace}-{_slugify(job_name)}"
