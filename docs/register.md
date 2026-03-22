@@ -1,9 +1,17 @@
 # Model Registration — Design & Decisions
 
+## Overview
+
+`RegisterModel` uploads trained model artifacts to the Vertex AI Model Registry.
+It is the **single owner** of the serving container image — `DeployModel` does
+not need or accept serving image fields. This avoids duplication and ensures
+there is one source of truth for which image serves a given model.
+
+---
+
 ## Problem Statement
 
-The `RegisterModel` component uploads trained model artifacts to the Vertex AI
-Model Registry. Two bugs surfaced during initial deployment:
+Two bugs surfaced during initial deployment:
 
 1. **Single model name per pipeline.** The model display name was derived as
    `{team}-{project}-{branch}-{pipeline}`. A pipeline that trains two models
@@ -24,7 +32,7 @@ Vertex AI organises models into two levels:
 | Concept | Description |
 |---------|-------------|
 | **Model (parent)** | A top-level resource identified by display name. Acts as a container for versions. |
-| **Model Version** | An immutable snapshot of artifacts + metadata under a parent model. Versions are auto-numbered (v1, v2, …). |
+| **Model Version** | An immutable snapshot of artifacts + metadata under a parent model. Versions are auto-numbered (v1, v2, ...). |
 
 Key API parameters on `aiplatform.Model.upload()`:
 
@@ -33,35 +41,32 @@ Key API parameters on `aiplatform.Model.upload()`:
   upload creates a **new version** under that parent instead of a new model.
 - `is_default_version` — whether this version becomes the default when
   deployed. Defaults to `True`.
-- `model_id` — optional user-specified ID for the parent model (set on first
-  upload only). Useful for deterministic resource names.
+- `sync` — whether to wait for the upload to complete. We use `sync=False`
+  to avoid LRO polling that consumes CRUD quota on shared projects.
 
 ---
 
-## Bug 1: Model Name Doesn't Support Multiple Models Per Pipeline
+## Fix 1: Multi-Model Support via `model_name`
 
-### Current Behaviour
+### Problem
 
 ```
 NamingConvention.vertex_model_name("house_price")
-→ "mlplatform-third-run-main-house-price"
+-> "mlplatform-third-run-main-house-price"
 ```
 
-The compiler passes this as `model_display_name` to every `RegisterModel` in
-the pipeline. Two `RegisterModel` steps in the same pipeline produce identical
-names.
+Two `RegisterModel` steps in the same pipeline produce identical names.
 
-### Design Decision
+### Solution
 
-Add an optional `model_name` field to `RegisterModel`. When set, it's appended
-to the derived name:
+Add a `model_name` field. When set, it's appended to the derived name:
 
 ```
 vertex_model_name("house_price", "regression")
-→ "mlplatform-third-run-main-house-price-regression"
+-> "mlplatform-third-run-main-house-price-regression"
 
 vertex_model_name("house_price", None)
-→ "mlplatform-third-run-main-house-price"   (backwards-compatible)
+-> "mlplatform-third-run-main-house-price"   (backwards-compatible)
 ```
 
 **Why a separate field instead of reusing `component_name`?**
@@ -70,49 +75,27 @@ vertex_model_name("house_price", None)
   It has no naming-convention constraints and can contain spaces/caps.
 - `model_name` is a slug that becomes part of the Vertex AI resource name. It
   must be deterministic across retrains (same name = same parent model).
-
-**Pipeline usage:**
-
-```python
-pipeline = (
-    Pipeline(name="house_price", schedule="@daily")
-    .add(TrainRegressionStep(...))
-    .add(RegisterModel(model_name="regression"))
-    .add(TrainClassifierStep(...))
-    .add(RegisterModel(model_name="classifier"))
-    .build()
-)
-```
+- `model_name` is shared with `DeployModel` — it's the contract that links
+  registration to deployment.
 
 ---
 
-## Bug 2: Versioning — New Artifact vs New Version
+## Fix 2: Versioning via `parent_model`
 
-### Current Behaviour
+### Problem
 
-```python
-model = aiplatform.Model.upload(
-    display_name=self.model_display_name,
-    artifact_uri=self.model_uri,
-    serving_container_image_uri=self.serving_container_image,
-)
-```
-
-Every retrain creates a new top-level model. The registry accumulates:
+Every retrain creates a new top-level model:
 
 ```
 mlplatform-third-run-main-house-price   (run 1)
-mlplatform-third-run-main-house-price   (run 2)  ← duplicate display name
-mlplatform-third-run-main-house-price   (run 3)  ← duplicate display name
+mlplatform-third-run-main-house-price   (run 2)  <- duplicate
+mlplatform-third-run-main-house-price   (run 3)  <- duplicate
 ```
 
-These are separate resources with separate resource IDs. There is no version
-lineage between them.
+### Solution
 
-### Design Decision
-
-Before uploading, check if a model with the same display name already exists.
-If so, pass its `resource_name` as `parent_model` to create a new version:
+Before uploading, look up an existing model with the same display name.
+If found, pass its `resource_name` as `parent_model`:
 
 ```python
 existing = aiplatform.Model.list(
@@ -125,43 +108,75 @@ if existing:
         ...,
         parent_model=existing[0].resource_name,
         is_default_version=True,
+        sync=False,
     )
 else:
-    model = aiplatform.Model.upload(...)  # creates v1
+    model = aiplatform.Model.upload(..., sync=False)  # creates v1
 ```
 
 **Result after three retrains:**
 
 ```
-mlplatform-third-run-main-house-price
-  └── v1  (run 1)
-  └── v2  (run 2)  ← default
-  └── v3  (run 3)  ← default
+mlplatform-third-run-main-house-price-regression
+  +-- v1  (run 1)
+  +-- v2  (run 2)
+  +-- v3  (run 3)  <- default
 ```
 
 ### Why `display_name` filter and not a stored model ID?
 
-- The `display_name` is deterministic — it's derived from the naming convention.
+- The `display_name` is deterministic — derived from the naming convention.
   Same pipeline + same model_name always produces the same display name.
-- Storing the model resource ID (e.g., in GCS or as a pipeline output) would
-  require cross-run state management. The display name lookup is stateless.
-- `aiplatform.Model.list(filter=...)` is cheap (metadata query, no artifact
-  transfer).
+- Storing the model resource ID would require cross-run state management.
+  The display name lookup is stateless.
+- `aiplatform.Model.list(filter=...)` is a cheap metadata query.
 
-### Edge Case: Branch Isolation
+### Why `sync=False`?
+
+`Model.upload()` with `sync=True` (the default) polls the long-running
+operation via repeated `GetOperation` calls. On shared GCP projects, this
+consumes the 600 req/min CRUD quota and causes 429 ResourceExhausted errors.
+
+`sync=False` returns immediately. The model is created asynchronously.
+`DeployModel` handles this by looking up the model independently — it runs
+as a separate pipeline step that executes after registration completes.
+
+---
+
+## Serving Image Ownership
+
+`RegisterModel` is the **only** component that knows about the serving
+container image. It captures the image in the Model Registry during upload
+via `serving_container_image_uri`.
+
+The serving image is resolved using a three-tier priority:
+
+1. `serving_container_image` (full URI) — used as-is. Escape hatch for
+   external or pre-built images.
+2. `serving_dockerfile` (path relative to `docker/`) — resolved at compile
+   time by the compiler into a full Artifact Registry URI.
+3. Neither set — falls back to the default training image.
+
+`DeployModel` does **not** have any serving image fields. It looks up the
+already-registered model (which has the serving image baked in) and deploys
+it. See `docs/deploy.md` for the deployment design.
+
+---
+
+## Edge Cases
+
+### Branch Isolation
 
 Because the display name includes the branch slug (`{team}-{project}-{branch}-...`),
 models on different branches are separate parent models. Merging `feature/xyz`
 to `main` and retraining creates the first version under the `main` parent —
 no cross-branch contamination.
 
-### Edge Case: Environment Promotion
+### Environment Promotion
 
 When promoting from dev to staging/prod, the pipeline is recompiled with the
 target environment's project ID and branch. This naturally creates a separate
-parent model in the prod registry. If you want to *copy* a model version
-across projects instead, use `aiplatform.Model.copy()` (not handled by this
-component — that's a promotion workflow concern).
+parent model in the prod registry.
 
 ---
 
@@ -169,8 +184,7 @@ component — that's a promotion workflow concern).
 
 | File | Change |
 |------|--------|
-| `gcp_ml_framework/components/ml/register.py` | Added `model_name` field. Updated `run()` to look up existing model and pass `parent_model`. |
-| `gcp_ml_framework/naming.py` | Updated `vertex_model_name()` to accept optional `model_name` parameter. |
-| `gcp_ml_framework/pipeline/compiler.py` | Pass `model_name` through to naming convention when set on `RegisterModel`. |
-| `gcp_ml_framework/utils/vertex.py` | Same `parent_model` lookup in `run_deploy()`. |
-| `gcp_ml_framework/components/base.py` | Added `model_name` to `_INTERNAL_FIELDS`. |
+| `gcp_ml_framework/components/ml/register.py` | Added `model_name`, `serving_dockerfile` fields. `run()` does `Model.list()` + `parent_model` lookup. Uses `sync=False`. |
+| `gcp_ml_framework/naming.py` | `vertex_model_name()` accepts optional `model_name`. |
+| `gcp_ml_framework/pipeline/compiler.py` | Resolves `serving_dockerfile` to full URI for `RegisterModel` only. |
+| `gcp_ml_framework/components/base.py` | `model_name` and `serving_dockerfile` in `_INTERNAL_FIELDS`. |
