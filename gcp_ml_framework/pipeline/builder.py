@@ -19,7 +19,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from gcp_ml_framework.components.base import BaseComponent
-from gcp_ml_framework.decorators import TaskType
+from gcp_ml_framework.types import TaskType
 
 
 class PipelineStep(BaseModel):
@@ -91,11 +91,11 @@ class Pipeline:
     ) -> Pipeline:
         """Add a component to the pipeline.
 
-        The task_type is read from the component's _task_type ClassVar
+        The task_type is read from the component's task_type ClassVar
         (set by @task or @ml_task decorator).
         """
         step_name = name or f"{type(component).__name__}_{len(self._steps)}"
-        task_type = getattr(component, "_task_type", TaskType.ML_TASK)
+        task_type = getattr(component, "task_type", TaskType.ML_TASK)
         self._steps.append(
             PipelineStep(
                 name=step_name, component=component, task_type=task_type,

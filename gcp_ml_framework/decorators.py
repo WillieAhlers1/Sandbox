@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from typing import TYPE_CHECKING, Callable, TypeVar, overload
+
+from gcp_ml_framework.types import TaskType
+
+if TYPE_CHECKING:
+    from gcp_ml_framework.components.base import BaseComponent
+
+_C = TypeVar("_C")
 
 
-class TaskType(StrEnum):
-    """Discriminator for how a component is compiled."""
-
-    TASK = "task"        # Airflow operator (BQ, email, etc.)
-    ML_TASK = "ml_task"  # Vertex AI container (train, evaluate, etc.)
-
-
-def task(cls):
+def task(cls: _C) -> _C:
     """Mark a component class as an Airflow operator task.
 
     Components decorated with @task are compiled to native Airflow operators
@@ -24,17 +24,29 @@ def task(cls):
         class BQQuery(BaseComponent):
             ...
     """
-    cls._task_type = TaskType.TASK
+    cls.task_type = TaskType.TASK
     return cls
 
 
+@overload
+def ml_task(_cls: _C) -> _C: ...
+
+@overload
 def ml_task(
-    _cls=None,
+    _cls: None = None,
     *,
     machine_type: str | None = None,
     accelerator_type: str | None = None,
     accelerator_count: int | None = None,
-):
+) -> Callable[[_C], _C]: ...
+
+def ml_task(
+    _cls: _C | None = None,
+    *,
+    machine_type: str | None = None,
+    accelerator_type: str | None = None,
+    accelerator_count: int | None = None,
+) -> _C | Callable[[_C], _C]:
     """Mark a component class as a Vertex AI container task.
 
     Optionally override default resource settings. Can be used with or without
@@ -47,8 +59,8 @@ def ml_task(
         class TrainLargeModel(BaseComponent): ...
     """
 
-    def decorator(cls):
-        cls._task_type = TaskType.ML_TASK
+    def decorator(cls: _C) -> _C:
+        cls.task_type = TaskType.ML_TASK
         needs_rebuild = False
         if machine_type is not None:
             cls.model_fields["machine_type"].default = machine_type

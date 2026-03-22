@@ -63,14 +63,13 @@ def build_command(
         f"--substitutions={substitutions}",
     ]
 
-    # Use the pipeline SA for Cloud Build when available (sandbox environments
+    # Use the pipeline SA for Cloud Build (sandbox environments
     # where the default Cloud Build SA lacks AR push permissions).
-    if ctx.pipeline_service_account_email:
-        sa_resource = (
-            f"projects/{ctx.gcp_project}/serviceAccounts/"
-            f"{ctx.pipeline_service_account_email}"
-        )
-        cmd.extend(["--service-account", sa_resource])
+    sa_email = ctx.pipeline_service_account
+    sa_resource = (
+        f"projects/{ctx.gcp_project}/serviceAccounts/{sa_email}"
+    )
+    cmd.extend(["--service-account", sa_resource])
 
     cmd.append(".")
     return cmd

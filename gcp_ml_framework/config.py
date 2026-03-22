@@ -32,23 +32,19 @@ class Environment(StrEnum):
     EXPERIMENT = "experiment"
 
 
-class GCPConfig(BaseModel):
-    dev_project_id: str = ""
-    test_project_id: str = ""
-    staging_project_id: str = ""
-    prod_project_id: str = ""
-    region: str = "us-central1"
-    composer_dags_path: dict[str, str] = Field(default_factory=dict)
-    artifact_registry_host: str = ""
-    pipeline_service_account_email: str | None = None
-    composer_environment_name: str | None = None
+class GCPConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="GCP_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
 
-    @model_validator(mode="after")
-    def _derive_ar_host(self) -> GCPConfig:
-        """Auto-derive artifact_registry_host from region when not explicitly set."""
-        if not self.artifact_registry_host:
-            self.artifact_registry_host = f"{self.region}-docker.pkg.dev"
-        return self
+    project_id: str = Field(description="GCP Project ID")
+    region: str = Field(description="GCP region")
+    composer_dags_path: str = Field(default="", description="GCS path to Composer DAGs bucket")
+    pipeline_service_account_email: str = Field(default="", description="Override pipeline SA email (blank = derive from naming)")
 
 
 class FeatureStoreConfig(BaseModel):
@@ -81,58 +77,25 @@ class FrameworkConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="GML_",
-        env_nested_delimiter="__",
-        env_file=".env",
+        env_prefix="",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
 
-    team: str
-    project: str
-    branch: str = Field(default_factory=get_git_branch)
-    environment: str = "dev"
-    gcp: GCPConfig = Field(default_factory=GCPConfig)
-    feature_store: FeatureStoreConfig = Field(default_factory=FeatureStoreConfig)
+    team: str = Field(alias="team", description="Team name")
+    project: str = Field(alias="project", description="Project name")
+    branch: str = Field(alias="branch", default_factory=get_git_branch, description="Git branch")
+    environment: str = Field(alias="environment", description="Deployment environment")
+    gcp: GCPConfig = Field(default_factory=GCPConfig, description="GCP configuration")
+    feature_store: FeatureStoreConfig = Field(default_factory=FeatureStoreConfig, description="Feature store configuration")
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
-
-    @model_validator(mode="after")
-    def _validate_projects(self) -> FrameworkConfig:
-        env = Environment(self.environment)
-        # Only require the relevant project ID to be set.
-        required = {
-            Environment.LOCAL: None,
-            Environment.DEV: ("dev_project_id", self.gcp.dev_project_id),
-            Environment.TEST: ("test_project_id", self.gcp.test_project_id),
-            Environment.STAGING: ("staging_project_id", self.gcp.staging_project_id),
-            Environment.PROD: ("prod_project_id", self.gcp.prod_project_id),
-            Environment.EXPERIMENT: ("prod_project_id", self.gcp.prod_project_id),
-        }
-        entry = required[env]
-        if entry is not None:
-            field, value = entry
-            if not value:
-                raise ValueError(
-                    f"gcp.{field} must be set for environment '{env.value}'. "
-                    f"Set via "
-                    f"GML_GCP__{field.upper()}."
-                )
-        return self
 
     @property
     def active_gcp_project(self) -> str:
         """The GCP project ID for the current environment."""
-        env = Environment(self.environment)
-        mapping = {
-            Environment.LOCAL: self.gcp.dev_project_id,
-            Environment.DEV: self.gcp.dev_project_id,
-            Environment.TEST: self.gcp.test_project_id or self.gcp.dev_project_id,
-            Environment.STAGING: self.gcp.staging_project_id,
-            Environment.PROD: self.gcp.prod_project_id,
-            Environment.EXPERIMENT: self.gcp.prod_project_id,
-        }
-        return mapping[env]
+        return self.gcp.project_id
 
 
 # ── Config loader ──────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gcp_ml_framework.config import Environment
-from gcp_ml_framework.decorators import TaskType
+from gcp_ml_framework.types import TaskType
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext

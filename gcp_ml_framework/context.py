@@ -34,13 +34,12 @@ class MLContext(BaseModel):
     gcp_project: str
     region: str
     environment: Environment
-    composer_dags_path: dict[str, str]
     artifact_registry_host: str
-    pipeline_service_account_email: str | None
-    composer_environment_name: str
-    feature_store_online_node_count: int
-    secret_project_id: str
-    secret_prefix: str
+    composer_dags_path: str = ""
+    composer_environment_name: str = ""
+    feature_store_online_node_count: int = 1
+    secret_project_id: str = ""
+    secret_prefix: str = ""
     # Raw branch for display; naming.branch is the sanitized slug
     raw_branch: str = Field(exclude=True)
 
@@ -54,19 +53,16 @@ class MLContext(BaseModel):
             gcp_project=gcp_project,
         )
         secret_prefix = cfg.secrets.secret_prefix or naming.namespace
-
-        # Auto-derive Composer env name: explicit config > {team}-{project}-{env}
-        composer_env_name = cfg.gcp.composer_environment_name or (
-            f"{naming.team}-{naming.project}-{cfg.environment}"
-        )
+        ar_host = f"{cfg.gcp.region}-docker.pkg.dev"
+        composer_env_name = f"{naming.team}-{naming.project}-{cfg.environment}"
 
         return cls(
             naming=naming,
             gcp_project=gcp_project,
             region=cfg.gcp.region,
             environment=Environment(cfg.environment),
+            artifact_registry_host=ar_host,
             composer_dags_path=cfg.gcp.composer_dags_path,
-            artifact_registry_host=cfg.gcp.artifact_registry_host,
             pipeline_service_account_email=cfg.gcp.pipeline_service_account_email,
             composer_environment_name=composer_env_name,
             feature_store_online_node_count=cfg.feature_store.online_serving_fixed_node_count,
@@ -97,11 +93,13 @@ class MLContext(BaseModel):
         """Returns the fully-qualified Secret Manager secret name for a key."""
         return f"{self.secret_prefix}-{key}"
 
+    pipeline_service_account_email: str = ""
+
     @property
     def pipeline_service_account(self) -> str:
-        """Pipeline SA email — derived from naming convention if not explicitly set.
+        """Pipeline SA email — explicit override or derived from naming convention.
 
-        Follows Terraform convention:
+        Follows Terraform convention when not overridden:
         {team}-{project}-{env}-pipeline@{project}.iam.gserviceaccount.com
         """
         if self.pipeline_service_account_email:

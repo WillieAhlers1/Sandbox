@@ -75,15 +75,11 @@ class PipelineCompiler:
         steps = pipeline_def.steps
         pipeline_root = context.naming.gcs_pipeline_root(pipeline_def.name)
         ctx_params = self._build_context_params(context, pipeline_def)
-        derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir)
 
-        # Resolve the per-pipeline image (named after the pipeline directory)
-        pipeline_image_name = pipeline_def.name.replace("_", "-")
-        base_image = context.naming.image_uri(
-            registry_host=context.artifact_registry_host,
-            gcp_project=context.gcp_project,
-            image_name=pipeline_image_name,
-        )
+        # Default pipeline image — used when a component doesn't specify image_name
+        default_image = self._resolve_image_uri(context, pipeline_def.name, None)
+
+        derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir, default_image)
 
         @dsl.pipeline(
             name=pipeline_def.name,
@@ -97,9 +93,13 @@ class PipelineCompiler:
             for step in steps:
                 # Derive step_module from the component's class module path
                 step_module = step.component.__class__.__module__
+                # Resolve per-component image: explicit image_name or pipeline default
+                step_image = self._resolve_image_uri(
+                    context, pipeline_def.name, step.component.image_name or None
+                )
                 component_fn = step.component.as_kfp_component(
                     step_module=step_module,
-                    base_image=base_image,
+                    base_image=step_image,
                 )
                 step_extra = derived_params.get(step.name, {})
 
@@ -158,6 +158,41 @@ class PipelineCompiler:
 
         return _pipeline
 
+    def _resolve_image_uri(
+        self,
+        context: "MLContext",
+        pipeline_name: str,
+        image_name: str | None,
+    ) -> str:
+        """Resolve a Dockerfile stem to a full AR image URI.
+
+        Uses NamingConvention.docker_image_uri() — the single source of truth
+        for image naming shared with docker_build.sh.
+
+        Args:
+            context: Runtime context with AR host, project, naming.
+            pipeline_name: The pipeline's name (e.g., "house_price").
+            image_name: Dockerfile stem (e.g., "house_price_app"), or None for
+                        the pipeline's default training image.
+        """
+        from gcp_ml_framework.naming import NamingConvention
+
+        if image_name is None:
+            # Default: root-level train.Dockerfile
+            return context.naming.docker_image_uri(
+                registry_host=context.artifact_registry_host,
+                gcp_project=context.gcp_project,
+                pipeline_name=None,
+                dockerfile_stem="train",
+            )
+        # Pipeline-specific Dockerfile
+        return context.naming.docker_image_uri(
+            registry_host=context.artifact_registry_host,
+            gcp_project=context.gcp_project,
+            pipeline_name=pipeline_name,
+            dockerfile_stem=image_name,
+        )
+
     def _build_context_params(
         self, context: "MLContext", pipeline_def: "PipelineDefinition"
     ) -> dict:
@@ -184,6 +219,7 @@ class PipelineCompiler:
         pipeline_def: "PipelineDefinition",
         steps: list,
         pipeline_dir: "Path | None" = None,
+        default_image: str = "",
     ) -> dict:
         """Compute per-step derived params that aren't simple dataclass fields."""
         derived: dict[str, dict] = {}
@@ -202,9 +238,21 @@ class PipelineCompiler:
                 extra["job_name"] = context.naming.vertex_training_job_name(pipeline_def.name)
                 extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
 
-            # RegisterModel: needs model_display_name
+            # RegisterModel: needs model_display_name + serving_container_image
+            # Resolution priority:
+            #   1. serving_container_image (full URI) — use as-is
+            #   2. image_name (Dockerfile stem) — resolve via naming convention
+            #   3. Neither set — fall back to pipeline default training image
             if isinstance(comp, RegisterModel):
                 extra["model_display_name"] = context.naming.vertex_model_name(pipeline_def.name)
+                if not comp.serving_container_image:
+                    if comp.image_name:
+                        # Resolve Dockerfile stem → full AR URI
+                        extra["serving_container_image"] = self._resolve_image_uri(
+                            context, pipeline_def.name, comp.image_name
+                        )
+                    elif default_image:
+                        extra["serving_container_image"] = default_image
 
             # DeployModel: needs model_display_name and endpoint_display_name
             if hasattr(comp, "endpoint_name"):

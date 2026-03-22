@@ -73,7 +73,7 @@ def deploy(
         )
 
     # Step 3: Upload DAG files to Composer bucket
-    composer_path = ctx.composer_dags_path.get(ctx.environment.value, "")
+    composer_path = ctx.composer_dags_path
     console.print(f"Using Composer DAGs path: {composer_path}")
     console.print(
         f"Looking for DAG files in: {dags_dir} {dags_dir.exists()}"
