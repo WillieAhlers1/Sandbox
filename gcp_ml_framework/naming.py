@@ -155,8 +155,21 @@ class NamingConvention(BaseModel):
     def vertex_experiment(self, pipeline_name: str) -> str:
         return f"{self.namespace}-{_slugify(pipeline_name)}-exp"
 
-    def vertex_model_name(self, model_name: str) -> str:
-        return f"{self.namespace}-{_slugify(model_name)}"
+    def vertex_model_name(self, pipeline_name: str, model_name: str | None = None) -> str:
+        """Derive Vertex AI Model Registry display name.
+
+        Args:
+            pipeline_name: Pipeline name (always included).
+            model_name: Optional model identifier for pipelines that register
+                multiple models. When set, appended as a suffix.
+
+        Returns:
+            "{namespace}-{pipeline}" or "{namespace}-{pipeline}-{model_name}".
+        """
+        base = f"{self.namespace}-{_slugify(pipeline_name)}"
+        if model_name:
+            return f"{base}-{_slugify(model_name)}"
+        return base
 
     def vertex_endpoint_name(self, model_name: str) -> str:
         return f"{self.namespace}-{_slugify(model_name)}-endpoint"

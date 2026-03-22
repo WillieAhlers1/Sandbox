@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# docker_build.sh — Build Docker images for the ML framework.
+# docker_build.sh — Build pipeline Docker images (train, serve, pipeline-specific).
+#
+# Assumes base-python:latest already exists (built separately via docker_build_base.sh).
 #
 # Usage:
 #   ./scripts/docker_build.sh [--push] [--pipeline <name>]
 #
 # Image hierarchy (build order):
-#   1. docker/base/base-python/Dockerfile        → base-python:{tag}
-#   2. docker/train.Dockerfile                   → train:{tag}            (default training)
-#   3. docker/serve.Dockerfile                   → serve:{tag}            (default serving)
-#   4. docker/pipelines/{name}/*.Dockerfile      → {name}--{stem}:{tag}  (per-pipeline)
+#   1. docker/train.Dockerfile                   → train:{tag}            (default training)
+#   2. docker/serve.Dockerfile                   → serve:{tag}            (default serving)
+#   3. docker/pipelines/{name}/*.Dockerfile      → {name}--{stem}:{tag}  (per-pipeline)
 #
 # BASE_IMAGE resolution:
 #   Data scientists write `ARG BASE_IMAGE=<stem>` in their Dockerfiles using
-#   simple stem names (e.g., "train", "serve", "house_price_train"). The build
-#   script maintains a registry of stem → full tag and auto-resolves references.
-#   No need to know the actual generated image name.
+#   simple stem names (e.g., "base-python", "train", "house_price_train"). The
+#   build script maintains a registry of stem → full tag and auto-resolves.
 #
 # Image name resolution is delegated to NamingConvention.docker_image_name()
 # ensuring bash and Python use identical naming.
@@ -54,7 +54,6 @@ BUILT_IMAGES=()
 
 # ── Image registry: stem → full tag ─────────────────────────────────────────
 # Uses a temp file as a key-value store (compatible with bash 3.x on macOS).
-# Each line: stem=full_tag
 _REGISTRY_FILE=$(mktemp)
 trap 'rm -f "$_REGISTRY_FILE"' EXIT
 
@@ -66,7 +65,6 @@ _register_image() {
 }
 
 _lookup_image() {
-    # Look up a stem in the registry. Returns the full tag or empty string.
     local stem="$1"
     grep -m1 "^${stem}=" "$_REGISTRY_FILE" 2>/dev/null | cut -d= -f2- || true
 }
@@ -85,8 +83,6 @@ _ar_prefix() {
 # ── Image name resolution (delegates to Python for consistency) ──────────────
 
 _resolve_image_name() {
-    # Args: pipeline_name (or "") and dockerfile_stem
-    # Calls NamingConvention.docker_image_name()
     local pipeline_name="$1"
     local stem="$2"
     if [ -n "$pipeline_name" ]; then
@@ -116,8 +112,6 @@ _full_tag() {
 # ── BASE_IMAGE resolution ────────────────────────────────────────────────────
 
 _resolve_base_image() {
-    # Read `ARG BASE_IMAGE=<default>` from a Dockerfile and resolve the
-    # default stem to the full tag using the image registry.
     local dockerfile="$1"
 
     local base_ref
@@ -136,7 +130,7 @@ _resolve_base_image() {
         return
     fi
 
-    # Not in registry — use as-is (external image reference)
+    # Not in registry — use as-is (external image or base-python:latest)
     echo "$base_ref"
 }
 
@@ -162,8 +156,6 @@ _build() {
     fi
 }
 
-# ── Build with auto-resolved BASE_IMAGE ──────────────────────────────────────
-
 _build_with_base_resolve() {
     local stem="$1"
     local image_tag="$2"
@@ -184,18 +176,15 @@ _build_with_base_resolve() {
     _register_image "$stem" "$image_tag"
 }
 
-# ── Layer 0: base-python ─────────────────────────────────────────────────────
-
-_build_base_python() {
-    local dockerfile="docker/base/base-python/Dockerfile"
-    if [ ! -f "$dockerfile" ]; then
-        echo "[docker_build] base-python Dockerfile not found — skipping"
-        return
+# ── Seed registry with base-python (built separately via docker_build_base.sh) ─
+_seed_base_python() {
+    local prefix
+    prefix=$(_ar_prefix)
+    if [ -n "$prefix" ]; then
+        _register_image "base-python" "${prefix}/base-python:latest"
+    else
+        _register_image "base-python" "base-python:latest"
     fi
-    local tag
-    tag=$(_full_tag base-python)
-    _build "$tag" "$dockerfile" "docker/base/base-python"
-    _register_image "base-python" "$tag"
 }
 
 # ── Layer 1: root-level default images ───────────────────────────────────────
@@ -274,10 +263,11 @@ main() {
     fi
     echo ""
 
-    # Layer 0: foundation
-    _build_base_python
+    # Seed base-python into the registry (built separately via docker_build_base.sh)
+    _seed_base_python
 
     # Layer 1: root-level default images (train, serve, etc.)
+    # These reference base-python:latest via ARG BASE_IMAGE
     _build_root_defaults
 
     # Layer 2: pipeline-specific images

@@ -1,0 +1,2 @@
+SELECT *
+FROM demo_housing_data.housing_data_table
