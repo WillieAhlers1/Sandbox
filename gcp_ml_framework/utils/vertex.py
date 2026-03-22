@@ -26,11 +26,31 @@ def run_deploy(
 
     aiplatform.init(project=project, location=region)
 
-    model = aiplatform.Model.upload(
-        display_name=model_display_name,
-        artifact_uri=model_uri,
-        serving_container_image_uri=serving_container_image,
+    # Create a new version under an existing model if one exists
+    parent_model = None
+    existing_models = aiplatform.Model.list(
+        filter=f'display_name="{model_display_name}"',
+        project=project,
+        location=region,
     )
+    if existing_models:
+        parent_model = existing_models[0].resource_name
+        logger.info(
+            f"Found existing model '{model_display_name}' — "
+            f"creating new version under {parent_model}"
+        )
+
+    upload_kwargs: dict = {
+        "display_name": model_display_name,
+        "artifact_uri": model_uri,
+        "serving_container_image_uri": serving_container_image,
+    }
+    if parent_model:
+        upload_kwargs["parent_model"] = parent_model
+        upload_kwargs["is_default_version"] = True
+
+    # Deploy needs the model to be fully registered, so we must wait (sync=True).
+    model = aiplatform.Model.upload(**upload_kwargs)
 
     # Get or create endpoint
     existing = aiplatform.Endpoint.list(

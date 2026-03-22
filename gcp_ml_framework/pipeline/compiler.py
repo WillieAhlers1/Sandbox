@@ -244,7 +244,9 @@ class PipelineCompiler:
             #   2. image_name (Dockerfile stem) — resolve via naming convention
             #   3. Neither set — fall back to pipeline default training image
             if isinstance(comp, RegisterModel):
-                extra["model_display_name"] = context.naming.vertex_model_name(pipeline_def.name)
+                extra["model_display_name"] = context.naming.vertex_model_name(
+                    pipeline_def.name, comp.model_name or None
+                )
                 if not comp.serving_container_image:
                     if comp.image_name:
                         # Resolve Dockerfile stem → full AR URI
@@ -256,7 +258,9 @@ class PipelineCompiler:
 
             # DeployModel: needs model_display_name and endpoint_display_name
             if hasattr(comp, "endpoint_name"):
-                extra["model_display_name"] = context.naming.vertex_model_name(pipeline_def.name)
+                extra["model_display_name"] = context.naming.vertex_model_name(
+                    pipeline_def.name, getattr(comp, "model_name", None) or None
+                )
                 extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
                     comp.endpoint_name
                 )

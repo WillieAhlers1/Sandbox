@@ -27,7 +27,7 @@ from gcp_ml_framework.types import TaskType
 # Fields that are never exposed as CLI flags or KFP params
 _INTERNAL_FIELDS = frozenset({
     "component_name", "component_version", "timeout_seconds", "retry_count", "cache_enabled",
-    "image_name", "gcp_config",
+    "image_name", "model_name", "gcp_config",
 })
 
 # Fields excluded from KFP input params (output_uri_path is handled via dsl.OutputPath)
@@ -57,7 +57,14 @@ class BaseComponent(BaseSettings):
     timeout_seconds: int = 3600
     retry_count: int = 1
     cache_enabled: bool = True
-    image_name: str = ""  # Dockerfile stem (e.g. "house_price_app"). Empty = pipeline default.
+    # Dockerfile stem that controls which Docker image this component runs in.
+    # Maps to a file under docker/pipelines/{pipeline}/{stem}.Dockerfile.
+    # When empty, the pipeline's default training image (docker/train.Dockerfile)
+    # is used. On RegisterModel, this also controls serving_container_image
+    # (see RegisterModel docstring for the three-tier resolution priority).
+    # Resolved to a full Artifact Registry URI at compile time by PipelineCompiler
+    # via NamingConvention.docker_image_uri().
+    image_name: str = ""
 
     # --- Resource fields ---
     machine_type: str = "n2-standard-4"
