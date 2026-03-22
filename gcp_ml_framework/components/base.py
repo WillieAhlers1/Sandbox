@@ -56,11 +56,11 @@ class BaseComponent(BaseSettings):
     retry_count: int = 1
     cache_enabled: bool = True
     # Path to the Dockerfile this component executes in, relative to docker/.
-    # Example: "pipelines/house_price/train.Dockerfile"
-    # Required — every component must explicitly declare its runtime image.
-    # The stem (filename without .Dockerfile) is extracted internally for image
-    # naming via NamingConvention.docker_image_uri().
-    runtime_dockerfile: str
+    # Example: "pipelines/house_price/base.Dockerfile"
+    # Must be set in pipeline.py — the compiler uses it to resolve the image.
+    # Defaults to "" so container-side CLI instantiation doesn't fail (the
+    # field is in _INTERNAL_FIELDS and never passed as a CLI arg).
+    runtime_dockerfile: str = ""
 
     # --- Resource fields ---
     machine_type: str = "n2-standard-4"
