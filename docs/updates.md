@@ -171,11 +171,14 @@ naming resolution:
   `docker/serve.Dockerfile`) plus pipeline-specific overrides
   (`docker/pipelines/{name}/*.Dockerfile`).
 - **Unrestricted naming**: Any `*.Dockerfile` is valid — no hardcoded "train"/"serve".
-- **Component-level image binding**: `image_name` field on `BaseComponent` maps a
-  Dockerfile stem to its image. The compiler resolves it to a full AR URI.
+- **Component-level image binding**: `runtime_dockerfile` field on `BaseComponent`
+  (required) maps a Dockerfile path to the execution image. The compiler resolves
+  it to a full AR URI.
+- **Serving image binding**: `serving_dockerfile` on `RegisterModel`/`DeployModel`
+  specifies the serving container Dockerfile (separate from execution image).
 - **Three-tier resolution** for `RegisterModel.serving_container_image`:
   1. `serving_container_image` (full URI) — escape hatch
-  2. `image_name` (Dockerfile stem) — resolved via `NamingConvention`
+  2. `serving_dockerfile` (path relative to `docker/`) — resolved via `NamingConvention`
   3. Neither set — falls back to default training image
 - **Race condition prevention**: Image names are prefixed with `{pipeline}--` for
   pipeline-scoped Dockerfiles, with project-level AR repos and branch-level tags.
@@ -190,15 +193,15 @@ naming resolution:
   - Added `docker_image_uri(...)` method — full AR URI for a Dockerfile, preserving
     the `--` delimiter.
 - `gcp_ml_framework/components/base.py`:
-  - Added `image_name: str = ""` field to `BaseComponent` — Dockerfile stem reference.
-  - Added `image_name` to `_INTERNAL_FIELDS` (not exposed as KFP param).
+  - Added `runtime_dockerfile: str` (required) to `BaseComponent` — Dockerfile path
+    relative to `docker/`. Every component must explicitly declare its execution image.
+  - Added `runtime_dockerfile` and `serving_dockerfile` to `_INTERNAL_FIELDS`.
 - `gcp_ml_framework/pipeline/compiler.py`:
-  - Added `_resolve_image_uri()` — resolves a Dockerfile stem to full AR URI via
+  - Added `_resolve_image_uri()` — resolves a Dockerfile path to full AR URI via
     `NamingConvention.docker_image_uri()`.
-  - `_build_kfp_pipeline`: Each step resolves its own image (from `component.image_name`
-    or pipeline default). Replaces the single `base_image` approach.
-  - `_build_derived_params`: RegisterModel serving image resolution now follows the
-    three-tier priority (full URI > image_name stem > default).
+  - `_build_kfp_pipeline`: Each step resolves its own image from `component.runtime_dockerfile`.
+  - `_build_derived_params`: RegisterModel/DeployModel serving image resolution follows
+    the three-tier priority (full URI > `serving_dockerfile` > default).
 - `scripts/docker_build.sh`:
   - Rewritten to support new directory structure (base → root defaults → pipeline-specific).
   - Delegates image name resolution to Python (`NamingConvention.docker_image_name()`).
@@ -213,4 +216,81 @@ naming resolution:
   requirements documented.
 - `docker/pipelines/house_price/house_price_train.Dockerfile` (NEW): Example
   pipeline-specific training image inheriting from default.
+
+---
+
+## 14.0 [P1] Model Registry — Multi-Model Naming and Version Management
+
+**Problem:** Two bugs in `RegisterModel`:
+
+1. Model display name was derived as `{namespace}-{pipeline}` only, so a
+   pipeline registering two models (e.g., regression + classifier) would
+   produce identical display names.
+2. Every `Model.upload()` call created a new top-level model resource instead
+   of a new version under an existing model, breaking version history.
+
+**Design discussion:** See `docs/register.md` for full design rationale.
+
+**Solution:**
+
+- Added `model_name` field to `RegisterModel`. When set, it's appended to the
+  derived display name: `{namespace}-{pipeline}-{model_name}`.
+- Before uploading, `RegisterModel.run()` checks for an existing model with
+  the same display name. If found, passes `parent_model` to `Model.upload()`
+  to create a new version instead of a new artifact.
+- Same versioning fix applied to `utils/vertex.py:run_deploy()`.
+
+**Changes:**
+
+- `gcp_ml_framework/naming.py`: `vertex_model_name()` now accepts optional
+  `model_name` parameter.
+- `gcp_ml_framework/components/ml/register.py`: Added `model_name: str = ""`.
+  Updated `run()` with `Model.list()` lookup and `parent_model` pass-through.
+- `gcp_ml_framework/components/base.py`: Added `model_name` to `_INTERNAL_FIELDS`.
+- `gcp_ml_framework/pipeline/compiler.py`: Passes `comp.model_name` to
+  `vertex_model_name()` for both `RegisterModel` and `DeployModel`.
+- `gcp_ml_framework/utils/vertex.py`: Added same `Model.list()` + `parent_model`
+  versioning logic in `run_deploy()`.
+- `docs/register.md` (NEW): Design document covering model naming, versioning,
+  branch isolation, and environment promotion.
+
+---
+
+## 15.0 [P1] DeployModel — Per-Model Endpoints and Pipeline-Centric Serving
+
+**Problem:** `DeployModel` required an explicit `endpoint_name` string and
+derived the endpoint display name without including pipeline or model context.
+There was no convention for where serving application code should live.
+
+**Design discussion:** See `docs/deploy.md` for full design rationale.
+
+**Solution:**
+
+- Added `model_name` field to `DeployModel` (matches `RegisterModel.model_name`).
+- Removed required `endpoint_name` field — endpoint display name is now derived
+  by the compiler via `NamingConvention.vertex_endpoint_name(pipeline, model)`:
+  `{namespace}-{pipeline}-{model_name}-endpoint`.
+- Adopted pipeline-centric file organisation (Option A): serving code lives
+  under `pipelines/{name}/serve/{model}/`, Dockerfiles under
+  `docker/pipelines/{name}/{model}_serve.Dockerfile`.
+- Serving Dockerfiles extend the training image (`ARG BASE_IMAGE=train`) to
+  inherit framework + model code, then add serving-specific deps.
+- Used `sync=False` on `Model.upload()` in `RegisterModel` to avoid LRO
+  polling quota exhaustion on shared GCP projects.
+
+**Changes:**
+
+- `gcp_ml_framework/components/ml/deploy.py`: Added `model_name`, removed
+  required `endpoint_name`. Updated docstring.
+- `gcp_ml_framework/naming.py`: `vertex_endpoint_name()` now accepts
+  `pipeline_name` + optional `model_name`.
+- `gcp_ml_framework/pipeline/compiler.py`: Derives `endpoint_display_name`
+  from pipeline + model_name. Imports `DeployModel` for `isinstance` check.
+  Also resolves serving container image for DeployModel (three-tier).
+- `docker/pipelines/house_price/regression_serve.Dockerfile` (NEW): Extends
+  training image, adds Flask + gunicorn.
+- `pipelines/house_price/serve/regression/app.py` (NEW): Placeholder serving
+  app with `/health` and `/predict` endpoints per Vertex AI requirements.
+- `docs/deploy.md` (NEW): Design document covering endpoint naming, file
+  organisation, and deployment flow.
 

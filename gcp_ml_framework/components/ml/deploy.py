@@ -1,4 +1,4 @@
-"""DeployModel — upload a model to Vertex AI Model Registry and deploy to an Endpoint."""
+"""DeployModel — deploy a registered model to a Vertex AI Endpoint."""
 
 from pydantic import Field
 
@@ -8,27 +8,31 @@ from gcp_ml_framework.decorators import ml_task
 
 @ml_task
 class DeployModel(BaseComponent):
-    """
-    Upload a trained model to Vertex AI Model Registry and deploy it to an Endpoint.
+    """Deploy a registered model to a Vertex AI Endpoint as a web service.
+
+    Every model is deployed as its own endpoint. The endpoint display name is
+    derived from the naming convention using pipeline name + model name:
+
+        {project}-{branch}-{pipeline}-{model_name}-endpoint
+
+    ``model_name`` must match the value used in ``RegisterModel`` so the
+    compiler can derive matching ``model_display_name`` and
+    ``endpoint_display_name`` values.
 
     Supports canary deployments via `traffic_split` and optional model monitoring.
 
     Example:
         DeployModel(
-            component_name="deploy",
-            endpoint_name="churn-v1",
-            serving_container_image="us-central1-docker.pkg.dev/my-proj/serving/churn:latest",
+            model_name="regression",
             traffic_split={"new": 10, "current": 90},
         )
     """
 
     # Component-specific fields
-    model_uri: str = ""
+    model_name: str = ""
     model_display_name: str = ""
     endpoint_display_name: str = ""
 
-    endpoint_name: str
-    serving_container_image: str = ""
     machine_type: str = "n2-standard-2"
     min_replica_count: int = 1
     max_replica_count: int = 3
@@ -54,10 +58,8 @@ class DeployModel(BaseComponent):
         run_deploy(
             project=self.project,
             region=self.region,
-            model_uri=self.model_uri,
             model_display_name=self.model_display_name,
             endpoint_display_name=self.endpoint_display_name,
-            serving_container_image=self.serving_container_image,
             machine_type=self.machine_type,
             min_replica_count=self.min_replica_count,
             max_replica_count=self.max_replica_count,
@@ -70,7 +72,6 @@ class DeployModel(BaseComponent):
             monitoring_skew_thresholds=self.monitoring_skew_thresholds,
             monitoring_drift_thresholds=self.monitoring_drift_thresholds,
         )
-
 
 
 if __name__ == "__main__":

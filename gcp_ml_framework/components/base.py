@@ -18,16 +18,14 @@ import json
 from collections.abc import Callable
 from typing import Any, ClassVar
 
-from pydantic import Field
 from pydantic_core import PydanticUndefined
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from gcp_ml_framework.config import GCPConfig
 from gcp_ml_framework.types import TaskType
 
 # Fields that are never exposed as CLI flags or KFP params
 _INTERNAL_FIELDS = frozenset({
     "component_name", "component_version", "timeout_seconds", "retry_count", "cache_enabled",
-    "image_name", "model_name", "gcp_config",
+    "runtime_dockerfile", "serving_dockerfile", "model_name", "gcp_config",
 })
 
 # Fields excluded from KFP input params (output_uri_path is handled via dsl.OutputPath)
@@ -57,14 +55,12 @@ class BaseComponent(BaseSettings):
     timeout_seconds: int = 3600
     retry_count: int = 1
     cache_enabled: bool = True
-    # Dockerfile stem that controls which Docker image this component runs in.
-    # Maps to a file under docker/pipelines/{pipeline}/{stem}.Dockerfile.
-    # When empty, the pipeline's default training image (docker/train.Dockerfile)
-    # is used. On RegisterModel, this also controls serving_container_image
-    # (see RegisterModel docstring for the three-tier resolution priority).
-    # Resolved to a full Artifact Registry URI at compile time by PipelineCompiler
-    # via NamingConvention.docker_image_uri().
-    image_name: str = ""
+    # Path to the Dockerfile this component executes in, relative to docker/.
+    # Example: "pipelines/house_price/base.Dockerfile"
+    # Must be set in pipeline.py — the compiler uses it to resolve the image.
+    # Defaults to "" so container-side CLI instantiation doesn't fail (the
+    # field is in _INTERNAL_FIELDS and never passed as a CLI arg).
+    runtime_dockerfile: str = ""
 
     # --- Resource fields ---
     machine_type: str = "n2-standard-4"
