@@ -44,7 +44,7 @@ def teardown(
 
     # Resolve Composer DAG pattern for this namespace
     dag_pattern = f"{ctx.naming.namespace_bq}__*"
-    composer_path = ctx.composer_dags_path.get(ctx.environment.value, "")
+    composer_path = ctx.composer_dags_path
 
     console.print(f"\n[bold yellow]Teardown plan for branch:[/bold yellow] {branch!r}")
     console.print(f"  Namespace    : {ctx.namespace}")

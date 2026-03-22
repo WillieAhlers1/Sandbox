@@ -16,23 +16,25 @@ The execute() lifecycle wraps run() with I/O (GCS upload/download, temp dirs, et
 import inspect
 import json
 from collections.abc import Callable
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import Field
 from pydantic_core import PydanticUndefined
-
-from gcp_ml_framework.decorators import TaskType
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from gcp_ml_framework.config import GCPConfig
+from gcp_ml_framework.types import TaskType
 
 # Fields that are never exposed as CLI flags or KFP params
 _INTERNAL_FIELDS = frozenset({
     "component_name", "component_version", "timeout_seconds", "retry_count", "cache_enabled",
+    "image_name", "gcp_config",
 })
 
 # Fields excluded from KFP input params (output_uri_path is handled via dsl.OutputPath)
 _KFP_EXCLUDED_FIELDS = _INTERNAL_FIELDS | {"output_uri_path"}
 
 
-class BaseComponent(BaseModel):
+class BaseComponent(BaseSettings):
     """
     Abstract base for all GCP ML Framework pipeline components.
 
@@ -44,10 +46,10 @@ class BaseComponent(BaseModel):
     and KFP input parameter — no JSON blob.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = SettingsConfigDict(arbitrary_types_allowed=True)
 
     # --- Task type (set by @task / @ml_task decorators) ---
-    _task_type: ClassVar[TaskType] = TaskType.ML_TASK
+    task_type: ClassVar[TaskType] = TaskType.TASK
 
     # --- Internal fields (not passed as params) ---
     component_name: str = ""
@@ -55,6 +57,7 @@ class BaseComponent(BaseModel):
     timeout_seconds: int = 3600
     retry_count: int = 1
     cache_enabled: bool = True
+    image_name: str = ""  # Dockerfile stem (e.g. "house_price_app"). Empty = pipeline default.
 
     # --- Resource fields ---
     machine_type: str = "n2-standard-4"
@@ -71,6 +74,8 @@ class BaseComponent(BaseModel):
     run_date: str = ""
     dataset: str = ""
 
+
+    
     @classmethod
     def cli(cls) -> None:
         """Typer-based CLI entrypoint for container execution.
@@ -138,7 +143,7 @@ class BaseComponent(BaseModel):
         """
         self.run()
 
-    def run(self) -> None:
+    def run(self) -> Any:
         """Business logic — data scientists override this in step subclasses.
 
         All params are available as self.<field_name>.

@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import subprocess
 from functools import cached_property
-
+import os
 from pydantic import BaseModel, ConfigDict
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -33,6 +33,11 @@ def _bq_safe(value: str, max_len: int = 30) -> str:
 def get_git_branch() -> str:
     """Detect the current git branch. Returns 'local' if detection fails."""
     try:
+        if os.environ['ENVIRONMENT'] != 'local':
+            raise ValueError("""
+                Branch name is expected as an environment 
+                variable in non-local environments.""")
+
         result = subprocess.check_output(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             stderr=subprocess.DEVNULL,
@@ -170,6 +175,32 @@ class NamingConvention(BaseModel):
         sha = sha or get_git_sha()
         return f"{self.branch}-{sha}"
 
+    @staticmethod
+    def docker_image_name(
+        pipeline_name: str | None,
+        dockerfile_stem: str,
+    ) -> str:
+        """Derive the AR image name from a Dockerfile's location and stem.
+
+        This is the single source of truth for image naming — both the Python
+        framework and the bash build script must use this logic.
+
+        Args:
+            pipeline_name: Pipeline directory name, or None for root-level Dockerfiles.
+            dockerfile_stem: Filename without '.Dockerfile' (e.g., 'train', 'house_price_app').
+
+        Returns:
+            Slugified image name with pipeline prefix when applicable.
+
+        Examples:
+            docker_image_name(None, "train")                        → "train"
+            docker_image_name("house_price", "house_price_base")    → "house-price--house-price-base"
+        """
+        stem = _slugify(dockerfile_stem, 60)
+        if pipeline_name is None:
+            return stem
+        return f"{_slugify(pipeline_name, 30)}--{stem}"
+
     def image_uri(
         self,
         registry_host: str,
@@ -178,7 +209,26 @@ class NamingConvention(BaseModel):
         sha: str | None = None,
     ) -> str:
         repo = self.artifact_registry_repo(registry_host, gcp_project)
-        return f"{repo}/{_slugify(image_name)}:{self.image_tag(image_name, sha)}"
+        return f"{repo}/{_slugify(image_name, 60)}:{self.image_tag(image_name, sha)}"
+
+    def docker_image_uri(
+        self,
+        registry_host: str,
+        gcp_project: str,
+        pipeline_name: str | None,
+        dockerfile_stem: str,
+        sha: str | None = None,
+    ) -> str:
+        """Full AR URI for a Dockerfile — combines docker_image_name + image_tag.
+
+        This is the primary method the compiler and build script should use.
+        Builds the URI directly (not via image_uri) to preserve the '--' delimiter
+        that docker_image_name uses for pipeline-scoped images.
+        """
+        name = self.docker_image_name(pipeline_name, dockerfile_stem)
+        repo = self.artifact_registry_repo(registry_host, gcp_project)
+        tag = self.image_tag(name, sha)
+        return f"{repo}/{name}:{tag}"
 
     # ── Feature Store ─────────────────────────────────────────────────────────
 

@@ -7,7 +7,6 @@ from pydantic import Field
 from gcp_ml_framework.components.base import BaseComponent
 from gcp_ml_framework.decorators import ml_task
 
-
 @ml_task
 class RegisterModel(BaseComponent):
     """
@@ -25,7 +24,7 @@ class RegisterModel(BaseComponent):
     model_uri: str = ""
     model_display_name: str = ""
     serving_container_image: str = ""
-    labels: dict = Field(default_factory=dict)
+    labels: dict[str, str] = Field(default_factory=dict)
     description: str = ""
     component_name: str = "register_model"
 
