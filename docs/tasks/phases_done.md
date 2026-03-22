@@ -381,3 +381,82 @@ UV_ENV_FILE=.env uv run -- gml run verification_pipeline → Composer DAG trigge
 UV_ENV_FILE=.env uv run -- gml run training_pipeline --local → BQ + train + GCS ✓
 UV_ENV_FILE=.env uv run -- gml run verification_pipeline --local → 3 steps on real GCP ✓
 ```
+
+---
+
+## Phase 5: Complete ML Lifecycle — Training, Evaluation, Deployment & Monitoring
+
+**Completed:** 2026-03-21
+**Verification:** 210 unit tests passing, ruff clean, both pipelines compile and run E2E
+**REQS addressed:** Full 6-step ML lifecycle, experiment tracking (ADR-007), model monitoring
+**ADRs:** ADR-007 (Experiment Tracking)
+
+### What was built
+- Full 6-step pipelines: BQQuery → BQTransform → Train → Evaluate → Register → Deploy
+- Experiment tracking in TrainModel.execute() (params) and EvaluateModel.execute() (metrics)
+- Smart model resolution in run_deploy(): `projects/` URI → reuse registered model, `gs://` → upload
+- Regression metrics (rmse, mae, r2) alongside existing classification in run_evaluate()
+- Model monitoring fields on DeployModel (enable_monitoring, alert_email, thresholds)
+- @task→@ml_task data bridging in SmartCompiler via RunPipelineJobOperator parameter_values
+- Mixed execution test pipeline (@task/@ml_task/@task/@ml_task pattern)
+- BQQuery output tracking (writes destination_table to output_uri_path)
+
+### Key decisions
+- **Evaluation step subclasses**: HouseEvaluateStep and EvaluateVerifyStep override run() for regression
+- **Cross-step wiring**: RegisterModel output → last_model_output (not last_dataset_output) → DeployModel receives resource_name → smart resolution skips re-upload
+- **Data bridging**: SmartCompiler tracks last_dataset_output across ALL step groups, passes as parameter_values to RunPipelineJobOperator at @task→@ml_task boundaries
+
+### Final Verification
+```
+uv run -- pytest tests/ -m unit -v                          → 210 passed
+uv run -- ruff check gcp_ml_framework/ tests/               → All checks passed!
+UV_ENV_FILE=.env uv run -- gml compile --all                 → 2 YAML + 2 DAGs (6-step pipelines)
+UV_ENV_FILE=.env uv run -- gml run training_pipeline --local → 6 steps complete
+UV_ENV_FILE=.env uv run -- gml run verification_pipeline --local → 6 steps complete
+```
+
+---
+
+## Phase 5.5: Dedicated Serving Image (CPR)
+
+**Completed:** 2026-03-21
+**Verification:** 226 unit tests passing, ruff clean, serving images built and deployed to AR
+**Trigger:** `ModuleNotFoundError: No module named 'second_run'` in Vertex AI serving logs
+
+### Problem
+Pre-built `sklearn-cpu.1-3:latest` serving container could not unpickle `HousePredictionModel` because it lacks the `second_run` package. Models registered successfully but failed to serve predictions.
+
+### Solution
+Built a dedicated lightweight serving Docker image alongside the pipeline image:
+```
+Docker hierarchy:
+  base-python:tag
+    ├── {pipeline}:tag              (training — unchanged)
+    └── {pipeline}-serving:tag      (serving — slim, ~200MB)
+```
+
+### What was built
+- `gcp_ml_framework/serving/handler.py` — Generic HTTP prediction server implementing Vertex AI CPR protocol
+- `docker/serving/Dockerfile` — Slim serving image (only runtime deps + second_run/ + serving/)
+- `cloudbuild.yaml` Steps 6-8 — Build and push `{pipeline}-serving` images
+- `compiler.py` — Auto-defaults RegisterModel/DeployModel to serving image
+- `register.py` + `vertex.py` — CPR routes for custom containers (predict/health routes, command, ports)
+- `scripts/docker_build.sh` — Added serving image build
+- 16 new tests (handler + CPR assertions across compiler, register, vertex)
+
+### Key decisions
+- **stdlib only**: Uses `http.server.HTTPServer` — no Flask/FastAPI dependency in serving image
+- **Pre-built detection**: If serving_container_image starts with `us-docker.pkg.dev/vertex-ai/`, skip CPR kwargs (those are Vertex AI's pre-built containers with their own protocol)
+- **Generic handler**: Works with any model that has `predict(pd.DataFrame)` method
+
+### Final Verification
+```
+uv run -- pytest tests/ -m unit -v                          → 226 passed
+uv run -- ruff check gcp_ml_framework/ tests/               → All checks passed!
+UV_ENV_FILE=.env uv run -- gml compile --all                 → YAML uses serving image, not sklearn
+UV_ENV_FILE=.env uv run -- gml build training_pipeline       → Pipeline + serving images built
+UV_ENV_FILE=.env uv run -- gml build verification_pipeline   → Pipeline + serving images built
+UV_ENV_FILE=.env uv run -- gml deploy --all                  → All 4 images verified, DAGs uploaded
+UV_ENV_FILE=.env uv run -- gml run training_pipeline         → Composer DAG triggered
+UV_ENV_FILE=.env uv run -- gml run verification_pipeline     → Composer DAG triggered
+```

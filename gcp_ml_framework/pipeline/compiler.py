@@ -87,7 +87,11 @@ class PipelineCompiler:
             description=pipeline_def.description,
             pipeline_root=pipeline_root,
         )
-        def _pipeline(run_date: str = ""):
+        def _pipeline(
+            run_date: str = "",
+            dataset_uri: str = "",
+            model_uri: str = "",
+        ):
             prev_task = None
             last_dataset_output = None  # output from data-producing steps (ingest/transform)
             last_model_output = None  # output from train step
@@ -116,6 +120,13 @@ class PipelineCompiler:
                     component_fields[name] = val
                 # Component fields are the base; context and derived params override them
                 merged = {**component_fields, **ctx_params, **step_extra}
+
+                # Inject bridged params from pipeline inputs
+                # (may be overridden by cross-step wiring below)
+                if dataset_uri:
+                    merged["dataset_uri"] = dataset_uri
+                if model_uri:
+                    merged["model_uri"] = model_uri
 
                 # Wire cross-step data flow from tracked outputs
                 if last_dataset_output is not None:
@@ -146,13 +157,15 @@ class PipelineCompiler:
                     task.after(prev_task)
                 prev_task = task
 
-                # Track output — train steps produce model outputs, others produce datasets.
+                # Track output — train/register → model output, others → dataset.
                 # WriteFeatures is metadata-only and should not overwrite dataset output.
                 if component_fn.component_spec.outputs:
-                    is_train = isinstance(step.component, TrainModel)
+                    is_model_producer = isinstance(
+                        step.component, (TrainModel, RegisterModel)
+                    )
                     is_metadata_only = isinstance(step.component, WriteFeatures)
                     task_output = task.outputs["output_uri"]
-                    if is_train:
+                    if is_model_producer:
                         last_model_output = task_output
                     elif not is_metadata_only:
                         last_dataset_output = task_output
@@ -287,6 +300,11 @@ class PipelineCompiler:
                 extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
                     pipeline_def.name, model_name_val
                 )
+
+            # RegisterModel/DeployModel: default serving container if not set
+            if isinstance(comp, (RegisterModel, DeployModel)):
+                if not comp.serving_container_image:
+                    extra["serving_container_image"] = serving_image
 
             if extra:
                 derived[step.name] = extra

@@ -91,3 +91,90 @@ class TestTrainModelExecute:
 
         assert output_file.exists()
         assert output_file.read_text() == "gs://bucket/models/churn/latest"
+
+
+# ---------------------------------------------------------------------------
+# Experiment tracking (5.3)
+# ---------------------------------------------------------------------------
+
+
+class TestTrainModelExperiments:
+    """Verify experiment tracking in execute()."""
+
+    @patch("gcp_ml_framework.utils.gcs.upload_file")
+    def test_train_logs_experiment(self, mock_upload: MagicMock, tmp_path: Path):
+        """TrainModel.execute() logs params to Vertex AI Experiments."""
+        import sys
+
+        import google.cloud
+
+        mock_aip = MagicMock()
+        token = "google.cloud.aiplatform"
+        original_module = sys.modules.get(token)
+        original_attr = getattr(google.cloud, "aiplatform", None)
+        sys.modules[token] = mock_aip
+        google.cloud.aiplatform = mock_aip
+        try:
+            class _TestTrainer(TrainModel):
+                def run(self) -> None:
+                    pass
+
+            trainer = _TestTrainer(
+                experiment_name="test-exp",
+                project="test-proj",
+                region="us-east4",
+                model_output_uri=str(tmp_path / "model"),
+                output_uri_path=str(tmp_path / "output"),
+            )
+            trainer.execute()
+
+            mock_aip.init.assert_called_once()
+            mock_aip.start_run.assert_called_once()
+            mock_aip.log_params.assert_called_once()
+        finally:
+            if original_module is None:
+                sys.modules.pop(token, None)
+            else:
+                sys.modules[token] = original_module
+            if original_attr is not None:
+                google.cloud.aiplatform = original_attr
+            elif hasattr(google.cloud, "aiplatform"):
+                delattr(google.cloud, "aiplatform")
+
+    @patch("gcp_ml_framework.utils.gcs.upload_file")
+    def test_train_experiment_failure_non_fatal(
+        self, mock_upload: MagicMock, tmp_path: Path
+    ):
+        """Experiment tracking failure doesn't prevent training."""
+        import sys
+
+        import google.cloud
+
+        mock_aip = MagicMock()
+        mock_aip.init.side_effect = Exception("API error")
+        token = "google.cloud.aiplatform"
+        original_module = sys.modules.get(token)
+        original_attr = getattr(google.cloud, "aiplatform", None)
+        sys.modules[token] = mock_aip
+        google.cloud.aiplatform = mock_aip
+        try:
+            class _TestTrainer(TrainModel):
+                def run(self) -> None:
+                    pass
+
+            trainer = _TestTrainer(
+                experiment_name="test-exp",
+                project="test-proj",
+                region="us-east4",
+            )
+            # Should not raise
+            trainer.execute()
+        finally:
+            if original_module is None:
+                sys.modules.pop(token, None)
+            else:
+                sys.modules[token] = original_module
+            if original_attr is not None:
+                google.cloud.aiplatform = original_attr
+            elif hasattr(google.cloud, "aiplatform"):
+                delattr(google.cloud, "aiplatform")

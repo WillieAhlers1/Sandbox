@@ -16,6 +16,7 @@ dependencies = [
     "pyarrow>=18",
     "pandas>=2.2",
     "db-dtypes>=1.4.4",
+    "kfp>=2.16.0",
 ]
 
 [project.optional-dependencies]

@@ -31,3 +31,7 @@ class TrainVerifyModelStep(TrainModel):
         with open(local_path, "wb") as f:
             pickle.dump(model, f)
         logger.info(f"[train_verify_model] Model saved to {local_path}")
+
+
+if __name__ == "__main__":
+    TrainVerifyModelStep.cli()

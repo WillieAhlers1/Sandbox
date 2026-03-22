@@ -106,6 +106,13 @@ class BQQuery(BaseComponent):
         job = client.query(sql, job_config=job_config)
         job.result()  # block until done
 
+        # Write output reference for cross-step data flow
+        if self.output_uri_path and self.destination_table:
+            Path(self.output_uri_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.output_uri_path).write_text(
+                f"{self.project}.{self.dataset}.{self.destination_table}"
+            )
+
     def render_operator(
         self, context: MLContext, pipeline_dir: Path | None = None,
     ) -> tuple[str, set[str]]:

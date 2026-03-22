@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.components.ml.deploy import DeployModel
+from gcp_ml_framework.components.ml.register import RegisterModel
 from gcp_ml_framework.components.ml.train import TrainModel
 from gcp_ml_framework.pipeline.builder import Pipeline
 from gcp_ml_framework.pipeline.compiler import PipelineCompiler
@@ -109,3 +111,62 @@ class TestBuildDerivedParamsTrain:
         # Values should be derived from naming convention
         assert "train-pipe" in step_params["job_name"] or "train" in step_params["job_name"]
         assert step_params["model_output_uri"].startswith("gs://")
+
+
+# ---------------------------------------------------------------------------
+# _build_derived_params: serving image default
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDerivedParamsServingImage:
+    """RegisterModel/DeployModel steps get the dedicated serving image, not sklearn."""
+
+    def test_register_model_gets_serving_image(self, mock_context, tmp_path):
+        """RegisterModel step uses the dedicated serving image as default."""
+        compiler = PipelineCompiler(output_dir=tmp_path)
+        reg = RegisterModel(component_name="register_step")
+        defn = Pipeline(name="serve-pipe").add(reg, name="register_0").build()
+
+        derived = compiler._build_derived_params(
+            mock_context, defn, defn.steps, pipeline_dir=None,
+            serving_image="us-central1-docker.pkg.dev/proj/repo/serve-pipe-serving:tag",
+        )
+
+        assert "register_0" in derived
+        serving = derived["register_0"]["serving_container_image"]
+        assert "-serving:" in serving
+        assert "sklearn" not in serving
+
+    def test_deploy_model_gets_serving_image(self, mock_context, tmp_path):
+        """DeployModel step uses the dedicated serving image as default."""
+        compiler = PipelineCompiler(output_dir=tmp_path)
+        dep = DeployModel(component_name="deploy_step", endpoint_name="ep")
+        defn = Pipeline(name="deploy-pipe").add(dep, name="deploy_0").build()
+
+        derived = compiler._build_derived_params(
+            mock_context, defn, defn.steps, pipeline_dir=None,
+            serving_image="us-central1-docker.pkg.dev/proj/repo/deploy-pipe-serving:tag",
+        )
+
+        assert "deploy_0" in derived
+        serving = derived["deploy_0"]["serving_container_image"]
+        assert "-serving:" in serving
+        assert "sklearn" not in serving
+
+    def test_explicit_serving_image_not_overridden(self, mock_context, tmp_path):
+        """If component already sets serving_container_image, compiler does not override."""
+        compiler = PipelineCompiler(output_dir=tmp_path)
+        reg = RegisterModel(
+            component_name="register_step",
+            serving_container_image="custom-image:v1",
+        )
+        defn = Pipeline(name="custom-pipe").add(reg, name="register_0").build()
+
+        derived = compiler._build_derived_params(
+            mock_context, defn, defn.steps, pipeline_dir=None,
+            serving_image="us-central1-docker.pkg.dev/proj/repo/custom-pipe-serving:tag",
+        )
+
+        # When explicit image is set, serving_container_image should NOT appear in derived
+        if "register_0" in derived:
+            assert "serving_container_image" not in derived["register_0"]

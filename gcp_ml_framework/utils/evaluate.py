@@ -3,9 +3,44 @@
 from __future__ import annotations
 
 import json
+import pickle
 from pathlib import Path
 
+import numpy as np
 from loguru import logger
+
+
+def _compute_regression_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    requested: list[str],
+) -> dict[str, float]:
+    """Compute regression metrics."""
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+    available = {
+        "rmse": lambda: round(float(np.sqrt(mean_squared_error(y_true, y_pred))), 4),
+        "mae": lambda: round(float(mean_absolute_error(y_true, y_pred)), 4),
+        "r2": lambda: round(float(r2_score(y_true, y_pred)), 4),
+        "mse": lambda: round(float(mean_squared_error(y_true, y_pred)), 4),
+    }
+    return {m: available[m]() for m in requested if m in available}
+
+
+def _compute_classification_metrics(
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    requested: list[str],
+) -> dict[str, float]:
+    """Compute classification metrics."""
+    from sklearn.metrics import f1_score, roc_auc_score
+
+    preds = (y_proba > 0.5).astype(int)
+    available = {
+        "auc": lambda: round(float(roc_auc_score(y_true, y_proba)), 4),
+        "f1": lambda: round(float(f1_score(y_true, preds)), 4),
+    }
+    return {m: available[m]() for m in requested if m in available}
 
 
 def run_evaluate(
@@ -20,20 +55,26 @@ def run_evaluate(
     output_uri_path: str,
 ) -> None:
     """Evaluate a model against a BQ eval dataset and apply metric gates."""
-    import hashlib
-    import pickle
     import tempfile
 
     from google.cloud import bigquery, storage
-    from sklearn.metrics import f1_score, roc_auc_score
 
     # Read eval dataset from BigQuery
     bq_client = bigquery.Client(project=project)
     df = bq_client.query(f"SELECT * FROM `{eval_dataset_uri}`").to_dataframe()
-    logger.info(f"Loaded {len(df)} rows from {eval_dataset_uri}")
+    logger.info("Loaded %d rows from %s", len(df), eval_dataset_uri)
 
-    x_features = df.drop(columns=["label", "user_id", "feature_timestamp"], errors="ignore")
-    y = df["label"]
+    # Determine target column
+    target_col = "price" if "price" in df.columns else "label"
+    y_true = df[target_col].values
+    x_features = df.drop(columns=[target_col], errors="ignore")
+
+    # Drop non-feature columns
+    drop_cols = [
+        c for c in ["user_id", "feature_timestamp", "processed_at"]
+        if c in x_features.columns
+    ]
+    x_features = x_features.drop(columns=drop_cols, errors="ignore")
 
     # Download model.pkl from GCS
     parts = model_uri.replace("gs://", "").split("/", 1)
@@ -44,44 +85,42 @@ def run_evaluate(
     with tempfile.NamedTemporaryFile(suffix=".pkl") as tmp:
         blob.download_to_filename(tmp.name)
         with open(tmp.name, "rb") as f:
-            model = pickle.load(f)
-    logger.info(f"Loaded model from {model_uri}/model.pkl")
+            model = pickle.load(f)  # noqa: S301
+    logger.info("Loaded model from %s/model.pkl", model_uri)
 
-    # Compute metrics
-    computed: dict[str, float] = {}
+    # Detect model type and compute metrics
     if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(x_features)[:, 1]
+        y_proba = model.predict_proba(x_features)[:, 1]
+        computed = _compute_classification_metrics(y_true, y_proba, metrics)
     else:
-        proba = model.predict(x_features)
-    preds = (proba > 0.5).astype(int)
+        y_pred = model.predict(x_features)
+        # Handle models that return DataFrames (like HousePredictionModel)
+        if hasattr(y_pred, "values"):
+            if hasattr(y_pred, "columns") and target_col in y_pred.columns:
+                y_pred = y_pred[target_col].values
+            else:
+                y_pred = y_pred.values.ravel()
+        computed = _compute_regression_metrics(y_true, y_pred, metrics)
 
-    if "auc" in metrics:
-        computed["auc"] = round(float(roc_auc_score(y, proba)), 4)
-    if "f1" in metrics:
-        computed["f1"] = round(float(f1_score(y, preds)), 4)
-    logger.info(f"Metrics: {computed}")
+    logger.info("Metrics: %s", computed)
 
-    # Apply gates
+    # Apply gates — direction-aware for regression vs classification
+    regression_lower_is_better = {"rmse", "mae", "mse"}
     failures = []
     for metric, threshold in gate.items():
-        if metric in computed and computed[metric] < threshold:
-            failures.append(f"{metric}={computed[metric]:.4f} < threshold={threshold}")
+        if metric in computed:
+            if metric in regression_lower_is_better:
+                if computed[metric] > threshold:
+                    failures.append(
+                        f"{metric}={computed[metric]:.4f} > threshold={threshold}"
+                    )
+            elif computed[metric] < threshold:
+                failures.append(
+                    f"{metric}={computed[metric]:.4f} < threshold={threshold}"
+                )
 
     if failures:
         raise ValueError(f"Model failed evaluation gates: {', '.join(failures)}")
 
-    # Log to Vertex AI Experiments (best-effort)
-    try:
-        from google.cloud import aiplatform
-        aiplatform.init(project=project, location=region, experiment=experiment_name)
-        run_id = "eval-" + hashlib.md5(model_uri.encode()).hexdigest()[:8]
-        aiplatform.start_run(run=run_id)
-        aiplatform.log_metrics(computed)
-        aiplatform.end_run()
-        logger.info(f"Logged metrics to experiment '{experiment_name}' run '{run_id}'")
-    except Exception as e:
-        logger.info(f"Warning: could not log to experiments: {e}")
-
     Path(output_uri_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_uri_path, "w") as f:
-        f.write(json.dumps(computed))
+    Path(output_uri_path).write_text(json.dumps(computed))

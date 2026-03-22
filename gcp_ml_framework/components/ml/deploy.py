@@ -19,24 +19,7 @@ class DeployModel(BaseComponent):
     compiler can derive matching ``model_display_name`` and
     ``endpoint_display_name`` values.
 
-    The model is looked up from the Vertex AI Model Registry by display name —
-    the serving container image is already captured during registration.
-    ``DeployModel`` does not need any serving image fields.
-
-    See ``docs/deploy.md`` for the full design rationale.
-
-    Args:
-        model_name: Short identifier matching ``RegisterModel.model_name``
-            (e.g. ``"regression"``). Used to derive both the model display
-            name and endpoint display name via naming convention.
-        model_display_name: Display name in Model Registry. Auto-derived
-            from pipeline + model_name by the compiler.
-        endpoint_display_name: Display name of the Vertex AI Endpoint.
-            Auto-derived from pipeline + model_name by the compiler.
-        machine_type: Compute type for the endpoint.
-        min_replica_count: Minimum number of replicas.
-        max_replica_count: Maximum number of replicas.
-        traffic_split: Traffic routing for canary deployments.
+    Supports canary deployments via `traffic_split` and optional model monitoring.
 
     Example:
         DeployModel(
@@ -56,6 +39,14 @@ class DeployModel(BaseComponent):
     traffic_split: dict[str, int] = Field(default_factory=lambda: {"new": 100})
     component_name: str = "deploy_model"
 
+    # Monitoring (optional)
+    enable_monitoring: bool = False
+    monitoring_alert_email: str = ""
+    monitoring_log_sample_rate: float = 0.8
+    monitoring_monitor_interval: int = 3600
+    monitoring_skew_thresholds: dict[str, float] = Field(default_factory=dict)
+    monitoring_drift_thresholds: dict[str, float] = Field(default_factory=dict)
+
     def execute(self) -> None:
         """Container lifecycle: call run()."""
         self.run()
@@ -74,6 +65,12 @@ class DeployModel(BaseComponent):
             max_replica_count=self.max_replica_count,
             traffic_split=self.traffic_split,
             output_uri_path=self.output_uri_path,
+            enable_monitoring=self.enable_monitoring,
+            monitoring_alert_email=self.monitoring_alert_email,
+            monitoring_log_sample_rate=self.monitoring_log_sample_rate,
+            monitoring_monitor_interval=self.monitoring_monitor_interval,
+            monitoring_skew_thresholds=self.monitoring_skew_thresholds,
+            monitoring_drift_thresholds=self.monitoring_drift_thresholds,
         )
 
 

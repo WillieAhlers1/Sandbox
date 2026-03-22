@@ -59,3 +59,23 @@
 - **Pattern**: Old Dockerfiles used `RUN --mount=type=cache,target=/root/.cache/uv` for local build caching. Cloud Build runs on ephemeral VMs — BuildKit cache mounts provide zero benefit and add complexity.
 - **Rule**: When migrating from local Docker builds to Cloud Build, remove `--mount=type=cache` directives. Use `--cache-from` with AR `:latest` tags instead — this is the Cloud Build caching pattern.
 - **Why**: BuildKit cache mounts only help when the build VM persists between builds. Cloud Build destroys the VM after each build. AR layer caching via `--cache-from` is the correct equivalent.
+
+## 2026-03-21: Mock google.cloud.* on BOTH sys.modules AND the namespace module attribute
+- **Pattern**: Mocking `google.cloud.aiplatform` via `sys.modules["google.cloud.aiplatform"] = mock` failed — the real SDK was still called. `from google.cloud import aiplatform` checks `google.cloud.__dict__["aiplatform"]` (the module attribute) BEFORE checking `sys.modules`.
+- **Rule**: When mocking `from google.cloud import X` in tests, ALWAYS set both `sys.modules["google.cloud.X"] = mock` AND `google.cloud.X = mock`. Restore both in teardown.
+- **Why**: CPython's `from X import Y` for submodules first checks if package `X` has attribute `Y`. Once the real SDK is imported anywhere in the test process, `google.cloud.__dict__` has the real module. Only setting `sys.modules` is insufficient.
+
+## 2026-03-21: Every step subclass needs `if __name__ == "__main__"` block
+- **Pattern**: Created step subclasses (e.g., `TrainVerifyModelStep`, `EvaluateVerifyStep`) without `if __name__ == "__main__": ClassName.cli()`. KFP runs `python -m <step_module>` — without the block, the module loads, defines the class, and exits 0 silently. The container "succeeds" but produces no output.
+- **Rule**: Every step file under `pipelines/*/steps/` that is a component subclass MUST end with `if __name__ == "__main__": SubclassName.cli()`. The KFP container command is `python -m <module>`, which requires this entry point.
+- **Why**: The Vertex AI error was `Failed to find property "output:output_uri"` because the train step exited without writing to the output file. Task state was SUCCEEDED (exit 0) but downstream steps couldn't find the output artifact.
+
+## 2026-03-21: Pre-built Vertex AI containers can't unpickle custom classes
+- **Pattern**: Deployed model using `sklearn-cpu.1-3:latest` serving container. Vertex AI returned `ModuleNotFoundError: No module named 'second_run'` because the pre-built image has no knowledge of project-specific packages.
+- **Rule**: If your model uses custom classes (estimators, transformers, feature engineering), you MUST use a Custom Prediction Routine (CPR) serving container. Pre-built containers only work for vanilla sklearn/xgboost/tf models with no custom code in the pickle.
+- **Why**: `pickle.load()` needs the original class definitions on `sys.path`. Pre-built containers only have the framework (sklearn, etc.) — not your project code. This is a blocking production issue: models register fine but can't serve predictions.
+
+## 2026-03-21: Document contingency plans as ADRs when they activate
+- **Pattern**: phase_plan.md listed "CPR container" as a contingency risk. When the contingency activated, a full serving image system was built (8 files, 16 tests) without creating an ADR or updating the Definition of Done.
+- **Rule**: When a contingency plan activates and becomes real implementation work, immediately: (1) create an ADR documenting the decision, (2) add it to the phase's Definition of Done, (3) track it as a sub-phase in the roadmap.
+- **Why**: Undocumented work creates audit gaps. Phase 5.5 was a justified fix but wasn't traceable from planning docs alone — the deviations audit caught 3 discrepancies that proper documentation would have prevented.
