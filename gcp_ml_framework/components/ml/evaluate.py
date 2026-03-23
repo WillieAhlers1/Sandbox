@@ -81,6 +81,5 @@ class EvaluateModel(BaseComponent):
         )
 
 
-
 if __name__ == "__main__":
     EvaluateModel.cli()

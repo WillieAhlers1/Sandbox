@@ -20,13 +20,22 @@ from typing import Any, ClassVar
 
 from pydantic_core import PydanticUndefined
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from gcp_ml_framework.types import TaskType
 
 # Fields that are never exposed as CLI flags or KFP params
-_INTERNAL_FIELDS = frozenset({
-    "component_name", "component_version", "timeout_seconds", "retry_count", "cache_enabled",
-    "runtime_dockerfile", "serving_dockerfile", "model_name", "gcp_config",
-})
+_INTERNAL_FIELDS = frozenset(
+    {
+        "component_name",
+        "component_version",
+        "timeout_seconds",
+        "retry_count",
+        "cache_enabled",
+        "runtime_dockerfile",
+        "serving_dockerfile",
+        "model_name",
+    }
+)
 
 # Fields excluded from KFP input params (output_uri_path is handled via dsl.OutputPath)
 _KFP_EXCLUDED_FIELDS = _INTERNAL_FIELDS | {"output_uri_path"}
@@ -54,7 +63,7 @@ class BaseComponent(BaseSettings):
     component_version: str = "v1"
     timeout_seconds: int = 3600
     retry_count: int = 1
-    cache_enabled: bool = True
+    cache_enabled: bool = False
     # Path to the Dockerfile this component executes in, relative to docker/.
     # Example: "pipelines/house_price/base.Dockerfile"
     # Must be set in pipeline.py — the compiler uses it to resolve the image.
@@ -77,8 +86,6 @@ class BaseComponent(BaseSettings):
     run_date: str = ""
     dataset: str = ""
 
-
-    
     @classmethod
     def cli(cls) -> None:
         """Typer-based CLI entrypoint for container execution.
@@ -133,7 +140,7 @@ class BaseComponent(BaseSettings):
             instance.execute()
             logger.info(f"[cli] {cls.__name__} completed")
 
-        _run.__signature__ = inspect.Signature(sig_params)
+        _run.__signature__ = inspect.Signature(sig_params)  # type: ignore[attr-defined]
         app.command()(_run)
         app()
 
@@ -185,8 +192,10 @@ class BaseComponent(BaseSettings):
         # Build inspect.Signature: all str params + output_uri
         sig_params = [
             inspect.Parameter(
-                n, inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default="", annotation=str,
+                n,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default="",
+                annotation=str,
             )
             for n in param_names
         ]
@@ -214,8 +223,8 @@ class BaseComponent(BaseSettings):
             )
 
         _component_fn.__name__ = self.component_name or self.__class__.__name__
-        _component_fn.__signature__ = inspect.Signature(sig_params)
-        return dsl.container_component(_component_fn)
+        _component_fn.__signature__ = inspect.Signature(sig_params)  # type: ignore[attr-defined]
+        return dsl.container_component(_component_fn)  # type: ignore[no-any-return]
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self.component_name!r})"

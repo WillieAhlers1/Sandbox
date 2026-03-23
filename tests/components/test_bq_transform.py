@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 class TestBQTransformBasics:
     def test_is_task_type(self):
-        assert BQTransform._task_type == TaskType.TASK
+        assert BQTransform.task_type == TaskType.TASK
 
     def test_instantiation(self):
         bt = BQTransform(output_table="features", sql="SELECT 1")

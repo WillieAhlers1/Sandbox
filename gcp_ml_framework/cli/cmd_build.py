@@ -26,9 +26,7 @@ def build(
 
     if all_pipelines:
         names = sorted(
-            d.name
-            for d in pipelines_dir.iterdir()
-            if d.is_dir() and (d / "pipeline.py").exists()
+            d.name for d in pipelines_dir.iterdir() if d.is_dir() and (d / "pipeline.py").exists()
         )
     else:
         names = [name]
@@ -44,12 +42,12 @@ def build_command(
 ) -> list[str]:
     """Construct the gcloud builds submit command (pure, testable)."""
     tag = ctx.naming.image_tag(pipeline_name)
-    ar_repo = ctx.naming.artifact_registry_repo(
-        ctx.artifact_registry_host, ctx.gcp_project
-    )
+    ar_repo = ctx.naming.artifact_registry_repo(ctx.artifact_registry_host, ctx.gcp_project)
     pipeline_slug = _slugify(pipeline_name)
 
-    substitutions = f"_TAG={tag},_PIPELINE={pipeline_slug},_AR_REPO={ar_repo}"
+    substitutions = (
+        f"_TAG={tag},_PIPELINE={pipeline_slug},_PIPELINE_DIR={pipeline_name},_AR_REPO={ar_repo}"
+    )
 
     cmd = [
         "gcloud",
@@ -66,9 +64,7 @@ def build_command(
     # Use the pipeline SA for Cloud Build (sandbox environments
     # where the default Cloud Build SA lacks AR push permissions).
     sa_email = ctx.pipeline_service_account
-    sa_resource = (
-        f"projects/{ctx.gcp_project}/serviceAccounts/{sa_email}"
-    )
+    sa_resource = f"projects/{ctx.gcp_project}/serviceAccounts/{sa_email}"
     cmd.extend(["--service-account", sa_resource])
 
     cmd.append(".")
@@ -81,9 +77,7 @@ def _submit_build(ctx: MLContext, pipeline_name: str, timeout: int) -> None:
 
     cmd = build_command(ctx, pipeline_name, timeout)
     pipeline_slug = _slugify(pipeline_name)
-    ar_repo = ctx.naming.artifact_registry_repo(
-        ctx.artifact_registry_host, ctx.gcp_project
-    )
+    ar_repo = ctx.naming.artifact_registry_repo(ctx.artifact_registry_host, ctx.gcp_project)
     tag = ctx.naming.image_tag(pipeline_name)
 
     console.print(f"[bold]Building:[/bold] {ar_repo}/{pipeline_slug}:{tag}")

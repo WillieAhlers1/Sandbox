@@ -28,8 +28,6 @@ class TestTrainModelInstantiation:
         assert tm.model_output_uri == ""
         assert tm.job_name == ""
         assert tm.run_id == ""
-        assert tm.trainer_args == []
-        assert tm.hyperparameters == {}
         assert tm.component_name == ""
 
     def test_train_model_inherits_machine_type(self):
@@ -47,17 +45,15 @@ class TestTrainModelExecute:
     """Verify execute() creates a temp dir, calls run(), uploads, and writes output."""
 
     @patch("gcp_ml_framework.utils.gcs.upload_file")
-    def test_train_model_execute_creates_temp_dir(self, mock_upload: MagicMock):
-        """execute() creates a temp dir, calls run(), and uploads files via upload_file."""
-
-        work_dir_seen: list[str] = []
+    def test_train_model_execute_uploads(self, mock_upload: MagicMock, tmp_path: Path):
+        """execute() calls run(), uses returned path for GCS upload."""
+        model_dir = tmp_path / "artifacts"
+        model_dir.mkdir()
+        (model_dir / "model.pkl").write_text("fake-model")
 
         class _TestTrainer(TrainModel):
-            def run(self) -> None:
-                # Record the work dir that execute() set up
-                work_dir_seen.append(self._work_dir)
-                # Write a dummy model file so upload_file gets called
-                (Path(self._work_dir) / "model.pkl").write_text("fake-model")
+            def run(self) -> Path:
+                return model_dir
 
         trainer = _TestTrainer(
             model_output_uri="gs://bucket/models/test",
@@ -65,9 +61,6 @@ class TestTrainModelExecute:
         )
         trainer.execute()
 
-        # run() was called and received a valid temp dir
-        assert len(work_dir_seen) == 1
-        assert work_dir_seen[0] != ""
         # upload_file was called for our model file
         mock_upload.assert_called_once()
         call_args = mock_upload.call_args
@@ -78,10 +71,12 @@ class TestTrainModelExecute:
     def test_train_model_writes_output_uri(self, mock_upload: MagicMock, tmp_path: Path):
         """execute() writes model_output_uri to the output_uri_path file."""
         output_file = tmp_path / "output" / "uri"
+        model_dir = tmp_path / "artifacts"
+        model_dir.mkdir()
 
         class _TestTrainer(TrainModel):
-            def run(self) -> None:
-                pass  # no-op; we only care about the output URI writing
+            def run(self) -> Path:
+                return model_dir
 
         trainer = _TestTrainer(
             model_output_uri="gs://bucket/models/churn/latest",
@@ -115,9 +110,13 @@ class TestTrainModelExperiments:
         sys.modules[token] = mock_aip
         google.cloud.aiplatform = mock_aip
         try:
+            model_dir = tmp_path / "artifacts"
+            model_dir.mkdir()
+            (model_dir / "model.pkl").write_bytes(b"fake")
+
             class _TestTrainer(TrainModel):
-                def run(self) -> None:
-                    pass
+                def run(self) -> Path:
+                    return model_dir
 
             trainer = _TestTrainer(
                 experiment_name="test-exp",
@@ -142,9 +141,7 @@ class TestTrainModelExperiments:
                 delattr(google.cloud, "aiplatform")
 
     @patch("gcp_ml_framework.utils.gcs.upload_file")
-    def test_train_experiment_failure_non_fatal(
-        self, mock_upload: MagicMock, tmp_path: Path
-    ):
+    def test_train_experiment_failure_non_fatal(self, mock_upload: MagicMock, tmp_path: Path):
         """Experiment tracking failure doesn't prevent training."""
         import sys
 
@@ -158,6 +155,7 @@ class TestTrainModelExperiments:
         sys.modules[token] = mock_aip
         google.cloud.aiplatform = mock_aip
         try:
+
             class _TestTrainer(TrainModel):
                 def run(self) -> None:
                     pass

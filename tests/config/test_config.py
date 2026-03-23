@@ -28,31 +28,36 @@ class TestEnvironmentEnum:
     def test_environment_default_is_dev(self) -> None:
         """FrameworkConfig defaults environment to 'dev'."""
         env = {
-            "GML_TEAM": "t",
-            "GML_PROJECT": "p",
-            "GML_BRANCH": "b",
-            "GML_GCP__DEV_PROJECT_ID": "proj-dev",
+            "TEAM": "t",
+            "PROJECT": "p",
+            "BRANCH": "b",
+            "ENVIRONMENT": "dev",
         }
         with patch.dict(os.environ, env, clear=True):
             cfg = FrameworkConfig(
-                team="t", project="p", branch="b",
-                gcp=GCPConfig(dev_project_id="proj-dev"),
+                team="t",
+                project="p",
+                branch="b",
+                environment="dev",
+                gcp=GCPConfig(project_id="proj-dev", region="us-central1"),
             )
         assert cfg.environment == "dev"
 
     def test_environment_from_env_var(self) -> None:
-        """GML_ENVIRONMENT env var is picked up by FrameworkConfig."""
+        """ENVIRONMENT env var is picked up by FrameworkConfig."""
         env = {
-            "GML_ENVIRONMENT": "staging",
-            "GML_TEAM": "t",
-            "GML_PROJECT": "p",
-            "GML_BRANCH": "b",
-            "GML_GCP__STAGING_PROJECT_ID": "proj-staging",
+            "ENVIRONMENT": "staging",
+            "TEAM": "t",
+            "PROJECT": "p",
+            "BRANCH": "b",
         }
         with patch.dict(os.environ, env, clear=True):
             cfg = FrameworkConfig(
-                team="t", project="p", branch="b",
-                gcp=GCPConfig(staging_project_id="proj-staging"),
+                team="t",
+                project="p",
+                branch="b",
+                environment="staging",
+                gcp=GCPConfig(project_id="proj-staging", region="us-central1"),
             )
         assert cfg.environment == "staging"
 
@@ -61,47 +66,41 @@ class TestEnvironmentEnum:
 
 
 class TestFrameworkConfigValidation:
-    def test_framework_config_validates_dev_project(self) -> None:
-        """DEV environment requires gcp.dev_project_id to be set."""
-        env = {"GML_TEAM": "t", "GML_PROJECT": "p", "GML_BRANCH": "b"}
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValidationError, match="dev_project_id"):
-                FrameworkConfig(
-                    team="t", project="p", branch="b",
-                    environment="dev",
-                    gcp=GCPConfig(),
-                )
+    def test_gcp_config_requires_project_id(self) -> None:
+        """GCPConfig without project_id raises ValidationError."""
+        with pytest.raises(ValidationError, match="project_id"):
+            GCPConfig(region="us-central1")
 
-    def test_framework_config_validates_staging_project(self) -> None:
-        """STAGING environment requires gcp.staging_project_id to be set."""
-        env = {"GML_TEAM": "t", "GML_PROJECT": "p", "GML_BRANCH": "b"}
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValidationError, match="staging_project_id"):
-                FrameworkConfig(
-                    team="t", project="p", branch="b",
-                    environment="staging",
-                    gcp=GCPConfig(),
+    def test_any_environment_valid_with_project_id(self) -> None:
+        """Any environment is valid as long as project_id is set."""
+        gcp = GCPConfig(project_id="my-project", region="us-central1")
+        for env_name in ("dev", "test", "staging", "prod", "experiment"):
+            env = {
+                "TEAM": "t",
+                "PROJECT": "p",
+                "BRANCH": "b",
+                "ENVIRONMENT": env_name,
+            }
+            with patch.dict(os.environ, env, clear=True):
+                cfg = FrameworkConfig(
+                    team="t",
+                    project="p",
+                    branch="b",
+                    environment=env_name,
+                    gcp=gcp,
                 )
-
-    def test_framework_config_validates_prod_project(self) -> None:
-        """PROD environment requires gcp.prod_project_id to be set."""
-        env = {"GML_TEAM": "t", "GML_PROJECT": "p", "GML_BRANCH": "b"}
-        with patch.dict(os.environ, env, clear=True):
-            with pytest.raises(ValidationError, match="prod_project_id"):
-                FrameworkConfig(
-                    team="t", project="p", branch="b",
-                    environment="prod",
-                    gcp=GCPConfig(),
-                )
+            assert cfg.environment == env_name
 
     def test_framework_config_local_no_project_required(self) -> None:
         """LOCAL environment does not require any GCP project ID."""
-        env = {"GML_TEAM": "t", "GML_PROJECT": "p", "GML_BRANCH": "b"}
+        env = {"TEAM": "t", "PROJECT": "p", "BRANCH": "b", "ENVIRONMENT": "local"}
         with patch.dict(os.environ, env, clear=True):
             cfg = FrameworkConfig(
-                team="t", project="p", branch="b",
+                team="t",
+                project="p",
+                branch="b",
                 environment="local",
-                gcp=GCPConfig(),
+                gcp=GCPConfig(project_id="test-project", region="us-central1"),
             )
         assert cfg.environment == "local"
 
@@ -110,30 +109,19 @@ class TestFrameworkConfigValidation:
 
 
 class TestActiveGCPProject:
-    def test_active_gcp_project_dev(self) -> None:
-        """DEV environment returns dev_project_id."""
-        env = {"GML_TEAM": "t", "GML_PROJECT": "p", "GML_BRANCH": "b"}
+    def test_active_gcp_project_returns_project_id(self) -> None:
+        """active_gcp_project returns gcp.project_id directly."""
+        env = {"TEAM": "t", "PROJECT": "p", "BRANCH": "b", "ENVIRONMENT": "dev"}
         with patch.dict(os.environ, env, clear=True):
             cfg = FrameworkConfig(
-                team="t", project="p", branch="b",
+                team="t",
+                project="p",
+                branch="b",
                 environment="dev",
-                gcp=GCPConfig(dev_project_id="my-dev-project"),
+                gcp=GCPConfig(project_id="my-dev-project", region="us-central1"),
             )
         assert cfg.active_gcp_project == "my-dev-project"
-
-    def test_active_gcp_project_test_fallback(self) -> None:
-        """TEST environment falls back to dev_project_id when test_project_id is empty.
-
-        The model_validator normally rejects an empty test_project_id for TEST,
-        so we bypass validation via model_construct to exercise the fallback
-        path in active_gcp_project.
-        """
-        gcp = GCPConfig(dev_project_id="fallback-dev", test_project_id="")
-        cfg = FrameworkConfig.model_construct(
-            team="t", project="p", branch="b",
-            environment="test", gcp=gcp,
-        )
-        assert cfg.active_gcp_project == "fallback-dev"
+        assert cfg.active_gcp_project == cfg.gcp.project_id
 
 
 # ── Misc ────────────────────────────────────────────────────────────────────
@@ -142,12 +130,14 @@ class TestActiveGCPProject:
 class TestMiscConfig:
     def test_branch_is_independent_of_environment(self) -> None:
         """Branch and environment are orthogonal — any combo is valid."""
-        env = {"GML_TEAM": "t", "GML_PROJECT": "p", "GML_BRANCH": "b"}
+        env = {"TEAM": "t", "PROJECT": "p", "BRANCH": "b", "ENVIRONMENT": "staging"}
         with patch.dict(os.environ, env, clear=True):
             cfg = FrameworkConfig(
-                team="t", project="p", branch="feature/x",
+                team="t",
+                project="p",
+                branch="feature/x",
                 environment="staging",
-                gcp=GCPConfig(staging_project_id="proj-stg"),
+                gcp=GCPConfig(project_id="proj-stg", region="us-central1"),
             )
         assert cfg.branch == "feature/x"
         assert cfg.environment == "staging"

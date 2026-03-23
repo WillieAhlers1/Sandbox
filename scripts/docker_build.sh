@@ -22,7 +22,7 @@
 # Environment variables:
 #   GCP_AR_HOST     — Artifact Registry host (e.g. us-east4-docker.pkg.dev)
 #   GCP_PROJECT_ID  — GCP project ID
-#   GCP_AR_REPO     — AR repository name (e.g. mlplatform-third-run)
+#   GCP_AR_REPO     — AR repository name (e.g. mlplatform-second-run)
 #   IMAGE_TAG       — Tag override (default: {branch}-{short_sha})
 
 set -euo pipefail
@@ -187,23 +187,7 @@ _seed_base_python() {
     fi
 }
 
-# ── Layer 1: root-level default images ───────────────────────────────────────
-
-_build_root_defaults() {
-    for dockerfile in docker/*.Dockerfile; do
-        [ -f "$dockerfile" ] || continue
-        local stem
-        stem=$(basename "$dockerfile" .Dockerfile)
-        local image_name
-        image_name=$(_resolve_image_name "" "$stem")
-        local tag
-        tag=$(_full_tag "$image_name")
-
-        _build_with_base_resolve "$stem" "$tag" "$dockerfile" "."
-    done
-}
-
-# ── Layer 2: pipeline-specific images ────────────────────────────────────────
+# ── Per-pipeline images ──────────────────────────────────────────────────────
 
 _build_pipeline_images() {
     local pipeline_name="$1"
@@ -227,32 +211,6 @@ _build_pipeline_images() {
     done
 }
 
-# ── Layer 2: per-pipeline serving images ─────────────────────────────────────
-
-_build_serving() {
-    # Build a slim serving image for a pipeline directory.
-    local pipeline_dir="$1"
-    local pipeline_name
-    pipeline_name=$(basename "$pipeline_dir")
-
-    # Skip directories without a pipeline.py
-    if [ ! -f "${pipeline_dir}/pipeline.py" ]; then
-        return
-    fi
-
-    local dockerfile="docker/serving/Dockerfile"
-    if [ ! -f "$dockerfile" ]; then
-        echo "[docker_build] serving Dockerfile not found — skipping"
-        return
-    fi
-
-    local image_name
-    image_name=$(_slugify "$pipeline_name")-serving
-
-    _build "$(_full_tag "$image_name")" "$dockerfile" "." \
-        --build-arg "BASE_IMAGE=$(_full_tag base-python)"
-}
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -266,11 +224,7 @@ main() {
     # Seed base-python into the registry (built separately via docker_build_base.sh)
     _seed_base_python
 
-    # Layer 1: root-level default images (train, serve, etc.)
-    # These reference base-python:latest via ARG BASE_IMAGE
-    _build_root_defaults
-
-    # Layer 2: pipeline-specific images
+    # Per-pipeline images (base + serve Dockerfiles under docker/pipelines/{name}/)
     if [ -n "$PIPELINE_FILTER" ]; then
         _build_pipeline_images "$PIPELINE_FILTER"
     else
@@ -281,11 +235,6 @@ main() {
             _build_pipeline_images "$pipeline_name"
         done
     fi
-
-    # Layer 2: serving images
-    for pipeline_dir in "${PIPELINES_DIR}"/*/; do
-        _build_serving "$pipeline_dir"
-    done
 
     echo ""
     echo "[docker_build] Done. Built ${#BUILT_IMAGES[@]} image(s)."

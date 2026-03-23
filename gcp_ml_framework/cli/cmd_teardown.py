@@ -113,17 +113,28 @@ def _delete_composer_dags(ctx, composer_path: str) -> None:
         try:
             subprocess.run(
                 [
-                    "gcloud", "composer", "environments", "run",
-                    env_name, "--location", ctx.region,
-                    "--project", ctx.gcp_project,
-                    "dags", "delete", "--", dag_id, "--yes",
+                    "gcloud",
+                    "composer",
+                    "environments",
+                    "run",
+                    env_name,
+                    "--location",
+                    ctx.region,
+                    "--project",
+                    ctx.gcp_project,
+                    "dags",
+                    "delete",
+                    "--",
+                    dag_id,
+                    "--yes",
                 ],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
                 timeout=120,
             )
             console.print(f"  [green]Deleted Airflow metadata:[/green] {dag_id}")
         except Exception as e:
             console.print(
-                f"  [yellow]Warning:[/yellow] Could not delete "
-                f"Airflow metadata for {dag_id}: {e}"
+                f"  [yellow]Warning:[/yellow] Could not delete Airflow metadata for {dag_id}: {e}"
             )

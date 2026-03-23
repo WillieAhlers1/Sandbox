@@ -43,23 +43,17 @@ def compile_cmd(
     for pipeline_name in targets:
         pipeline_dir = pipelines_dir / pipeline_name
         if not (pipeline_dir / "pipeline.py").exists():
-            err_console.print(
-                f"[red]Error:[/red] {pipeline_name}/ has no pipeline.py."
-            )
+            err_console.print(f"[red]Error:[/red] {pipeline_name}/ has no pipeline.py.")
             raise typer.Exit(1)
 
         _compile_pipeline(pipeline_name, pipeline_dir, ctx, output_dir, dags_dir)
 
 
-def _discover_targets(
-    pipelines_dir: Path, name: str, all_pipelines: bool
-) -> list[str]:
+def _discover_targets(pipelines_dir: Path, name: str, all_pipelines: bool) -> list[str]:
     """Return list of pipeline directory names to compile."""
     if all_pipelines:
         return [
-            p.name
-            for p in pipelines_dir.iterdir()
-            if p.is_dir() and (p / "pipeline.py").exists()
+            p.name for p in pipelines_dir.iterdir() if p.is_dir() and (p / "pipeline.py").exists()
         ]
     return [name]
 

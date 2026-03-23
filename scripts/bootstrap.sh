@@ -33,7 +33,7 @@ fi
 
 # Resolve region: CLI flag > env var > default
 if [[ -z "$REGION" ]]; then
-  REGION="${GML_GCP__REGION:-}"
+  REGION="${GCP_REGION:-}"
 fi
 REGION="${REGION:-us-central1}"
 
@@ -56,8 +56,8 @@ gcloud services enable \
 
 # ── Artifact Registry ─────────────────────────────────────────────────────────
 echo "==> Creating Artifact Registry repository..."
-TEAM="${GML_TEAM:?GML_TEAM must be set in .env}"
-PROJECT_NAME="${GML_PROJECT:?GML_PROJECT must be set in .env}"
+TEAM="${TEAM:?TEAM must be set in .env}"
+PROJECT_NAME="${PROJECT:?PROJECT must be set in .env}"
 REPO_NAME="${TEAM}-${PROJECT_NAME}"
 
 gcloud artifacts repositories create "$REPO_NAME" \

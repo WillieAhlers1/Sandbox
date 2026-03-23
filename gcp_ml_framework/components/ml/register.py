@@ -7,6 +7,7 @@ from pydantic import Field
 from gcp_ml_framework.components.base import BaseComponent
 from gcp_ml_framework.decorators import ml_task
 
+
 @ml_task
 class RegisterModel(BaseComponent):
     """Upload a trained model to Vertex AI Model Registry.
@@ -112,9 +113,7 @@ class RegisterModel(BaseComponent):
                 f"creating new version under {parent_model}"
             )
         else:
-            logger.info(
-                f"No existing model '{self.model_display_name}' — creating v1"
-            )
+            logger.info(f"No existing model '{self.model_display_name}' — creating v1")
 
         upload_kwargs: dict = {
             "display_name": self.model_display_name,
@@ -122,6 +121,7 @@ class RegisterModel(BaseComponent):
             "serving_container_image_uri": self.serving_container_image,
             "labels": self.labels,
             "description": self.description,
+            "sync": False,
         }
         if parent_model:
             upload_kwargs["parent_model"] = parent_model
@@ -129,7 +129,7 @@ class RegisterModel(BaseComponent):
 
         model = aiplatform.Model.upload(**upload_kwargs)
         logger.info(f"Registered model: {model.resource_name}")
-        return model.resource_name
+        return str(model.resource_name)
 
 
 if __name__ == "__main__":

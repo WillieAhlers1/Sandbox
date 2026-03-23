@@ -45,9 +45,7 @@ class LocalRunner:
         # Build context params (same logic as PipelineCompiler)
         compiler = PipelineCompiler()
         ctx_params = compiler._build_context_params(context, pipeline_def)
-        derived_params = compiler._build_derived_params(
-            context, pipeline_def, pipeline_def.steps
-        )
+        derived_params = compiler._build_derived_params(context, pipeline_def, pipeline_def.steps)
 
         last_dataset_output: str | None = None
         last_model_output: str | None = None
@@ -90,9 +88,7 @@ class LocalRunner:
 
             # Track outputs for cross-step wiring
             if instance.output_uri_path:
-                is_model_producer = isinstance(
-                    instance, (TrainModel, RegisterModel)
-                )
+                is_model_producer = isinstance(instance, (TrainModel, RegisterModel))
                 is_metadata_only = isinstance(instance, WriteFeatures)
                 if is_model_producer:
                     last_model_output = instance.output_uri_path
@@ -102,7 +98,4 @@ class LocalRunner:
             logger.info(f"[local] Step '{step.name}' completed")
 
         step_count = len(pipeline_def.steps)
-        logger.info(
-            f"[local] Pipeline '{pipeline_def.name}' finished"
-            f" ({step_count} steps)"
-        )
+        logger.info(f"[local] Pipeline '{pipeline_def.name}' finished ({step_count} steps)")

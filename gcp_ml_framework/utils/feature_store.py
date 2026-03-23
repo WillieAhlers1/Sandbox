@@ -40,7 +40,7 @@ def run_write_features(
         fg = client.get_feature_group(name=feature_group_name)
         logger.info(f"FeatureGroup already exists: {fg.name}")
         result_name = fg.name
-    except Exception:
+    except Exception:  # Feature Store SDK doesn't expose specific exceptions for "already exists"
         feature_group = feature_group_pb2.FeatureGroup(
             big_query=feature_group_pb2.FeatureGroup.BigQuery(
                 big_query_source={"input_uri": f"bq://{bq_source_table}"},

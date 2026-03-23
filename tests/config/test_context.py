@@ -27,7 +27,9 @@ class TestContextCreation:
 
 class TestContextPassthroughs:
     def test_context_namespace(
-        self, mock_context: MLContext, mock_naming: object,
+        self,
+        mock_context: MLContext,
+        mock_naming: object,
     ) -> None:
         """ctx.namespace passes through to naming.namespace."""
         assert mock_context.namespace == mock_context.naming.namespace
@@ -45,19 +47,14 @@ class TestContextIsProduction:
     def test_context_is_production_true(self) -> None:
         """PROD and EXPERIMENT are considered production environments."""
         for env_name in ("prod", "experiment"):
-            gcp = GCPConfig(prod_project_id="prod-proj")
+            gcp = GCPConfig(project_id="prod-proj", region="us-central1")
             ctx = _make_context(environment=env_name, gcp=gcp)
             assert ctx.is_production(), f"{env_name} should be production"
 
     def test_context_is_production_false(self) -> None:
         """DEV, LOCAL, TEST, STAGING are NOT production."""
-        non_prod = {
-            "dev": GCPConfig(dev_project_id="p"),
-            "local": GCPConfig(),
-            "test": GCPConfig(test_project_id="p"),
-            "staging": GCPConfig(staging_project_id="p"),
-        }
-        for env_name, gcp in non_prod.items():
+        gcp = GCPConfig(project_id="test-proj", region="us-central1")
+        for env_name in ("dev", "local", "test", "staging"):
             ctx = _make_context(environment=env_name, gcp=gcp)
             assert not ctx.is_production(), f"{env_name} should NOT be production"
 
@@ -78,15 +75,26 @@ class TestContextSummary:
         """summary() returns a dict with all expected display keys."""
         summary = mock_context.summary()
         expected_keys = {
-            "team", "project", "branch (raw)", "branch (slug)",
-            "environment", "gcp_project", "region", "namespace",
-            "gcs_bucket", "gcs_prefix", "bq_dataset",
-            "feature_store_id", "secret_prefix", "composer_dags_path",
+            "team",
+            "project",
+            "branch (raw)",
+            "branch (slug)",
+            "environment",
+            "gcp_project",
+            "region",
+            "namespace",
+            "gcs_bucket",
+            "gcs_prefix",
+            "bq_dataset",
+            "feature_store_id",
+            "secret_prefix",
+            "composer_dags_path",
         }
         assert set(summary.keys()) == expected_keys
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
 
 def _make_context(
     environment: str,
@@ -99,15 +107,19 @@ def _make_context(
     import os
     from unittest.mock import patch
 
-    gcp = gcp or GCPConfig(dev_project_id="dummy")
+    gcp = gcp or GCPConfig(project_id="dummy", region="us-central1")
     env_vars = {
-        "GML_TEAM": team,
-        "GML_PROJECT": project,
-        "GML_BRANCH": branch,
+        "TEAM": team,
+        "PROJECT": project,
+        "BRANCH": branch,
+        "ENVIRONMENT": environment,
     }
     with patch.dict(os.environ, env_vars, clear=True):
         cfg = FrameworkConfig(
-            team=team, project=project, branch=branch,
-            environment=environment, gcp=gcp,
+            team=team,
+            project=project,
+            branch=branch,
+            environment=environment,
+            gcp=gcp,
         )
     return MLContext.from_config(cfg)

@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 class TestEmailBasics:
     def test_is_task_type(self):
-        assert Email._task_type == TaskType.TASK
+        assert Email.task_type == TaskType.TASK
 
     def test_instantiation(self):
         email = Email(to=["alice@example.com"], subject="Test")

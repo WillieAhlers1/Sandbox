@@ -25,10 +25,21 @@ def ensure_image_tag(
 
     # Check if the exact tag already exists
     result = subprocess.run(
-        ["gcloud", "artifacts", "docker", "images", "list",
-         image_path, "--include-tags", "--format=value(tags)",
-         "--project", project],
-        capture_output=True, text=True, timeout=30,
+        [
+            "gcloud",
+            "artifacts",
+            "docker",
+            "images",
+            "list",
+            image_path,
+            "--include-tags",
+            "--format=value(tags)",
+            "--project",
+            project,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if result.returncode == 0:
         for line in result.stdout.strip().splitlines():
@@ -58,9 +69,18 @@ def ensure_image_tag(
 
     # Re-tag: add the target tag to the existing image
     subprocess.run(
-        ["gcloud", "artifacts", "docker", "tags", "add",
-         f"{image_path}:{source_tag}",
-         f"{image_path}:{target_tag}"],
-        capture_output=True, text=True, check=True, timeout=60,
+        [
+            "gcloud",
+            "artifacts",
+            "docker",
+            "tags",
+            "add",
+            f"{image_path}:{source_tag}",
+            f"{image_path}:{target_tag}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
     )
     return True

@@ -6,7 +6,7 @@ import pytest
 
 from gcp_ml_framework.components.base import BaseComponent
 from gcp_ml_framework.config import Environment
-from gcp_ml_framework.decorators import TaskType, task
+from gcp_ml_framework.decorators import TaskType, ml_task, task
 from gcp_ml_framework.pipeline.builder import Pipeline, PipelineStep
 from gcp_ml_framework.pipeline.smart_compiler import CompilationResult, SmartCompiler, _StepGroup
 
@@ -18,6 +18,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
+@ml_task
 class DummyML(BaseComponent):
     component_name: str = "dummy_ml"
 
@@ -36,11 +37,13 @@ class TestGroupSteps:
     def test_single_type_one_group(self):
         steps = [
             PipelineStep(
-                name="a", component=DummyML(),
+                name="a",
+                component=DummyML(),
                 task_type=TaskType.ML_TASK,
             ),
             PipelineStep(
-                name="b", component=DummyML(),
+                name="b",
+                component=DummyML(),
                 task_type=TaskType.ML_TASK,
             ),
         ]
@@ -58,7 +61,8 @@ class TestGroupSteps:
                 task_type=TaskType.TASK,
             ),
             PipelineStep(
-                name="b", component=DummyML(),
+                name="b",
+                component=DummyML(),
                 task_type=TaskType.ML_TASK,
             ),
             PipelineStep(
@@ -77,7 +81,8 @@ class TestGroupSteps:
     def test_group_indices(self):
         steps = [
             PipelineStep(
-                name="a", component=DummyML(),
+                name="a",
+                component=DummyML(),
                 task_type=TaskType.ML_TASK,
             ),
             PipelineStep(
@@ -161,11 +166,7 @@ class TestPureTaskCompile:
 class TestPureMLTaskCompile:
     def test_pure_ml_task_produces_yaml(self, mock_context, tmp_path):
         """Pure @ml_task pipeline produces YAML + DAG."""
-        defn = (
-            Pipeline(name="ml_only", schedule="@daily")
-            .add(DummyML(), name="step_a")
-            .build()
-        )
+        defn = Pipeline(name="ml_only", schedule="@daily").add(DummyML(), name="step_a").build()
         compiler = SmartCompiler(
             output_dir=tmp_path / "compiled",
             dags_dir=tmp_path / "dags",
@@ -180,11 +181,7 @@ class TestPureMLTaskCompile:
 
     def test_ml_task_dag_has_valid_jinja(self, mock_context, tmp_path):
         """Generated DAG uses {{ ds }} (double braces), not {{{ ds }}} (triple)."""
-        defn = (
-            Pipeline(name="jinja_check", schedule="@daily")
-            .add(DummyML(), name="step_a")
-            .build()
-        )
+        defn = Pipeline(name="jinja_check", schedule="@daily").add(DummyML(), name="step_a").build()
         compiler = SmartCompiler(
             output_dir=tmp_path / "compiled",
             dags_dir=tmp_path / "dags",
@@ -277,12 +274,10 @@ class TestGeneratedDag:
         from gcp_ml_framework.context import MLContext
 
         gcp_cfg = GCPConfig(
-            staging_project_id="staging-project",
+            project_id="staging-project",
             region="us-central1",
         )
-        with patch.dict(
-            os.environ, {"GML_ENVIRONMENT": "staging"}, clear=False
-        ):
+        with patch.dict(os.environ, {"ENVIRONMENT": "staging"}, clear=False):
             cfg = FrameworkConfig(
                 team="testteam",
                 project="testproject",
@@ -326,9 +321,7 @@ class TestDataBridging:
         )
         compiler = SmartCompiler()
         output = compiler._compute_task_output(step, mock_context)
-        assert output == (
-            f"{mock_context.gcp_project}.{mock_context.bq_dataset}.raw_data"
-        )
+        assert output == (f"{mock_context.gcp_project}.{mock_context.bq_dataset}.raw_data")
 
     def test_compute_task_output_bq_transform(self, mock_context):
         """BQTransform with output_table produces deterministic output ref."""
@@ -338,16 +331,12 @@ class TestDataBridging:
 
         step = PipelineStep(
             name="transform",
-            component=BQTransform(
-                sql="SELECT 1", output_table="features"
-            ),
+            component=BQTransform(sql="SELECT 1", output_table="features"),
             task_type=TaskType.TASK,
         )
         compiler = SmartCompiler()
         output = compiler._compute_task_output(step, mock_context)
-        assert output == (
-            f"{mock_context.gcp_project}.{mock_context.bq_dataset}.features"
-        )
+        assert output == (f"{mock_context.gcp_project}.{mock_context.bq_dataset}.features")
 
     def test_compute_task_output_none_for_no_output(self, mock_context):
         """Component without destination_table/output_table returns None."""
@@ -391,18 +380,12 @@ class TestDataBridging:
         source = result.dag_path.read_text()
         # The RunPipelineJobOperator should include dataset_uri
         assert "dataset_uri" in source
-        expected_table = (
-            f"{mock_context.gcp_project}.{mock_context.bq_dataset}.features"
-        )
+        expected_table = f"{mock_context.gcp_project}.{mock_context.bq_dataset}.features"
         assert expected_table in source
 
     def test_no_bridge_without_task_output(self, mock_context, tmp_path):
         """Pure @ml_task pipeline has no bridged dataset_uri in parameter_values."""
-        defn = (
-            Pipeline(name="no_bridge", schedule="@daily")
-            .add(DummyML(), name="step_a")
-            .build()
-        )
+        defn = Pipeline(name="no_bridge", schedule="@daily").add(DummyML(), name="step_a").build()
         compiler = SmartCompiler(
             output_dir=tmp_path / "compiled",
             dags_dir=tmp_path / "dags",
@@ -541,3 +524,14 @@ class TestTaskWithoutRenderOperator:
         )
         with pytest.raises(NotImplementedError, match="render_operator"):
             compiler.compile(defn, mock_context)
+
+
+class TestNoPydanticDataclass:
+    def test_no_dataclass_in_smart_compiler(self):
+        """smart_compiler.py must not use @dataclass (REQS 7.0)."""
+        import inspect
+
+        from gcp_ml_framework.pipeline import smart_compiler
+
+        src = inspect.getsource(smart_compiler)
+        assert "@dataclass" not in src, "smart_compiler.py still uses @dataclass"

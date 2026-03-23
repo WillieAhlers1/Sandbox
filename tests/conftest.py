@@ -25,14 +25,14 @@ def mock_naming() -> NamingConvention:
 @pytest.fixture
 def mock_gcp_config() -> GCPConfig:
     return GCPConfig(
-        dev_project_id="test-gcp-project",
+        project_id="test-gcp-project",
         region="us-central1",
     )
 
 
 @pytest.fixture
 def mock_framework_config(mock_gcp_config: GCPConfig) -> FrameworkConfig:
-    with patch.dict(os.environ, {"GML_ENVIRONMENT": "dev"}, clear=False):
+    with patch.dict(os.environ, {"ENVIRONMENT": "dev"}, clear=False):
         return FrameworkConfig(
             team="testteam",
             project="testproject",

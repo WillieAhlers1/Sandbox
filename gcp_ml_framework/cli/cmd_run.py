@@ -11,19 +11,17 @@ from gcp_ml_framework.context import MLContext
 
 
 def run(
-    pipeline_name: str = typer.Argument(
-        "", help="Pipeline directory name under pipelines/"
-    ),
+    pipeline_name: str = typer.Argument("", help="Pipeline directory name under pipelines/"),
     local: bool = typer.Option(
-        False, "--local",
+        False,
+        "--local",
         help="Execute all steps in-process against real GCP dev resources",
     ),
     pipelines_dir: Path = typer.Option(Path("pipelines"), "--pipelines-dir"),
-    all_pipelines: bool = typer.Option(
-        False, "--all", help="Run all pipelines in pipelines/"
-    ),
+    all_pipelines: bool = typer.Option(False, "--all", help="Run all pipelines in pipelines/"),
     run_date: str = typer.Option(
-        "", "--run-date",
+        "",
+        "--run-date",
         help="Override run_date (default: today). Only used with --local.",
     ),
 ) -> None:
@@ -39,9 +37,7 @@ def run(
         gml run --all --local\n
     """
     if not pipeline_name and not all_pipelines:
-        err_console.print(
-            "[red]Error:[/red] Provide a pipeline name or use --all."
-        )
+        err_console.print("[red]Error:[/red] Provide a pipeline name or use --all.")
         raise typer.Exit(1)
 
     if local:
@@ -57,11 +53,19 @@ def composer_trigger_command(
     """Construct the gcloud command to trigger a Composer DAG (pure, testable)."""
     dag_id = ctx.naming.dag_id(pipeline_name)
     return [
-        "gcloud", "composer", "environments", "run",
+        "gcloud",
+        "composer",
+        "environments",
+        "run",
         ctx.composer_environment_name,
-        "--location", ctx.region,
-        "--project", ctx.gcp_project,
-        "dags", "trigger", "--", dag_id,
+        "--location",
+        ctx.region,
+        "--project",
+        ctx.gcp_project,
+        "dags",
+        "trigger",
+        "--",
+        dag_id,
     ]
 
 
@@ -77,8 +81,7 @@ def _run_composer(
 
     targets = (
         sorted(
-            d.name for d in pipelines_dir.iterdir()
-            if d.is_dir() and (d / "pipeline.py").exists()
+            d.name for d in pipelines_dir.iterdir() if d.is_dir() and (d / "pipeline.py").exists()
         )
         if all_pipelines
         else [pipeline_name]
@@ -88,10 +91,7 @@ def _run_composer(
         cmd = composer_trigger_command(ctx, name)
         dag_id = ctx.naming.dag_id(name)
 
-        console.print(
-            f"[bold]Triggering DAG:[/bold] {dag_id} "
-            f"in {ctx.composer_environment_name}"
-        )
+        console.print(f"[bold]Triggering DAG:[/bold] {dag_id} in {ctx.composer_environment_name}")
 
         result = subprocess.run(cmd, check=False)
 
@@ -119,13 +119,10 @@ def _run_local(
     pipeline_def = load_pipeline(pipeline_dir)
 
     console.print(
-        f"[cyan]Running '{pipeline_name}' locally "
-        f"({len(pipeline_def.steps)} steps)...[/cyan]"
+        f"[cyan]Running '{pipeline_name}' locally ({len(pipeline_def.steps)} steps)...[/cyan]"
     )
 
     runner = LocalRunner()
     runner.run(pipeline_def, ctx, run_date=run_date)
 
-    console.print(
-        f"[green]Local run complete:[/green] {pipeline_name}"
-    )
+    console.print(f"[green]Local run complete:[/green] {pipeline_name}")

@@ -80,7 +80,9 @@ class PipelineCompiler:
         # Default pipeline image — used when serving_dockerfile is not set
         default_image = self._resolve_image_uri(context, None)
 
-        derived_params = self._build_derived_params(context, pipeline_def, steps, pipeline_dir, default_image)
+        derived_params = self._build_derived_params(
+            context, pipeline_def, steps, pipeline_dir, default_image
+        )
 
         @dsl.pipeline(
             name=pipeline_def.name,
@@ -99,9 +101,7 @@ class PipelineCompiler:
                 # Derive step_module from the component's class module path
                 step_module = step.component.__class__.__module__
                 # Resolve per-component image from runtime_dockerfile
-                step_image = self._resolve_image_uri(
-                    context, step.component.runtime_dockerfile
-                )
+                step_image = self._resolve_image_uri(context, step.component.runtime_dockerfile)
                 component_fn = step.component.as_kfp_component(
                     step_module=step_module,
                     base_image=step_image,
@@ -110,6 +110,7 @@ class PipelineCompiler:
 
                 # Build flat param dict: component fields (base), then context + derived overlay
                 from gcp_ml_framework.components.base import _INTERNAL_FIELDS
+
                 component_fields = {}
                 for name in type(step.component).model_fields:
                     if name in _INTERNAL_FIELDS:
@@ -138,7 +139,7 @@ class PipelineCompiler:
                 merged["run_date"] = run_date
 
                 # Filter to only params the component declares as KFP inputs
-                accepted = set(component_fn.component_spec.inputs or {})
+                accepted = set(component_fn.component_spec.inputs or {})  # type: ignore[attr-defined]
                 call_kwargs = {}
                 for k, v in merged.items():
                     if k not in accepted:
@@ -159,16 +160,132 @@ class PipelineCompiler:
 
                 # Track output — train/register → model output, others → dataset.
                 # WriteFeatures is metadata-only and should not overwrite dataset output.
-                if component_fn.component_spec.outputs:
-                    is_model_producer = isinstance(
-                        step.component, (TrainModel, RegisterModel)
-                    )
+                if component_fn.component_spec.outputs:  # type: ignore[attr-defined]
+                    is_model_producer = isinstance(step.component, (TrainModel, RegisterModel))
                     is_metadata_only = isinstance(step.component, WriteFeatures)
                     task_output = task.outputs["output_uri"]
                     if is_model_producer:
                         last_model_output = task_output
                     elif not is_metadata_only:
                         last_dataset_output = task_output
+
+            # ── Loop blocks: dsl.ParallelFor ─────────────────────
+            for loop_block in pipeline_def.loop_blocks:
+                with dsl.ParallelFor(
+                    items=loop_block.items,
+                    name=f"loop_{loop_block.index}",
+                ) as loop_item:
+                    loop_prev = prev_task
+                    for step in loop_block.steps:
+                        step_module = step.component.__class__.__module__
+                        step_image = self._resolve_image_uri(
+                            context, step.component.runtime_dockerfile
+                        )
+                        component_fn = step.component.as_kfp_component(
+                            step_module=step_module,
+                            base_image=step_image,
+                        )
+                        step_extra = derived_params.get(step.name, {})
+                        comp_fields = {}
+                        for fname in type(step.component).model_fields:
+                            if fname in _INTERNAL_FIELDS:
+                                continue
+                            val = getattr(step.component, fname)
+                            if val is not None:
+                                comp_fields[fname] = val
+                        merged = {**comp_fields, **ctx_params, **step_extra}
+                        merged["run_date"] = run_date
+                        # Inject loop variable into the designated param
+                        merged[loop_block.item_param] = loop_item
+
+                        accepted = set(
+                            component_fn.component_spec.inputs or {}  # type: ignore[attr-defined]
+                        )
+                        call_kwargs = {}
+                        for k, v in merged.items():
+                            if k not in accepted:
+                                continue
+                            if isinstance(v, (dict, list)):
+                                call_kwargs[k] = json.dumps(v)
+                            elif not isinstance(v, str):
+                                call_kwargs[k] = str(v)
+                            else:
+                                call_kwargs[k] = v
+
+                        task = component_fn(**call_kwargs)
+                        task.set_display_name(step.name)
+                        if loop_prev is not None:
+                            task.after(loop_prev)
+                        loop_prev = task
+
+            # ── Condition blocks: dsl.If ─────────────────────────
+            # MVP: conditions reference the last sequential task's output
+            for cond_block in pipeline_def.condition_blocks:
+                # MVP: condition checks the last sequential task's output
+                if prev_task is not None and hasattr(prev_task, "outputs"):
+                    source_output = prev_task.outputs.get(
+                        cond_block.output_key, prev_task.outputs.get("output_uri")
+                    )
+                    if source_output is not None:
+                        # Build comparison
+                        op = cond_block.operator
+                        val = cond_block.value
+                        if op == "!=":
+                            cond_expr = source_output != val
+                        elif op == "==":
+                            cond_expr = source_output == val
+                        elif op == ">":
+                            cond_expr = source_output > val
+                        elif op == "<":
+                            cond_expr = source_output < val
+                        elif op == ">=":
+                            cond_expr = source_output >= val
+                        elif op == "<=":
+                            cond_expr = source_output <= val
+                        else:
+                            cond_expr = source_output != val
+
+                        with dsl.If(cond_expr, name=f"condition_{cond_block.index}"):
+                            cond_prev = prev_task
+                            for step in cond_block.then_steps:
+                                step_module = step.component.__class__.__module__
+                                step_image = self._resolve_image_uri(
+                                    context, step.component.runtime_dockerfile
+                                )
+                                component_fn = step.component.as_kfp_component(
+                                    step_module=step_module,
+                                    base_image=step_image,
+                                )
+                                step_extra = derived_params.get(step.name, {})
+                                comp_fields = {}
+                                for fname in type(step.component).model_fields:
+                                    if fname in _INTERNAL_FIELDS:
+                                        continue
+                                    val2 = getattr(step.component, fname)
+                                    if val2 is not None:
+                                        comp_fields[fname] = val2
+                                merged = {**comp_fields, **ctx_params, **step_extra}
+                                merged["run_date"] = run_date
+
+                                accepted = set(
+                                    component_fn.component_spec.inputs or {}  # type: ignore[attr-defined]
+                                )
+                                call_kwargs = {}
+                                for k, v in merged.items():
+                                    if k not in accepted:
+                                        continue
+                                    if isinstance(v, (dict, list)):
+                                        call_kwargs[k] = json.dumps(v)
+                                    elif not isinstance(v, str):
+                                        call_kwargs[k] = str(v)
+                                    else:
+                                        call_kwargs[k] = v
+
+                                task = component_fn(**call_kwargs)
+                                task.set_display_name(step.name)
+                                if cond_prev is not None:
+                                    task.after(cond_prev)
+                                cond_prev = task
 
         return _pipeline
 
@@ -300,11 +417,6 @@ class PipelineCompiler:
                 extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
                     pipeline_def.name, model_name_val
                 )
-
-            # RegisterModel/DeployModel: default serving container if not set
-            if isinstance(comp, (RegisterModel, DeployModel)):
-                if not comp.serving_container_image:
-                    extra["serving_container_image"] = serving_image
 
             if extra:
                 derived[step.name] = extra

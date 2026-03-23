@@ -12,7 +12,7 @@ from gcp_ml_framework.components.ml.train import TrainModel
 from google.cloud import bigquery
 from importlib.resources import files
 import pandas as pd
-from third_run.estimator import HousePredictionModel
+from second_run.estimator import HousePredictionModel
 from typing import cast
 
 class HouseTrainModelStep(TrainModel):

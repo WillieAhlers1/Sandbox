@@ -31,7 +31,6 @@ class TrainModel(BaseComponent):
     run_id: str = ""
     experiment_name: str = ""
 
-
     component_name: str = ""
 
     def execute(self) -> None:
@@ -61,20 +60,7 @@ class TrainModel(BaseComponent):
             with open(self.output_uri_path, "w") as f:
                 f.write(self.model_output_uri)
 
-    def run(self) -> Path:
-        """Business logic: train model, write to temp dir, return artifact location.
-
-        Override this method with your training code. Write model files to self._work_dir.
-        Return the local path to the trained model artifact (e.g. a directory or .tar.gz file).
-        The base execute() implementation will handle GCS upload and output URI writing.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__}.run() is not implemented. "
-            "Override this method in your step subclass."
-        )
-
-
-        # Experiment tracking (best-effort)
+        # Experiment tracking (best-effort — never fail the pipeline)
         if self.experiment_name and self.project and self.region:
             try:
                 from google.cloud import aiplatform
@@ -99,10 +85,19 @@ class TrainModel(BaseComponent):
                     self.experiment_name,
                 )
             except Exception:
-                logger.warning(
-                    "Experiment tracking failed (non-fatal)", exc_info=True
-                )
+                logger.warning("Experiment tracking failed (non-fatal)", exc_info=True)
 
+    def run(self) -> Path:
+        """Business logic: train model, write to temp dir, return artifact location.
+
+        Override this method with your training code. Return the local path to the
+        trained model artifact (e.g. a directory or .tar.gz file).
+        The base execute() implementation will handle GCS upload and output URI writing.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__}.run() is not implemented. "
+            "Override this method in your step subclass."
+        )
 
 
 if __name__ == "__main__":

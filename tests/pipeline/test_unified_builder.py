@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from gcp_ml_framework.components.base import BaseComponent
-from gcp_ml_framework.decorators import TaskType, task
+from gcp_ml_framework.decorators import TaskType, ml_task, task
 from gcp_ml_framework.pipeline.builder import Pipeline
 
 pytestmark = pytest.mark.unit
@@ -16,14 +16,17 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
+@ml_task
 class DummyMLComponent(BaseComponent):
-    """Inherits default ML_TASK from BaseComponent."""
+    """Explicitly marked as @ml_task."""
+
     component_name: str = "dummy_ml"
 
 
 @task
 class DummyTaskComponent(BaseComponent):
     """Explicitly marked as @task."""
+
     component_name: str = "dummy_task"
 
 
@@ -39,30 +42,17 @@ class TestPipelineAdd:
         assert result is p
 
     def test_add_custom_name(self):
-        defn = (
-            Pipeline(name="test")
-            .add(DummyMLComponent(), name="My Custom Step")
-            .build()
-        )
+        defn = Pipeline(name="test").add(DummyMLComponent(), name="My Custom Step").build()
         assert defn.step_names == ["My Custom Step"]
 
     def test_add_default_name_uses_class_name(self):
-        defn = (
-            Pipeline(name="test")
-            .add(DummyMLComponent())
-            .build()
-        )
+        defn = Pipeline(name="test").add(DummyMLComponent()).build()
         assert defn.step_names == ["DummyMLComponent_0"]
 
     def test_multiple_default_names(self):
         from gcp_ml_framework.components.operators.bq_query import BQQuery
 
-        defn = (
-            Pipeline(name="test")
-            .add(BQQuery(sql="SELECT 1"))
-            .add(DummyMLComponent())
-            .build()
-        )
+        defn = Pipeline(name="test").add(BQQuery(sql="SELECT 1")).add(DummyMLComponent()).build()
         assert defn.step_names == ["BQQuery_0", "DummyMLComponent_1"]
 
 
@@ -92,12 +82,7 @@ class TestPipelineTaskTypes:
         assert defn.has_mixed_types is True
 
     def test_has_mixed_types_false(self):
-        defn = (
-            Pipeline(name="test")
-            .add(DummyMLComponent())
-            .add(DummyMLComponent())
-            .build()
-        )
+        defn = Pipeline(name="test").add(DummyMLComponent()).add(DummyMLComponent()).build()
         assert defn.has_mixed_types is False
 
 
@@ -139,11 +124,7 @@ class TestPipelineBuild:
 
 class TestPipelineStepNoStage:
     def test_step_has_no_stage(self):
-        defn = (
-            Pipeline(name="test")
-            .add(DummyMLComponent())
-            .build()
-        )
+        defn = Pipeline(name="test").add(DummyMLComponent()).build()
         assert not hasattr(defn.steps[0], "stage")
 
 

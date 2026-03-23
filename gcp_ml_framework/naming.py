@@ -10,10 +10,11 @@ framework. No resource name should ever be constructed outside this module.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from functools import cached_property
-import os
+
 from pydantic import BaseModel, ConfigDict
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -33,29 +34,28 @@ def _bq_safe(value: str, max_len: int = 30) -> str:
 def get_git_branch() -> str:
     """Detect the current git branch. Returns 'local' if detection fails."""
     try:
-        if os.environ['ENVIRONMENT'] != 'local':
-            raise ValueError("""
-                Branch name is expected as an environment 
-                variable in non-local environments.""")
+        env = os.environ.get("ENVIRONMENT", "local")
+        if env != "local":
+            raise ValueError(
+                "Branch name is expected as an environment variable in non-local environments."
+            )
 
         result = subprocess.check_output(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             stderr=subprocess.DEVNULL,
         )
         return result.decode().strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError):
         return "local"
 
 
 def get_git_sha(short: bool = True) -> str:
     """Return the current git commit SHA."""
     try:
-        args = ["git", "rev-parse", "--short" if short else "", "HEAD"]
-        result = subprocess.check_output(
-            [a for a in args if a], stderr=subprocess.DEVNULL
-        )
+        args = ["git", "rev-parse"] + (["--short"] if short else []) + ["HEAD"]
+        result = subprocess.check_output(args, stderr=subprocess.DEVNULL)
         return result.decode().strip()
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return "unknown"
 
 
@@ -124,6 +124,7 @@ class NamingConvention(BaseModel):
         return self.gcs_prefix + "/".join(parts)
 
     def gcs_pipeline_root(self, pipeline_name: str) -> str:
+        """GCS root URI for a pipeline's compiled artifacts and runs."""
         return self.gcs_path("pipelines", pipeline_name)
 
     def gcs_data_path(self, stage: str, dataset: str) -> str:
@@ -131,6 +132,7 @@ class NamingConvention(BaseModel):
         return self.gcs_path("data", stage, dataset)
 
     def gcs_model_path(self, model_name: str, version: str = "latest") -> str:
+        """GCS URI for a model's artifacts directory."""
         return self.gcs_path("models", model_name, version)
 
     # ── BigQuery ──────────────────────────────────────────────────────────────
@@ -145,14 +147,17 @@ class NamingConvention(BaseModel):
         return f"{self.bq_dataset}.{_bq_safe(table)}"
 
     def bq_feature_table(self, entity: str, feature_group: str) -> str:
+        """Fully-qualified BQ table name for a feature group."""
         return f"{self.bq_dataset}.feat_{_bq_safe(entity)}_{_bq_safe(feature_group)}"
 
     # ── Vertex AI ─────────────────────────────────────────────────────────────
 
     def vertex_pipeline_display_name(self, pipeline_name: str) -> str:
+        """Display name for a Vertex AI Pipeline run."""
         return f"{self.namespace}-{_slugify(pipeline_name)}"
 
     def vertex_experiment(self, pipeline_name: str) -> str:
+        """Vertex AI Experiment name for a pipeline."""
         return f"{self.namespace}-{_slugify(pipeline_name)}-exp"
 
     def vertex_model_name(self, pipeline_name: str, model_name: str | None = None) -> str:
@@ -187,6 +192,7 @@ class NamingConvention(BaseModel):
         return f"{base}-endpoint"
 
     def vertex_training_job_name(self, job_name: str) -> str:
+        """Display name for a Vertex AI training job."""
         return f"{self.namespace}-{_slugify(job_name)}"
 
     # ── Artifact Registry ─────────────────────────────────────────────────────
@@ -219,7 +225,7 @@ class NamingConvention(BaseModel):
 
         Examples:
             docker_image_name(None, "train")                        → "train"
-            docker_image_name("house_price", "house_price_base")    → "house-price--house-price-base"
+            docker_image_name("house_price", "hp_base")  → "house-price--hp-base"
         """
         stem = _slugify(dockerfile_stem, 60)
         if pipeline_name is None:
@@ -233,6 +239,7 @@ class NamingConvention(BaseModel):
         image_name: str,
         sha: str | None = None,
     ) -> str:
+        """Full Artifact Registry URI for an image name and tag."""
         repo = self.artifact_registry_repo(registry_host, gcp_project)
         return f"{repo}/{_slugify(image_name, 60)}:{self.image_tag(image_name, sha)}"
 

@@ -1,4 +1,4 @@
-"""Unit tests for run_deploy() smart model resolution and monitoring."""
+"""Unit tests for run_deploy() model lookup, endpoint management, and monitoring."""
 
 from __future__ import annotations
 
@@ -22,11 +22,10 @@ def mock_aiplatform():
     sys.modules[token] = mock_aip
     google.cloud.aiplatform = mock_aip
 
-    # Setup default mocks
+    # Setup default mocks — Model.list returns a registered model
     mock_model = MagicMock()
     mock_model.resource_name = "projects/test/locations/us/models/123"
-    mock_aip.Model.upload.return_value = mock_model
-    mock_aip.Model.return_value = mock_model
+    mock_aip.Model.list.return_value = [mock_model]
 
     mock_endpoint = MagicMock()
     mock_endpoint.resource_name = "projects/test/locations/us/endpoints/456"
@@ -49,7 +48,6 @@ _COMMON_KWARGS = {
     "region": "us-east4",
     "model_display_name": "test-model",
     "endpoint_display_name": "test-endpoint",
-    "serving_container_image": "gcr.io/proj/serving:v1",
     "machine_type": "n2-standard-2",
     "min_replica_count": 1,
     "max_replica_count": 1,
@@ -58,40 +56,36 @@ _COMMON_KWARGS = {
 }
 
 
-class TestSmartModelResolution:
-    """run_deploy() detects model_uri format and acts accordingly."""
+class TestRunDeployModelLookup:
+    """run_deploy() looks up a registered model by display_name."""
 
-    def test_registered_model_skips_upload(self, mock_aiplatform):
-        """When model_uri starts with 'projects/', use Model() directly — no upload."""
+    def test_model_looked_up_by_display_name(self, mock_aiplatform):
+        """run_deploy calls Model.list with a display_name filter."""
         from gcp_ml_framework.utils.vertex import run_deploy
 
-        run_deploy(
-            model_uri="projects/my-proj/locations/us-east4/models/123",
-            **_COMMON_KWARGS,
-        )
-        mock_aiplatform.Model.assert_called_with(
-            "projects/my-proj/locations/us-east4/models/123"
-        )
-        mock_aiplatform.Model.upload.assert_not_called()
+        run_deploy(**_COMMON_KWARGS)
 
-    def test_gcs_path_uploads_model(self, mock_aiplatform):
-        """When model_uri starts with 'gs://', upload via Model.upload()."""
+        mock_aiplatform.Model.list.assert_called_once_with(
+            filter='display_name="test-model"',
+            project="test-project",
+            location="us-east4",
+        )
+
+    def test_raises_when_no_model_found(self, mock_aiplatform):
+        """run_deploy raises ValueError when no registered model matches."""
         from gcp_ml_framework.utils.vertex import run_deploy
 
-        run_deploy(
-            model_uri="gs://bucket/models/v1",
-            **_COMMON_KWARGS,
-        )
-        mock_aiplatform.Model.upload.assert_called_once()
+        mock_aiplatform.Model.list.return_value = []
+
+        with pytest.raises(ValueError, match="No registered model found"):
+            run_deploy(**_COMMON_KWARGS)
 
     def test_endpoint_reused_when_exists(self, mock_aiplatform):
         """When endpoint exists, reuse it instead of creating new."""
         from gcp_ml_framework.utils.vertex import run_deploy
 
-        run_deploy(
-            model_uri="gs://bucket/models/v1",
-            **_COMMON_KWARGS,
-        )
+        run_deploy(**_COMMON_KWARGS)
+
         mock_aiplatform.Endpoint.list.assert_called_once()
         mock_aiplatform.Endpoint.create.assert_not_called()
 
@@ -104,56 +98,9 @@ class TestSmartModelResolution:
         mock_new_endpoint.resource_name = "projects/test/endpoints/789"
         mock_aiplatform.Endpoint.create.return_value = mock_new_endpoint
 
-        run_deploy(
-            model_uri="gs://bucket/models/v1",
-            **_COMMON_KWARGS,
-        )
+        run_deploy(**_COMMON_KWARGS)
+
         mock_aiplatform.Endpoint.create.assert_called_once()
-
-
-class TestRunDeployCPR:
-    """run_deploy() adds CPR kwargs for custom serving containers."""
-
-    def test_cpr_kwargs_for_custom_image(self, mock_aiplatform):
-        """Custom serving image → upload includes CPR routes."""
-        from gcp_ml_framework.utils.vertex import run_deploy
-
-        custom_kwargs = {
-            **_COMMON_KWARGS,
-            "serving_container_image": (
-                "us-central1-docker.pkg.dev/proj/repo/pipe-serving:tag"
-            ),
-        }
-        run_deploy(model_uri="gs://bucket/models/v1", **custom_kwargs)
-        call_kwargs = mock_aiplatform.Model.upload.call_args
-        assert call_kwargs.kwargs.get("serving_container_predict_route") == "/predict"
-        assert call_kwargs.kwargs.get("serving_container_health_route") == "/health"
-        assert call_kwargs.kwargs.get("serving_container_ports") == [8080]
-
-    def test_no_cpr_kwargs_for_prebuilt_image(self, mock_aiplatform):
-        """Pre-built Vertex AI image → no CPR kwargs."""
-        from gcp_ml_framework.utils.vertex import run_deploy
-
-        prebuilt_kwargs = {
-            **_COMMON_KWARGS,
-            "serving_container_image": (
-                "us-docker.pkg.dev/vertex-ai/prediction/"
-                "sklearn-cpu.1-3:latest"
-            ),
-        }
-        run_deploy(model_uri="gs://bucket/models/v1", **prebuilt_kwargs)
-        call_kwargs = mock_aiplatform.Model.upload.call_args
-        assert "serving_container_predict_route" not in (call_kwargs.kwargs or {})
-
-    def test_registered_model_skips_cpr(self, mock_aiplatform):
-        """When model_uri is projects/ resource name, no upload happens — no CPR needed."""
-        from gcp_ml_framework.utils.vertex import run_deploy
-
-        run_deploy(
-            model_uri="projects/my-proj/locations/us-east4/models/123",
-            **_COMMON_KWARGS,
-        )
-        mock_aiplatform.Model.upload.assert_not_called()
 
 
 class TestRunDeployMonitoring:
@@ -163,10 +110,8 @@ class TestRunDeployMonitoring:
         """No monitoring job created when enable_monitoring not set."""
         from gcp_ml_framework.utils.vertex import run_deploy
 
-        run_deploy(
-            model_uri="gs://bucket/models/v1",
-            **_COMMON_KWARGS,
-        )
+        run_deploy(**_COMMON_KWARGS)
+
         mock_aiplatform.ModelDeploymentMonitoringJob.create.assert_not_called()
 
     def test_monitoring_enabled_creates_job(self, mock_aiplatform):
@@ -174,9 +119,9 @@ class TestRunDeployMonitoring:
         from gcp_ml_framework.utils.vertex import run_deploy
 
         run_deploy(
-            model_uri="gs://bucket/models/v1",
             enable_monitoring=True,
             monitoring_alert_email="team@example.com",
             **_COMMON_KWARGS,
         )
+
         mock_aiplatform.ModelDeploymentMonitoringJob.create.assert_called_once()

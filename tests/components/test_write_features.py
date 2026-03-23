@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 class TestWriteFeaturesBasics:
     def test_is_task_type(self):
-        assert WriteFeatures._task_type == TaskType.TASK
+        assert WriteFeatures.task_type == TaskType.TASK
 
     def test_instantiation(self):
         wf = WriteFeatures(entity="user", feature_group="churn_signals")
@@ -36,3 +36,11 @@ class TestWriteFeaturesRenderOperator:
         wf = WriteFeatures(entity="user", feature_group="churn_signals")
         code, imports = wf.render_operator(mock_context, pipeline_dir=None)
         assert "PythonOperator" in code
+
+    def test_render_operator_defines_callable(self, mock_context):
+        """render_operator() must define the python_callable function."""
+        wf = WriteFeatures(entity="user", feature_group="churn")
+        code, imports = wf.render_operator(mock_context)
+        assert "def _write_features_" in code, (
+            "render_operator doesn't define the callable function"
+        )

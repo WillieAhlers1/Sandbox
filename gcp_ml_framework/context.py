@@ -40,11 +40,23 @@ class MLContext(BaseModel):
     feature_store_online_node_count: int = 1
     secret_project_id: str = ""
     secret_prefix: str = ""
+    pipeline_service_account_email: str = ""
     # Raw branch for display; naming.branch is the sanitized slug
     raw_branch: str = Field(exclude=True)
 
     @classmethod
     def from_config(cls, cfg: FrameworkConfig) -> MLContext:
+        """Create an MLContext from a FrameworkConfig.
+
+        Derives all runtime values (naming convention, AR host, composer env name,
+        secret prefix) from the config and returns a frozen context object.
+
+        Args:
+            cfg: Loaded framework configuration.
+
+        Returns:
+            Immutable MLContext for the given config.
+        """
         gcp_project = cfg.active_gcp_project
         naming = NamingConvention(
             team=cfg.team,
@@ -54,7 +66,10 @@ class MLContext(BaseModel):
         )
         secret_prefix = cfg.secrets.secret_prefix or naming.namespace
         ar_host = f"{cfg.gcp.region}-docker.pkg.dev"
-        composer_env_name = f"{naming.team}-{naming.project}-{cfg.environment}"
+        composer_env_name = (
+            cfg.gcp.composer_environment_name
+            or f"{naming.team}-{naming.project}-{cfg.environment}"
+        )
 
         return cls(
             naming=naming,
@@ -75,25 +90,27 @@ class MLContext(BaseModel):
 
     @property
     def namespace(self) -> str:
+        """Canonical namespace token: {team}-{project}-{branch}."""
         return self.naming.namespace
 
     @property
     def bq_dataset(self) -> str:
+        """Branch-namespaced BigQuery dataset name."""
         return self.naming.bq_dataset
 
     @property
     def gcs_prefix(self) -> str:
+        """GCS path prefix for this branch: gs://{bucket}/{branch}/."""
         return self.naming.gcs_prefix
 
     @property
     def feature_store_id(self) -> str:
+        """Vertex AI Feature Store ID (shared per team+project)."""
         return self.naming.feature_store_id
 
     def secret_name(self, key: str) -> str:
         """Returns the fully-qualified Secret Manager secret name for a key."""
         return f"{self.secret_prefix}-{key}"
-
-    pipeline_service_account_email: str = ""
 
     @property
     def pipeline_service_account(self) -> str:
@@ -111,6 +128,7 @@ class MLContext(BaseModel):
         )
 
     def is_production(self) -> bool:
+        """Return True if the environment is PROD or EXPERIMENT."""
         return self.environment in (Environment.PROD, Environment.EXPERIMENT)
 
     def summary(self) -> dict[str, str]:
@@ -130,8 +148,6 @@ class MLContext(BaseModel):
             "feature_store_id": self.feature_store_id,
             "secret_prefix": self.secret_prefix,
             "composer_dags_path": (
-                str(self.composer_dags_path)
-                if self.composer_dags_path
-                else "(not configured)"
+                str(self.composer_dags_path) if self.composer_dags_path else "(not configured)"
             ),
         }

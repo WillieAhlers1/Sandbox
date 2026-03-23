@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from gcp_ml_framework.naming import get_git_branch
@@ -44,7 +44,14 @@ class GCPConfig(BaseSettings):
     project_id: str = Field(description="GCP Project ID")
     region: str = Field(description="GCP region")
     composer_dags_path: str = Field(default="", description="GCS path to Composer DAGs bucket")
-    pipeline_service_account_email: str = Field(default="", description="Override pipeline SA email (blank = derive from naming)")
+    pipeline_service_account_email: str = Field(
+        default="",
+        description="Override pipeline SA email (blank = derive from naming)",
+    )
+    composer_environment_name: str = Field(
+        default="",
+        description="Override Composer environment name (blank = derive from naming)",
+    )
 
 
 class FeatureStoreConfig(BaseModel):
@@ -88,8 +95,11 @@ class FrameworkConfig(BaseSettings):
     project: str = Field(alias="project", description="Project name")
     branch: str = Field(alias="branch", default_factory=get_git_branch, description="Git branch")
     environment: str = Field(alias="environment", description="Deployment environment")
-    gcp: GCPConfig = Field(default_factory=GCPConfig, description="GCP configuration")
-    feature_store: FeatureStoreConfig = Field(default_factory=FeatureStoreConfig, description="Feature store configuration")
+    gcp: GCPConfig = Field(default_factory=GCPConfig, description="GCP configuration")  # type: ignore[arg-type]
+    feature_store: FeatureStoreConfig = Field(
+        default_factory=FeatureStoreConfig,
+        description="Feature store configuration",
+    )
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 
     @property

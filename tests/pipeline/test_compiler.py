@@ -100,9 +100,7 @@ class TestBuildDerivedParamsTrain:
         train = TrainModel(component_name="train_step")
         defn = Pipeline(name="train-pipe").add(train, name="train_0").build()
 
-        derived = compiler._build_derived_params(
-            mock_context, defn, defn.steps, pipeline_dir=None
-        )
+        derived = compiler._build_derived_params(mock_context, defn, defn.steps, pipeline_dir=None)
 
         assert "train_0" in derived
         step_params = derived["train_0"]
@@ -119,42 +117,49 @@ class TestBuildDerivedParamsTrain:
 
 
 class TestBuildDerivedParamsServingImage:
-    """RegisterModel/DeployModel steps get the dedicated serving image, not sklearn."""
+    """RegisterModel gets serving image via default_image; DeployModel does NOT."""
 
-    def test_register_model_gets_serving_image(self, mock_context, tmp_path):
-        """RegisterModel step uses the dedicated serving image as default."""
+    def test_register_model_gets_default_serving_image(self, mock_context, tmp_path):
+        """RegisterModel without serving_dockerfile/serving_container_image gets default_image."""
         compiler = PipelineCompiler(output_dir=tmp_path)
         reg = RegisterModel(component_name="register_step")
         defn = Pipeline(name="serve-pipe").add(reg, name="register_0").build()
 
         derived = compiler._build_derived_params(
-            mock_context, defn, defn.steps, pipeline_dir=None,
-            serving_image="us-central1-docker.pkg.dev/proj/repo/serve-pipe-serving:tag",
+            mock_context,
+            defn,
+            defn.steps,
+            pipeline_dir=None,
+            default_image="us-central1-docker.pkg.dev/proj/repo/train:tag",
         )
 
         assert "register_0" in derived
-        serving = derived["register_0"]["serving_container_image"]
-        assert "-serving:" in serving
-        assert "sklearn" not in serving
+        assert "serving_container_image" in derived["register_0"]
 
-    def test_deploy_model_gets_serving_image(self, mock_context, tmp_path):
-        """DeployModel step uses the dedicated serving image as default."""
+    def test_deploy_model_does_not_get_serving_image(self, mock_context, tmp_path):
+        """DeployModel gets model_display_name and endpoint_display_name only — NO serving image.
+
+        Client design principle: RegisterModel is the SINGLE OWNER of the serving image.
+        """
         compiler = PipelineCompiler(output_dir=tmp_path)
-        dep = DeployModel(component_name="deploy_step", endpoint_name="ep")
+        dep = DeployModel(component_name="deploy_step", model_name="test")
         defn = Pipeline(name="deploy-pipe").add(dep, name="deploy_0").build()
 
         derived = compiler._build_derived_params(
-            mock_context, defn, defn.steps, pipeline_dir=None,
-            serving_image="us-central1-docker.pkg.dev/proj/repo/deploy-pipe-serving:tag",
+            mock_context,
+            defn,
+            defn.steps,
+            pipeline_dir=None,
+            default_image="us-central1-docker.pkg.dev/proj/repo/train:tag",
         )
 
         assert "deploy_0" in derived
-        serving = derived["deploy_0"]["serving_container_image"]
-        assert "-serving:" in serving
-        assert "sklearn" not in serving
+        assert "model_display_name" in derived["deploy_0"]
+        assert "endpoint_display_name" in derived["deploy_0"]
+        assert "serving_container_image" not in derived["deploy_0"]
 
     def test_explicit_serving_image_not_overridden(self, mock_context, tmp_path):
-        """If component already sets serving_container_image, compiler does not override."""
+        """If RegisterModel already sets serving_container_image, compiler does not override."""
         compiler = PipelineCompiler(output_dir=tmp_path)
         reg = RegisterModel(
             component_name="register_step",
@@ -163,8 +168,11 @@ class TestBuildDerivedParamsServingImage:
         defn = Pipeline(name="custom-pipe").add(reg, name="register_0").build()
 
         derived = compiler._build_derived_params(
-            mock_context, defn, defn.steps, pipeline_dir=None,
-            serving_image="us-central1-docker.pkg.dev/proj/repo/custom-pipe-serving:tag",
+            mock_context,
+            defn,
+            defn.steps,
+            pipeline_dir=None,
+            default_image="us-central1-docker.pkg.dev/proj/repo/train:tag",
         )
 
         # When explicit image is set, serving_container_image should NOT appear in derived

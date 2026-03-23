@@ -9,30 +9,31 @@ Replaces the dual PipelineCompiler/DAGCompiler path with a unified compile step:
 from __future__ import annotations
 
 import textwrap
-from dataclasses import dataclass, field
 from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from gcp_ml_framework.config import Environment
+from gcp_ml_framework.pipeline.builder import PipelineDefinition, PipelineStep
 from gcp_ml_framework.types import TaskType
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
-    from gcp_ml_framework.pipeline.builder import PipelineDefinition, PipelineStep
 
 
-@dataclass
-class CompilationResult:
+class CompilationResult(BaseModel):
     """Output of SmartCompiler.compile()."""
 
-    dag_path: Path            # Generated Airflow DAG .py
-    yaml_paths: list[Path] = field(default_factory=list)  # KFP YAML files (0 if pure @task)
+    dag_path: Path  # Generated Airflow DAG .py
+    yaml_paths: list[Path] = Field(default_factory=list)  # KFP YAML files (0 if pure @task)
 
 
-@dataclass
-class _StepGroup:
+class _StepGroup(BaseModel):
     """A consecutive run of steps sharing the same task_type."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     task_type: TaskType
     steps: list[PipelineStep]
@@ -62,6 +63,9 @@ class SmartCompiler:
         pipeline_dir: Path | None = None,
     ) -> CompilationResult:
         """Compile a pipeline definition to DAG + optional YAML files."""
+        # Validate: loop/condition blocks must not contain @task steps
+        self._validate_control_flow(pipeline_def)
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.dags_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,29 +75,44 @@ class SmartCompiler:
         # Compile ML_TASK groups to KFP YAML
         for group in groups:
             if group.task_type == TaskType.ML_TASK:
-                yaml_path = self._compile_ml_group(
-                    group, pipeline_def, context, pipeline_dir
-                )
+                yaml_path = self._compile_ml_group(group, pipeline_def, context, pipeline_dir)
                 yaml_paths.append(yaml_path)
 
         # Generate the orchestrating Airflow DAG
-        dag_path = self._generate_dag(
-            groups, pipeline_def, context, yaml_paths, pipeline_dir
-        )
+        dag_path = self._generate_dag(groups, pipeline_def, context, yaml_paths, pipeline_dir)
 
         return CompilationResult(dag_path=dag_path, yaml_paths=yaml_paths)
+
+    @staticmethod
+    def _validate_control_flow(pipeline_def: PipelineDefinition) -> None:
+        """Validate that loop/condition blocks contain only @ml_task steps."""
+        for loop_block in pipeline_def.loop_blocks:
+            for step in loop_block.steps:
+                if step.task_type == TaskType.TASK:
+                    raise NotImplementedError(
+                        f"for_each() only supports @ml_task steps. "
+                        f"'{step.name}' is @task (Airflow operator) — "
+                        f"cannot be dynamically unrolled at compile time."
+                    )
+        for cond_block in pipeline_def.condition_blocks:
+            for step in cond_block.then_steps + cond_block.else_steps:
+                if step.task_type == TaskType.TASK:
+                    raise NotImplementedError(
+                        f"condition() only supports @ml_task steps. "
+                        f"'{step.name}' is @task (Airflow operator)."
+                    )
 
     def _group_steps(self, steps: list[PipelineStep]) -> list[_StepGroup]:
         """Split steps into consecutive groups by task_type."""
         groups = []
-        for i, (task_type, group_iter) in enumerate(
-            groupby(steps, key=lambda s: s.task_type)
-        ):
-            groups.append(_StepGroup(
-                task_type=task_type,
-                steps=list(group_iter),
-                index=i,
-            ))
+        for i, (task_type, group_iter) in enumerate(groupby(steps, key=lambda s: s.task_type)):
+            groups.append(
+                _StepGroup(
+                    task_type=task_type,
+                    steps=list(group_iter),
+                    index=i,
+                )
+            )
         return groups
 
     def _compile_ml_group(
@@ -111,14 +130,10 @@ class SmartCompiler:
 
         # Create a sub-pipeline definition for this group
         ml_groups = [
-            g
-            for g in self._group_steps(pipeline_def.steps)
-            if g.task_type == TaskType.ML_TASK
+            g for g in self._group_steps(pipeline_def.steps) if g.task_type == TaskType.ML_TASK
         ]
         group_name = (
-            pipeline_def.name
-            if len(ml_groups) == 1
-            else f"{pipeline_def.name}_ml_{group.index}"
+            pipeline_def.name if len(ml_groups) == 1 else f"{pipeline_def.name}_ml_{group.index}"
         )
 
         sub_def = PipelineDef(
@@ -142,9 +157,7 @@ class SmartCompiler:
     ) -> Path:
         """Generate the Airflow DAG file."""
         dag_id = context.naming.dag_id(pipeline_def.name)
-        dag_content = self._render_dag(
-            groups, pipeline_def, context, yaml_paths, pipeline_dir
-        )
+        dag_content = self._render_dag(groups, pipeline_def, context, yaml_paths, pipeline_dir)
         dag_path = self.dags_dir / f"{dag_id}.py"
         dag_path.write_text(dag_content)
         return dag_path
@@ -167,7 +180,9 @@ class SmartCompiler:
             schedule = repr(pipeline_def.schedule)
 
         tags = [
-            context.naming.team, context.naming.project, context.naming.branch
+            context.naming.team,
+            context.naming.project,
+            context.naming.branch,
         ] + pipeline_def.tags
 
         imports: set[str] = set()
@@ -189,8 +204,11 @@ class SmartCompiler:
                     bridged["model_uri"] = last_model_output
 
                 block, group_imports, name = self._render_ml_group(
-                    group, pipeline_def, context,
-                    yaml_paths[yaml_index], bridged,
+                    group,
+                    pipeline_def,
+                    context,
+                    yaml_paths[yaml_index],
+                    bridged,
                 )
                 yaml_index += 1
                 task_blocks.append(block)
@@ -203,9 +221,7 @@ class SmartCompiler:
                     if output:
                         last_dataset_output = output
 
-                    block, step_imports, name = self._render_task_step(
-                        step, context, pipeline_dir
-                    )
+                    block, step_imports, name = self._render_task_step(step, context, pipeline_dir)
                     task_blocks.append(block)
                     imports.update(step_imports)
                     task_names.append(name)
@@ -285,15 +301,9 @@ with DAG(
         """
         component = step.component
         if hasattr(component, "destination_table") and component.destination_table:
-            return (
-                f"{context.gcp_project}.{context.bq_dataset}"
-                f".{component.destination_table}"
-            )
+            return f"{context.gcp_project}.{context.bq_dataset}.{component.destination_table}"
         if hasattr(component, "output_table") and component.output_table:
-            return (
-                f"{context.gcp_project}.{context.bq_dataset}"
-                f".{component.output_table}"
-            )
+            return f"{context.gcp_project}.{context.bq_dataset}.{component.output_table}"
         return None
 
     def _render_ml_group(
@@ -311,9 +321,7 @@ with DAG(
             " import RunPipelineJobOperator",
         }
 
-        ml_group_count = sum(
-            1 for s in pipeline_def.steps if s.task_type == TaskType.ML_TASK
-        )
+        ml_group_count = sum(1 for s in pipeline_def.steps if s.task_type == TaskType.ML_TASK)
         # Use a simple name if there's only one ML group
         if ml_group_count == len(pipeline_def.steps):
             task_id = "run_vertex_pipeline"

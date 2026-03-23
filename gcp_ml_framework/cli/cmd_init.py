@@ -17,23 +17,19 @@ _DOT_ENV = """\
 # This file is gitignored — never commit real values.
 
 # --- Identity (required) ---
-GML_TEAM={team}
-GML_PROJECT={project}
+TEAM={team}
+PROJECT={project}
 
 # --- Environment ---
-GML_ENVIRONMENT=dev
+ENVIRONMENT=dev
 
-# --- GCP Project IDs ---
-GML_GCP__DEV_PROJECT_ID={dev_project}
-GML_GCP__STAGING_PROJECT_ID={staging_project}
-GML_GCP__PROD_PROJECT_ID={prod_project}
+# --- GCP ---
+GCP_PROJECT_ID={gcp_project}
+GCP_REGION=us-central1
 
-# --- GCP Region ---
-GML_GCP__REGION=us-central1
-
-# --- Cloud Composer (fill after Terraform provisions) ---
-# GML_GCP__COMPOSER_ENVIRONMENT_NAME=
-# GML_GCP__COMPOSER_DAGS_PATH__DEV=gs://composer-bucket/dags
+# --- Cloud Composer (fill after provisioning) ---
+# GCP_COMPOSER_DAGS_PATH=gs://composer-bucket/dags
+# GCP_PIPELINE_SERVICE_ACCOUNT_EMAIL=sa@project.iam.gserviceaccount.com
 """
 
 _PIPELINE_PY = """\
@@ -54,7 +50,7 @@ pipeline = (
         metrics=["auc", "f1"],
         gate={{"auc": 0.75}},
     ))
-    .add(DeployModel(endpoint_name="{name}-endpoint"))
+    .add(DeployModel(model_name="{name}"))
     .build()
 )
 """
@@ -102,9 +98,10 @@ permissions:
   id-token: write
 
 env:
-  GML_GCP__DEV_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_DEV }}}}
-  GML_TEAM: ${{{{ vars.GML_TEAM }}}}
-  GML_PROJECT: ${{{{ vars.GML_PROJECT }}}}
+  GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+  TEAM: ${{{{ vars.TEAM }}}}
+  PROJECT: ${{{{ vars.PROJECT }}}}
+  ENVIRONMENT: dev
 
 jobs:
   ci-dev:
@@ -135,9 +132,10 @@ permissions:
   id-token: write
 
 env:
-  GML_GCP__STAGING_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_STAGING }}}}
-  GML_TEAM: ${{{{ vars.GML_TEAM }}}}
-  GML_PROJECT: ${{{{ vars.GML_PROJECT }}}}
+  GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+  TEAM: ${{{{ vars.TEAM }}}}
+  PROJECT: ${{{{ vars.PROJECT }}}}
+  ENVIRONMENT: staging
 
 jobs:
   ci-stage:
@@ -176,8 +174,8 @@ jobs:
           workload_identity_provider: ${{{{ secrets.WIF_PROVIDER_PROD }}}}
           service_account: ${{{{ secrets.SA_EMAIL_PROD }}}}
         env:
-          GML_GCP__STAGING_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_STAGING }}}}
-          GML_GCP__PROD_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_PROD }}}}
+          GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+          ENVIRONMENT: prod
       - run: uv sync
       # TODO: gml promote is not yet implemented
       # - run: gml promote --from main --to prod --tag ${{{{ github.ref_name }}}}
@@ -208,7 +206,8 @@ jobs:
           workload_identity_provider: ${{{{ secrets.WIF_PROVIDER_DEV }}}}
           service_account: ${{{{ secrets.SA_EMAIL_DEV }}}}
         env:
-          GML_GCP__DEV_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_DEV }}}}
+          GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+          ENVIRONMENT: dev
       - run: uv sync
       - run: gml teardown --branch ${{{{ github.head_ref }}}} --confirm
 """
@@ -229,13 +228,17 @@ compiled_pipelines/
 
 # ── Commands ───────────────────────────────────────────────────────────────────
 
+
 @init_app.command("project")
 def init_project(
     team: str = typer.Argument(..., help="Team slug (e.g. 'dsci')"),
     project: str = typer.Argument(..., help="Project name (e.g. 'churn-pred')"),
-    dev_project: str = typer.Option(..., "--dev-project", help="DEV GCP project ID"),
-    staging_project: str = typer.Option("", "--staging-project", help="STAGING GCP project ID"),
-    prod_project: str = typer.Option("", "--prod-project", help="PROD GCP project ID"),
+    gcp_project: str = typer.Option(
+        ...,
+        "--dev-project",
+        "--gcp-project",
+        help="GCP project ID",
+    ),
     output_dir: Path = typer.Option(Path("."), "--out", "-o", help="Output directory"),
 ) -> None:
     """
@@ -244,20 +247,19 @@ def init_project(
     Creates .env, feature_schemas/, CI/CD workflows, and an example pipeline.
 
     Example:
-        gml init project dsci churn-pred --dev-project my-gcp-dev
+        gml init project dsci churn-pred --gcp-project my-gcp-dev
     """
-    staging_project = staging_project or f"{dev_project}-staging"
-    prod_project = prod_project or f"{dev_project}-prod"
-
     root = output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
 
-    _write(root / ".env", _DOT_ENV.format(
-        team=team, project=project,
-        dev_project=dev_project,
-        staging_project=staging_project,
-        prod_project=prod_project,
-    ))
+    _write(
+        root / ".env",
+        _DOT_ENV.format(
+            team=team,
+            project=project,
+            gcp_project=gcp_project,
+        ),
+    )
     _write(root / ".python-version", "3.12\n")
     _write(root / ".gitignore", _GITIGNORE)
     _write(root / ".env.example", Path(__file__).parent.parent.parent / ".env.example")
@@ -285,9 +287,7 @@ def init_project(
 
 @init_app.command("pipeline")
 def init_pipeline(
-    name: str = typer.Argument(
-        ..., help="Pipeline name (snake_case, e.g. 'churn_prediction')"
-    ),
+    name: str = typer.Argument(..., help="Pipeline name (snake_case, e.g. 'churn_prediction')"),
     output_dir: Path = typer.Option(Path("pipelines"), "--out", "-o"),
 ) -> None:
     """
@@ -311,14 +311,8 @@ def init_pipeline(
         "  -- add features here\n"
         "FROM `{{bq_dataset}}.raw_events`\n",
     )
-    console.print(
-        f"\n[bold green]Pipeline '{name}' scaffolded "
-        f"at {pipeline_dir}[/bold green]\n"
-    )
-    console.print(
-        f"  Edit [cyan]pipelines/{name}/pipeline.py[/cyan] "
-        "to define your steps.\n"
-    )
+    console.print(f"\n[bold green]Pipeline '{name}' scaffolded at {pipeline_dir}[/bold green]\n")
+    console.print(f"  Edit [cyan]pipelines/{name}/pipeline.py[/cyan] to define your steps.\n")
 
 
 def _write(path: Path, content) -> None:

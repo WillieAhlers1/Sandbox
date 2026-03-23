@@ -25,9 +25,7 @@ class TestTrainingPipelineE2E:
         import importlib.util
         import sys
 
-        spec = importlib.util.spec_from_file_location(
-            "_pipeline_e2e", pipeline_dir / "pipeline.py"
-        )
+        spec = importlib.util.spec_from_file_location("_pipeline_e2e", pipeline_dir / "pipeline.py")
         mod = importlib.util.module_from_spec(spec)
         sys.modules["_pipeline_e2e"] = mod
         spec.loader.exec_module(mod)
@@ -49,8 +47,14 @@ class TestTrainingPipelineE2E:
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "gcp_ml_framework.cli.main",
-             "run", "training_pipeline", "--local"],
+            [
+                sys.executable,
+                "-m",
+                "gcp_ml_framework.cli.main",
+                "run",
+                "training_pipeline",
+                "--local",
+            ],
             capture_output=True,
             text=True,
             timeout=120,

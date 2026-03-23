@@ -36,7 +36,7 @@ class TestTaskDecorator:
         class MyTask(BaseComponent):
             component_name: str = "my_task"
 
-        assert MyTask._task_type == TaskType.TASK
+        assert MyTask.task_type == TaskType.TASK
 
     def test_task_returns_class(self):
         @task
@@ -54,14 +54,16 @@ class TestTaskDecorator:
 class TestMlTaskDecorator:
     def test_ml_task_sets_type_bare(self):
         """@ml_task without arguments."""
+
         @ml_task
         class MyMLTask(BaseComponent):
             component_name: str = "my_ml_task"
 
-        assert MyMLTask._task_type == TaskType.ML_TASK
+        assert MyMLTask.task_type == TaskType.ML_TASK
 
     def test_ml_task_with_resource_params(self):
         """@ml_task(machine_type=...) overrides field defaults."""
+
         @ml_task(
             machine_type="a2-highgpu-1g",
             accelerator_type="NVIDIA_TESLA_A100",
@@ -70,7 +72,7 @@ class TestMlTaskDecorator:
         class BigMLTask(BaseComponent):
             component_name: str = "big_ml"
 
-        assert BigMLTask._task_type == TaskType.ML_TASK
+        assert BigMLTask.task_type == TaskType.ML_TASK
         # Field defaults should be overridden
         instance = BigMLTask(component_name="big_ml")
         assert instance.machine_type == "a2-highgpu-1g"
@@ -84,9 +86,9 @@ class TestMlTaskDecorator:
 
 
 class TestDefaultTaskTypes:
-    def test_base_component_default_ml_task(self):
-        """BaseComponent defaults to ML_TASK."""
-        assert BaseComponent._task_type == TaskType.ML_TASK
+    def test_base_component_default_task(self):
+        """BaseComponent defaults to TASK."""
+        assert BaseComponent.task_type == TaskType.TASK
 
     def test_ml_components_are_ml_task(self):
         """TrainModel, EvaluateModel, RegisterModel, DeployModel inherit ML_TASK."""
@@ -95,10 +97,10 @@ class TestDefaultTaskTypes:
         from gcp_ml_framework.components.ml.register import RegisterModel
         from gcp_ml_framework.components.ml.train import TrainModel
 
-        assert TrainModel._task_type == TaskType.ML_TASK
-        assert EvaluateModel._task_type == TaskType.ML_TASK
-        assert RegisterModel._task_type == TaskType.ML_TASK
-        assert DeployModel._task_type == TaskType.ML_TASK
+        assert TrainModel.task_type == TaskType.ML_TASK
+        assert EvaluateModel.task_type == TaskType.ML_TASK
+        assert RegisterModel.task_type == TaskType.ML_TASK
+        assert DeployModel.task_type == TaskType.ML_TASK
 
     def test_ml_components_have_explicit_decorator(self):
         """ML components should have @ml_task applied directly, not inherited."""
@@ -108,8 +110,8 @@ class TestDefaultTaskTypes:
         from gcp_ml_framework.components.ml.train import TrainModel
 
         for cls in [TrainModel, EvaluateModel, RegisterModel, DeployModel]:
-            assert "_task_type" in cls.__dict__, (
-                f"{cls.__name__} should have @ml_task decorator (own _task_type), "
+            assert "task_type" in cls.__dict__, (
+                f"{cls.__name__} should have @ml_task decorator (own task_type), "
                 f"not just inherit from BaseComponent"
             )
 
@@ -118,13 +120,13 @@ class TestDefaultTaskTypes:
         from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
         from gcp_ml_framework.components.transformation.bq_transform import BQTransform
 
-        assert BQTransform._task_type == TaskType.TASK
-        assert WriteFeatures._task_type == TaskType.TASK
+        assert BQTransform.task_type == TaskType.TASK
+        assert WriteFeatures.task_type == TaskType.TASK
 
     def test_operator_components_are_task(self):
         """BQQuery and Email are @task."""
         from gcp_ml_framework.components.operators.bq_query import BQQuery
         from gcp_ml_framework.components.operators.email import Email
 
-        assert BQQuery._task_type == TaskType.TASK
-        assert Email._task_type == TaskType.TASK
+        assert BQQuery.task_type == TaskType.TASK
+        assert Email.task_type == TaskType.TASK

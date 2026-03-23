@@ -96,6 +96,7 @@ class TestEvaluateModelLifecycle:
     @patch("gcp_ml_framework.utils.evaluate.run_evaluate")
     def test_subclass_run_override(self, mock_run_evaluate: MagicMock):
         """Data scientist subclass overriding run() should have custom code execute."""
+
         class CustomEval(EvaluateModel):
             def run(self) -> None:
                 self._custom_called = True
@@ -143,12 +144,8 @@ class TestEvaluateModelExperiments:
             em.execute()
 
             mock_aip.init.assert_called_once()
-            mock_aip.start_run.assert_called_once_with(
-                run="train-2026-03-21", resume=True
-            )
-            mock_aip.log_metrics.assert_called_once_with(
-                {"rmse": 42.0, "r2": 0.95}
-            )
+            mock_aip.start_run.assert_called_once_with(run="train-2026-03-21", resume=True)
+            mock_aip.log_metrics.assert_called_once_with({"rmse": 42.0, "r2": 0.95})
         finally:
             if original_module is None:
                 sys.modules.pop(token, None)
@@ -171,6 +168,7 @@ class TestEvaluateModelExperiments:
         sys.modules[token] = mock_aip
         google.cloud.aiplatform = mock_aip
         try:
+
             class _NoOpEval(EvaluateModel):
                 def run(self) -> None:
                     pass

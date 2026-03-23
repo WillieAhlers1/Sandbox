@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, TypeVar, overload
+from collections.abc import Callable
+from typing import TypeVar, overload
 
 from gcp_ml_framework.types import TaskType
-
-if TYPE_CHECKING:
-    from gcp_ml_framework.components.base import BaseComponent
 
 _C = TypeVar("_C")
 
 
-def task(cls: _C) -> _C:
+def task(cls: _C) -> _C:  # noqa: UP047
     """Mark a component class as an Airflow operator task.
 
     Components decorated with @task are compiled to native Airflow operators
@@ -24,12 +22,13 @@ def task(cls: _C) -> _C:
         class BQQuery(BaseComponent):
             ...
     """
-    cls.task_type = TaskType.TASK
+    cls.task_type = TaskType.TASK  # type: ignore[attr-defined]
     return cls
 
 
 @overload
-def ml_task(_cls: _C) -> _C: ...
+def ml_task(_cls: _C) -> _C: ...  # noqa: UP047
+
 
 @overload
 def ml_task(
@@ -40,7 +39,8 @@ def ml_task(
     accelerator_count: int | None = None,
 ) -> Callable[[_C], _C]: ...
 
-def ml_task(
+
+def ml_task(  # noqa: UP047
     _cls: _C | None = None,
     *,
     machine_type: str | None = None,
@@ -60,19 +60,19 @@ def ml_task(
     """
 
     def decorator(cls: _C) -> _C:
-        cls.task_type = TaskType.ML_TASK
+        cls.task_type = TaskType.ML_TASK  # type: ignore[attr-defined]
         needs_rebuild = False
         if machine_type is not None:
-            cls.model_fields["machine_type"].default = machine_type
+            cls.model_fields["machine_type"].default = machine_type  # type: ignore[attr-defined]
             needs_rebuild = True
         if accelerator_type is not None:
-            cls.model_fields["accelerator_type"].default = accelerator_type
+            cls.model_fields["accelerator_type"].default = accelerator_type  # type: ignore[attr-defined]
             needs_rebuild = True
         if accelerator_count is not None:
-            cls.model_fields["accelerator_count"].default = accelerator_count
+            cls.model_fields["accelerator_count"].default = accelerator_count  # type: ignore[attr-defined]
             needs_rebuild = True
         if needs_rebuild:
-            cls.model_rebuild(force=True)
+            cls.model_rebuild(force=True)  # type: ignore[attr-defined]
         return cls
 
     if _cls is not None:

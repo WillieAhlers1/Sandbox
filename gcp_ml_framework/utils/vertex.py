@@ -57,10 +57,14 @@ def run_deploy(
         project=project,
         location=region,
     )
-    endpoint = existing[0] if existing else aiplatform.Endpoint.create(
-        display_name=endpoint_display_name,
-        project=project,
-        location=region,
+    endpoint = (
+        existing[0]
+        if existing
+        else aiplatform.Endpoint.create(
+            display_name=endpoint_display_name,
+            project=project,
+            location=region,
+        )
     )
 
     endpoint.deploy(
@@ -99,9 +103,24 @@ def run_deploy(
                         "user_emails": [monitoring_alert_email],
                     },
                 }
+            if monitoring_skew_thresholds or monitoring_drift_thresholds:
+                objective_config: dict = {}
+                if monitoring_skew_thresholds:
+                    objective_config["training_prediction_skew_detection_config"] = {
+                        "skew_thresholds": {
+                            k: {"value": v} for k, v in monitoring_skew_thresholds.items()
+                        },
+                    }
+                if monitoring_drift_thresholds:
+                    objective_config["prediction_drift_detection_config"] = {
+                        "drift_thresholds": {
+                            k: {"value": v} for k, v in monitoring_drift_thresholds.items()
+                        },
+                    }
+                create_kwargs["objective_configs"] = objective_config
             monitoring_job = aiplatform.ModelDeploymentMonitoringJob.create(
                 **create_kwargs,
             )
             logger.info("Created monitoring job: %s", monitoring_job.resource_name)
-        except Exception:
+        except (ValueError, AttributeError):
             logger.warning("Monitoring job creation failed (non-fatal)", exc_info=True)

@@ -26,6 +26,7 @@ def show(
 
     if json_output:
         import json
+
         typer.echo(json.dumps(ctx.summary(), indent=2))
         return
 
@@ -35,32 +36,39 @@ def show(
         f"branch [yellow]{ctx.raw_branch!r}[/yellow]"
     )
     console.print()
-    print_kv_table("Identity", {
-        "team": ctx.naming.team,
-        "project": ctx.naming.project,
-        "branch (raw)": ctx.raw_branch,
-        "branch (slug)": ctx.naming.branch,
-        "environment": ctx.environment.value.upper(),
-    })
+    print_kv_table(
+        "Identity",
+        {
+            "team": ctx.naming.team,
+            "project": ctx.naming.project,
+            "branch (raw)": ctx.raw_branch,
+            "branch (slug)": ctx.naming.branch,
+            "environment": ctx.environment.value.upper(),
+        },
+    )
     console.print()
-    print_kv_table("GCP", {
-        "project": ctx.gcp_project,
-        "region": ctx.region,
-        "composer_dags_path": (
-            str(ctx.composer_dags_path)
-            if ctx.composer_dags_path
-            else "(not configured)"
-        ),
-    })
+    print_kv_table(
+        "GCP",
+        {
+            "project": ctx.gcp_project,
+            "region": ctx.region,
+            "composer_dags_path": (
+                str(ctx.composer_dags_path) if ctx.composer_dags_path else "(not configured)"
+            ),
+        },
+    )
     console.print()
-    print_kv_table("Resource Names", {
-        "namespace": ctx.namespace,
-        "gcs_bucket": ctx.naming.gcs_bucket,
-        "gcs_prefix": ctx.gcs_prefix,
-        "bq_dataset": ctx.bq_dataset,
-        "feature_store_id": ctx.feature_store_id,
-        "dag_id pattern": ctx.naming.dag_id("{pipeline}"),
-        "vertex_experiment pattern": ctx.naming.vertex_experiment("{pipeline}"),
-        "secret_prefix": ctx.secret_prefix,
-    })
+    print_kv_table(
+        "Resource Names",
+        {
+            "namespace": ctx.namespace,
+            "gcs_bucket": ctx.naming.gcs_bucket,
+            "gcs_prefix": ctx.gcs_prefix,
+            "bq_dataset": ctx.bq_dataset,
+            "feature_store_id": ctx.feature_store_id,
+            "dag_id pattern": ctx.naming.dag_id("{pipeline}"),
+            "vertex_experiment pattern": ctx.naming.vertex_experiment("{pipeline}"),
+            "secret_prefix": ctx.secret_prefix,
+        },
+    )
     console.print()

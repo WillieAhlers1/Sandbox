@@ -43,11 +43,27 @@ class Email(BaseComponent):
         return self
 
     def resolve_subject(self, context: MLContext) -> str:
+        """Resolve template variables in the email subject line.
+
+        Args:
+            context: Runtime context providing template variable values.
+
+        Returns:
+            Subject string with framework variables replaced.
+        """
         from gcp_ml_framework.components.operators.bq_query import _resolve_templates
 
         return _resolve_templates(self.subject, context)
 
     def resolve_body(self, context: MLContext) -> str:
+        """Resolve template variables in the email body.
+
+        Args:
+            context: Runtime context providing template variable values.
+
+        Returns:
+            Body string with framework variables replaced.
+        """
         from gcp_ml_framework.components.operators.bq_query import _resolve_templates
 
         return _resolve_templates(self.body, context)
@@ -60,7 +76,9 @@ class Email(BaseComponent):
         )
 
     def render_operator(
-        self, context: MLContext, pipeline_dir: Path | None = None,
+        self,
+        context: MLContext,
+        pipeline_dir: Path | None = None,
     ) -> tuple[str, set[str]]:
         """Return (operator_code, imports) for Airflow DAG generation."""
         imports = {
@@ -79,3 +97,7 @@ class Email(BaseComponent):
     )"""
 
         return code, imports
+
+
+if __name__ == "__main__":
+    Email.cli()

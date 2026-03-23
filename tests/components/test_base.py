@@ -40,7 +40,7 @@ class TestBaseComponentFlatResourceFields:
         # Internal defaults
         assert comp.timeout_seconds == 3600
         assert comp.retry_count == 1
-        assert comp.cache_enabled is True
+        assert comp.cache_enabled is False
         assert comp.component_name == ""
         assert comp.component_version == "v1"
         # Universal param defaults
@@ -57,15 +57,36 @@ class TestInternalFields:
     """Verify the _INTERNAL_FIELDS set contains exactly the expected entries."""
 
     def test_internal_fields_set(self):
-        """_INTERNAL_FIELDS contains the five expected entries and NOT machine_type."""
+        """_INTERNAL_FIELDS contains the expected entries and NOT resource fields."""
         expected = {
-            "component_name", "component_version",
-            "timeout_seconds", "retry_count", "cache_enabled",
+            "component_name",
+            "component_version",
+            "timeout_seconds",
+            "retry_count",
+            "cache_enabled",
+            "runtime_dockerfile",
+            "serving_dockerfile",
+            "model_name",
         }
         assert _INTERNAL_FIELDS == expected
         assert "machine_type" not in _INTERNAL_FIELDS
         assert "accelerator_type" not in _INTERNAL_FIELDS
         assert "accelerator_count" not in _INTERNAL_FIELDS
+
+    def test_internal_fields_all_exist_on_some_component(self):
+        """Every _INTERNAL_FIELDS entry must be a field on BaseComponent or a subclass."""
+        from gcp_ml_framework.components.ml.deploy import DeployModel
+        from gcp_ml_framework.components.ml.register import RegisterModel
+
+        all_fields: set[str] = set()
+        for cls in (BaseComponent, RegisterModel, DeployModel):
+            all_fields.update(cls.model_fields.keys())
+
+        for field_name in _INTERNAL_FIELDS:
+            assert field_name in all_fields, (
+                f"_INTERNAL_FIELDS contains '{field_name}' which is not a field "
+                "on BaseComponent, RegisterModel, or DeployModel"
+            )
 
 
 # ---------------------------------------------------------------------------

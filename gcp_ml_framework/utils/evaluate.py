@@ -71,8 +71,7 @@ def run_evaluate(
 
     # Drop non-feature columns
     drop_cols = [
-        c for c in ["user_id", "feature_timestamp", "processed_at"]
-        if c in x_features.columns
+        c for c in ["user_id", "feature_timestamp", "processed_at"] if c in x_features.columns
     ]
     x_features = x_features.drop(columns=drop_cols, errors="ignore")
 
@@ -111,13 +110,9 @@ def run_evaluate(
         if metric in computed:
             if metric in regression_lower_is_better:
                 if computed[metric] > threshold:
-                    failures.append(
-                        f"{metric}={computed[metric]:.4f} > threshold={threshold}"
-                    )
+                    failures.append(f"{metric}={computed[metric]:.4f} > threshold={threshold}")
             elif computed[metric] < threshold:
-                failures.append(
-                    f"{metric}={computed[metric]:.4f} < threshold={threshold}"
-                )
+                failures.append(f"{metric}={computed[metric]:.4f} < threshold={threshold}")
 
     if failures:
         raise ValueError(f"Model failed evaluation gates: {', '.join(failures)}")

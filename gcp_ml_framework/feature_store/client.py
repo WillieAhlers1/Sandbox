@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-# Change: Replace print() with loguru
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -54,9 +53,7 @@ class FeatureStoreClient:
             ) from exc
         aiplatform.init(project=self._project, location=self._region)
 
-    def _create_or_get_feature_group(
-        self, name: str, bq_table: str
-    ) -> Any:
+    def _create_or_get_feature_group(self, name: str, bq_table: str) -> Any:
         """Create or get a FeatureGroup backed by a BQ table."""
         self._init_aiplatform()
         from google.cloud.aiplatform_v1beta1 import (
@@ -79,7 +76,7 @@ class FeatureStoreClient:
         feature_group_name = f"{parent}/featureGroups/{name}"
         try:
             return client.get_feature_group(name=feature_group_name)
-        except Exception:
+        except Exception:  # Create-or-get: SDK doesn't expose a specific "not found" exception
             pass
 
         # Create new FeatureGroup backed by BQ table
@@ -133,14 +130,13 @@ class FeatureStoreClient:
         )
 
         online_store_name = (
-            f"projects/{self._project}/locations/{self._region}"
-            f"/featureOnlineStores/{self._fs_id}"
+            f"projects/{self._project}/locations/{self._region}/featureOnlineStores/{self._fs_id}"
         )
 
         # Ensure FeatureOnlineStore exists
         try:
             client.get_feature_online_store(name=online_store_name)
-        except Exception:
+        except Exception:  # Create-or-get: SDK doesn't expose a specific "not found" exception
             parent = f"projects/{self._project}/locations/{self._region}"
             store = fos_pb2.FeatureOnlineStore(
                 bigtable=fos_pb2.FeatureOnlineStore.Bigtable(
@@ -163,7 +159,7 @@ class FeatureStoreClient:
 
         try:
             return client.get_feature_view(name=view_name)
-        except Exception:
+        except Exception:  # Create-or-get: SDK doesn't expose a specific "not found" exception
             pass
 
         feature_view = feature_view_pb2.FeatureView(
@@ -208,15 +204,19 @@ class FeatureStoreClient:
         results = {}
         for group_name in schema.feature_groups:
             bq_table = (
-                f"{self._project}.{self._naming.bq_dataset}"
-                f".feat_{schema.entity}_{group_name}"
+                f"{self._project}.{self._naming.bq_dataset}.feat_{schema.entity}_{group_name}"
             )
             fg_id = f"{schema.entity}_{group_name}"
             results[group_name] = self.ensure_feature_group(fg_id, bq_table)
         return results
 
     def trigger_sync(self, entity: str, feature_group: str) -> None:
-        """Manually trigger a sync for a FeatureView."""
+        """Manually trigger a BigQuery-to-online-store sync for a FeatureView.
+
+        Args:
+            entity: Entity type identifier (e.g. "user").
+            feature_group: Feature group name (e.g. "behavioral").
+        """
         self._init_aiplatform()
         view_id = self._naming.feature_view_id(entity, feature_group)
         logger.info(f"Triggering sync for view: {view_id}")

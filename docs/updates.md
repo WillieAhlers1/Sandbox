@@ -45,14 +45,14 @@
 
 ## 5.0 [P2] Artifact Registry Repository and GCS Bucket Provisioning
 
-**Problem:** `gml deploy` and `docker_build.sh --push` failed because the Artifact Registry repository (`mlplatform-third-run`) and GCS bucket (`prj-0n-dta-pt-ai-sandbox-mlplatform-third-run`) did not exist in the target GCP project.
+**Problem:** `gml deploy` and `docker_build.sh --push` failed because the Artifact Registry repository (`mlplatform-third-run`) and GCS bucket (`your-gcp-project-id-mlplatform-third-run`) did not exist in the target GCP project.
 
 **Solution:** Created the missing resources manually. Long-term these should be provisioned via Terraform.
 
 **Changes:**
 
-- Created AR repository: `gcloud artifacts repositories create mlplatform-third-run --repository-format=docker --location=us-east4 --project=prj-0n-dta-pt-ai-sandbox`
-- Created GCS bucket: `gcloud storage buckets create gs://prj-0n-dta-pt-ai-sandbox-mlplatform-third-run --project=prj-0n-dta-pt-ai-sandbox --location=us-east4`
+- Created AR repository: `gcloud artifacts repositories create mlplatform-third-run --repository-format=docker --location=us-east4 --project=your-gcp-project-id`
+- Created GCS bucket: `gcloud storage buckets create gs://your-gcp-project-id-mlplatform-third-run --project=your-gcp-project-id --location=us-east4`
 
 ---
 
@@ -68,7 +68,7 @@
 
 ## 7.0 [P1] Pipeline Service Account Override for Vertex AI / Cloud Build
 
-**Problem:** The default Vertex AI service account lacks Artifact Writer permissions required for Cloud Build. The derived pipeline SA (`{team}-{project}-{env}-pipeline@...`) may not have the correct permissions in sandbox environments. Teams need to use a specific pre-provisioned SA (e.g., `gc-sa-for-dta-gdpgenie@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com`) instead.
+**Problem:** The default Vertex AI service account lacks Artifact Writer permissions required for Cloud Build. The derived pipeline SA (`{team}-{project}-{env}-pipeline@...`) may not have the correct permissions in sandbox environments. Teams need to use a specific pre-provisioned SA (e.g., `your-sa@your-gcp-project-id.iam.gserviceaccount.com`) instead.
 
 **Solution:** Added an optional `pipeline_service_account_email` field to `GCPConfig`. When set, it overrides the naming-convention-derived SA. When blank, the framework falls back to the existing derivation logic (`{team}-{project}-{env}-pipeline@{project}.iam.gserviceaccount.com`).
 
@@ -79,7 +79,7 @@
   - Added `pipeline_service_account_email: str = ""` field.
   - `from_config`: Passes `cfg.gcp.pipeline_service_account_email` through to MLContext.
   - `pipeline_service_account` property: Returns the explicit override when set, otherwise falls back to the derived convention.
-- `.env`: Add `GCP_PIPELINE_SERVICE_ACCOUNT_EMAIL=gc-sa-for-dta-gdpgenie@prj-0n-dta-pt-ai-sandbox.iam.gserviceaccount.com`.
+- `.env`: Add `GCP_PIPELINE_SERVICE_ACCOUNT_EMAIL=your-sa@your-gcp-project-id.iam.gserviceaccount.com`.
 
 ---
 

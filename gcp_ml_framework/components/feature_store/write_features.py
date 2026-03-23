@@ -56,7 +56,9 @@ class WriteFeatures(BaseComponent):
         )
 
     def render_operator(
-        self, context: MLContext, pipeline_dir: Path | None = None,
+        self,
+        context: MLContext,
+        pipeline_dir: Path | None = None,
     ) -> tuple[str, set[str]]:
         """Return (operator_code, imports) for Airflow DAG generation.
 
@@ -67,13 +69,15 @@ class WriteFeatures(BaseComponent):
         imports = {"from airflow.operators.python import PythonOperator"}
 
         func_name = f"_write_features_{self.feature_group_id or self.component_name}"
-        code = f"""PythonOperator(
+        code = f"""def {func_name}(**kwargs):
+        pass  # WriteFeatures is metadata-only; no runtime action in DAG
+
+    PythonOperator(
         task_id="{{{{ task_id }}}}",
         python_callable={func_name},
     )"""
 
         return code, imports
-
 
 
 if __name__ == "__main__":

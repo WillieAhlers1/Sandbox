@@ -120,11 +120,7 @@ class TestLocalRunnerDefaults:
             def execute(self):
                 captured["run_date"] = self.run_date
 
-        defn = (
-            Pipeline(name="test")
-            .add(DateCapture(component_name="dc"), name="dc")
-            .build()
-        )
+        defn = Pipeline(name="test").add(DateCapture(component_name="dc"), name="dc").build()
         runner = LocalRunner()
         runner.run(defn, mock_context)
         assert captured["run_date"] == datetime.date.today().isoformat()

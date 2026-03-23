@@ -12,7 +12,7 @@
 # Environment variables:
 #   GCP_AR_HOST     — Artifact Registry host (e.g. us-east4-docker.pkg.dev)
 #   GCP_PROJECT_ID  — GCP project ID
-#   GCP_AR_REPO     — AR repository name (e.g. mlplatform-third-run)
+#   GCP_AR_REPO     — AR repository name (e.g. mlplatform-second-run)
 
 set -euo pipefail
 

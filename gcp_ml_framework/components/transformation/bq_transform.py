@@ -44,6 +44,9 @@ class BQTransform(BaseComponent):
     write_disposition: str = "WRITE_TRUNCATE"
     component_name: str = "bq_transform"
 
+    # Airflow connection ID for BigQuery operator
+    gcp_conn_id: str = "google_cloud_default"
+
     @model_validator(mode="after")
     def _check_sql_source(self) -> BQTransform:
         if not self.sql_file and not self.sql:
@@ -74,7 +77,9 @@ class BQTransform(BaseComponent):
         )
 
     def render_operator(
-        self, context: MLContext, pipeline_dir: Path | None = None,
+        self,
+        context: MLContext,
+        pipeline_dir: Path | None = None,
     ) -> tuple[str, set[str]]:
         """Return (operator_code, imports) for Airflow DAG generation."""
         from gcp_ml_framework.components.operators.bq_query import _resolve_templates
@@ -103,7 +108,7 @@ class BQTransform(BaseComponent):
             "writeDisposition": "{self.write_disposition}",
             "createDisposition": "CREATE_IF_NEEDED",
         }}}},
-        gcp_conn_id="google_cloud_default",
+        gcp_conn_id="{self.gcp_conn_id}",
     )"""
 
         return code, imports

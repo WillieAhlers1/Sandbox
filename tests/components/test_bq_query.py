@@ -20,7 +20,7 @@ pytestmark = pytest.mark.unit
 
 class TestBQQueryBasics:
     def test_is_task_type(self):
-        assert BQQuery._task_type == TaskType.TASK
+        assert BQQuery.task_type == TaskType.TASK
 
     def test_instantiation_with_sql(self):
         bq = BQQuery(sql="SELECT 1")
@@ -129,3 +129,28 @@ class TestBQQueryOutputTracking:
                 sys.modules.pop(token, None)
             else:
                 sys.modules[token] = original
+
+
+# ---------------------------------------------------------------------------
+# Template fields (gcs_prefix, namespace must be real fields)
+# ---------------------------------------------------------------------------
+
+
+class TestBQQueryTemplateFields:
+    def test_has_template_fields(self):
+        """BQQuery must have gcs_prefix and namespace as real Pydantic fields."""
+        assert "gcs_prefix" in BQQuery.model_fields, "gcs_prefix not a BQQuery field"
+        assert "namespace" in BQQuery.model_fields, "namespace not a BQQuery field"
+
+    def test_template_fields_default_empty(self):
+        """gcs_prefix and namespace default to empty string."""
+        bq = BQQuery(sql="SELECT 1")
+        assert bq.gcs_prefix == ""
+        assert bq.namespace == ""
+
+    def test_execute_no_getattr_fallback(self):
+        """execute() must use self.field directly, not getattr fallback."""
+        import inspect
+
+        src = inspect.getsource(BQQuery.execute)
+        assert "getattr" not in src, "execute() still uses getattr fallback instead of real fields"

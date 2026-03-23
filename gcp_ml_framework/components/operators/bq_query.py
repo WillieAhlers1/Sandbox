@@ -47,6 +47,13 @@ class BQQuery(BaseComponent):
     create_disposition: str = "CREATE_IF_NEEDED"
     component_name: str = "bq_query"
 
+    # Template variables for SQL resolution (injected by compiler/local_runner)
+    gcs_prefix: str = ""
+    namespace: str = ""
+
+    # Airflow connection ID for BigQuery operator
+    gcp_conn_id: str = "google_cloud_default"
+
     @model_validator(mode="after")
     def _check_sql_source(self) -> BQQuery:
         if self.sql and self.sql_file:
@@ -91,17 +98,15 @@ class BQQuery(BaseComponent):
         sql = self._load_sql()
         sql = sql.format(
             bq_dataset=self.dataset,
-            gcs_prefix=getattr(self, "gcs_prefix", ""),
-            namespace=getattr(self, "namespace", ""),
+            gcs_prefix=self.gcs_prefix,
+            namespace=self.namespace,
             run_date=self.run_date,
         )
         job_config = bigquery.QueryJobConfig(
             write_disposition=self.write_disposition,
         )
         if self.destination_table:
-            job_config.destination = (
-                f"{self.project}.{self.dataset}.{self.destination_table}"
-            )
+            job_config.destination = f"{self.project}.{self.dataset}.{self.destination_table}"
             job_config.create_disposition = self.create_disposition
         job = client.query(sql, job_config=job_config)
         job.result()  # block until done
@@ -114,7 +119,9 @@ class BQQuery(BaseComponent):
             )
 
     def render_operator(
-        self, context: MLContext, pipeline_dir: Path | None = None,
+        self,
+        context: MLContext,
+        pipeline_dir: Path | None = None,
     ) -> tuple[str, set[str]]:
         """Return (operator_code, imports) for Airflow DAG generation.
 
@@ -144,7 +151,7 @@ class BQQuery(BaseComponent):
         code = f"""BigQueryInsertJobOperator(
         task_id="{{{{ task_id }}}}",
         configuration={{"query": {query_config}}},
-        gcp_conn_id="google_cloud_default",
+        gcp_conn_id="{self.gcp_conn_id}",
     )"""
 
         return code, imports

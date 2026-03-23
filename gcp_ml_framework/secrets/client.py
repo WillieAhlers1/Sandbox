@@ -71,15 +71,15 @@ class SecretManagerClient:
 
         try:
             response = client.access_secret_version(request={"name": resource})
-            value = response.payload.data.decode("utf-8")
+            value = response.payload.data.decode("utf-8")  # type: ignore[no-any-return]
+        # Broad catch: Secret Manager raises NotFound, PermissionDenied, etc.
         except Exception as exc:
             raise RuntimeError(
-                f"Failed to retrieve secret '{key}' "
-                f"(resource: {resource}): {exc}"
+                f"Failed to retrieve secret '{key}' (resource: {resource}): {exc}"
             ) from exc
 
         self._cache[key] = value
-        return value
+        return value  # type: ignore[no-any-return]
 
     def get_or_default(self, key: str, default: str = "") -> str:
         """Like get(), but returns `default` instead of raising on missing secret."""
@@ -88,7 +88,7 @@ class SecretManagerClient:
         except RuntimeError:
             return default
 
-    def resolve_dict(self, data: dict) -> dict:
+    def resolve_dict(self, data: dict) -> dict:  # type: ignore[type-arg]
         """
         Recursively walk a dict and resolve any string value prefixed with '!secret '.
 
@@ -100,15 +100,16 @@ class SecretManagerClient:
         result = {}
         for k, v in data.items():
             if isinstance(v, str) and v.startswith("!secret "):
-                secret_key = v[len("!secret "):].strip()
+                secret_key = v[len("!secret ") :].strip()
                 result[k] = self.get(secret_key)
             elif isinstance(v, dict):
-                result[k] = self.resolve_dict(v)
+                result[k] = self.resolve_dict(v)  # type: ignore[assignment]
             else:
                 result[k] = v
         return result
 
     def clear_cache(self) -> None:
+        """Clear the in-memory secret cache."""
         self._cache.clear()
 
 
@@ -126,6 +127,14 @@ class LocalSecretClient:
         self._context = context
 
     def get(self, key: str) -> str:
+        """Retrieve a secret value from the environment variable GML_SECRET_{KEY}.
+
+        Args:
+            key: Short secret key name.
+
+        Returns:
+            The secret value, or empty string with a warning if not set.
+        """
         import os
 
         env_var = f"GML_SECRET_{key.upper().replace('-', '_')}"
@@ -142,28 +151,34 @@ class LocalSecretClient:
         return value
 
     def get_or_default(self, key: str, default: str = "") -> str:
+        """Like get(), but returns default instead of warning on missing secret."""
         import os
 
         env_var = f"GML_SECRET_{key.upper().replace('-', '_')}"
         return os.environ.get(env_var, default)
 
-    def resolve_dict(self, data: dict) -> dict:
+    def resolve_dict(self, data: dict) -> dict:  # type: ignore[type-arg]
+        """Recursively resolve '!secret' prefixed values from environment variables."""
         result = {}
         for k, v in data.items():
             if isinstance(v, str) and v.startswith("!secret "):
-                secret_key = v[len("!secret "):].strip()
+                secret_key = v[len("!secret ") :].strip()
                 result[k] = self.get(secret_key)
             elif isinstance(v, dict):
-                result[k] = self.resolve_dict(v)
+                result[k] = self.resolve_dict(v)  # type: ignore[assignment]
             else:
                 result[k] = v
         return result
 
     def clear_cache(self) -> None:
+        """No-op for local client (no cache to clear)."""
         pass
 
 
-def make_secret_client(context: MLContext, local: bool = False):
+def make_secret_client(
+    context: MLContext,
+    local: bool = False,
+) -> SecretManagerClient | LocalSecretClient:
     """Factory: returns LocalSecretClient in local mode, SecretManagerClient otherwise."""
     if local:
         return LocalSecretClient(context)

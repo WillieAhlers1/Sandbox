@@ -16,7 +16,7 @@ class TestVerificationPipelineDefinition:
     def test_step_count(self):
         from pipelines.verification_pipeline.pipeline import pipeline
 
-        assert len(pipeline.steps) == 6
+        assert len(pipeline.steps) == 7
 
     def test_step_names(self):
         from pipelines.verification_pipeline.pipeline import pipeline
@@ -24,6 +24,7 @@ class TestVerificationPipelineDefinition:
         assert pipeline.step_names == [
             "Ingest Raw Data",
             "Transform Features",
+            "DBT Models",
             "Train Model",
             "Evaluate Model",
             "Register Model",
@@ -40,6 +41,7 @@ class TestVerificationPipelineDefinition:
 
         types = [s.task_type for s in pipeline.steps]
         assert types == [
+            TaskType.TASK,
             TaskType.TASK,
             TaskType.TASK,
             TaskType.ML_TASK,
@@ -111,6 +113,8 @@ class TestVerificationPipelineCompile:
             pytest.skip("kfp not installed")
         source = result.dag_path.read_text()
         assert source.count("BigQueryInsertJobOperator") >= 2
+        # DBTRun renders as BashOperator
+        assert "BashOperator" in source
 
     def test_dag_has_vertex_operator(self, mock_context, tmp_path):
         from pipelines.verification_pipeline.pipeline import pipeline

@@ -58,16 +58,18 @@ class EntitySchema(BaseModel):
     Feature groups partition features by domain (behavioral, demographic, etc.).
     """
 
-    entity: str          # Entity type ID, e.g. "user"
-    id_column: str       # Source table column used as the entity ID
+    entity: str  # Entity type ID, e.g. "user"
+    id_column: str  # Source table column used as the entity ID
     id_type: FeatureType = FeatureType.STRING
     description: str = ""
     feature_groups: dict[str, FeatureGroupSchema] = Field(default_factory=dict)
 
     def all_features(self) -> list[FeatureDef]:
+        """Return a flat list of all feature definitions across all groups."""
         return [f for g in self.feature_groups.values() for f in g.features]
 
     def feature_names(self) -> list[str]:
+        """Return a flat list of all feature names across all groups."""
         return [f.name for f in self.all_features()]
 
 

@@ -26,7 +26,7 @@ class VertexRunner:
         compiled_path: Path,
         pipeline_name: str,
         parameter_values: dict | None = None,
-        enable_caching: bool = True,
+        enable_caching: bool = False,
         sync: bool = False,
     ) -> Any:
         """

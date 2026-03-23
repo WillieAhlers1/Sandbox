@@ -77,9 +77,7 @@ class TestBuildCommand:
         """Pipeline name is slugified (underscores to hyphens)."""
         from gcp_ml_framework.cli.cmd_build import build_command
 
-        cmd = build_command(
-            ctx=mock_context, pipeline_name="training_pipeline", timeout=1200
-        )
+        cmd = build_command(ctx=mock_context, pipeline_name="training_pipeline", timeout=1200)
         joined = " ".join(cmd)
         assert "training-pipeline" in joined
 
@@ -186,3 +184,51 @@ class TestRunCommand:
 
         sig = inspect.signature(run)
         assert "local" in sig.parameters
+
+
+# ---------------------------------------------------------------------------
+# Init templates
+# ---------------------------------------------------------------------------
+
+
+class TestInitTemplates:
+    """Verify init templates use correct env var names and current API."""
+
+    def test_dot_env_template_uses_correct_var_names(self):
+        """_DOT_ENV must use TEAM/PROJECT/ENVIRONMENT, not GML_* prefix."""
+        from gcp_ml_framework.cli.cmd_init import _DOT_ENV
+
+        assert "GML_TEAM" not in _DOT_ENV
+        assert "GML_PROJECT" not in _DOT_ENV
+        assert "GML_ENVIRONMENT" not in _DOT_ENV
+        assert "GML_GCP__" not in _DOT_ENV
+        assert "TEAM=" in _DOT_ENV
+        assert "PROJECT=" in _DOT_ENV
+        assert "ENVIRONMENT=" in _DOT_ENV
+        assert "GCP_PROJECT_ID=" in _DOT_ENV
+
+    def test_pipeline_template_uses_model_name(self):
+        """_PIPELINE_PY must use model_name, not endpoint_name."""
+        from gcp_ml_framework.cli.cmd_init import _PIPELINE_PY
+
+        assert "endpoint_name=" not in _PIPELINE_PY
+        assert "model_name=" in _PIPELINE_PY
+
+    def test_ci_templates_use_correct_var_names(self):
+        """CI workflow templates must use TEAM/PROJECT, not GML_TEAM/GML_PROJECT."""
+        from gcp_ml_framework.cli.cmd_init import (
+            _CI_DEV_YAML,
+            _CI_STAGE_YAML,
+            _PROMOTE_YAML,
+            _TEARDOWN_YAML,
+        )
+
+        for name, template in [
+            ("ci-dev", _CI_DEV_YAML),
+            ("ci-stage", _CI_STAGE_YAML),
+            ("promote", _PROMOTE_YAML),
+            ("teardown", _TEARDOWN_YAML),
+        ]:
+            assert "GML_TEAM" not in template, f"{name} uses GML_TEAM"
+            assert "GML_PROJECT" not in template, f"{name} uses GML_PROJECT"
+            assert "GML_GCP__" not in template, f"{name} uses GML_GCP__"

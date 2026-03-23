@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
-from gcp_ml_framework.naming import NamingConvention, _bq_safe, _slugify
+from gcp_ml_framework.naming import (
+    NamingConvention,
+    _bq_safe,
+    _slugify,
+    get_git_branch,
+    get_git_sha,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -49,7 +57,9 @@ class TestNamingAutoSlugify:
     def test_naming_auto_slugifies(self) -> None:
         """team, project, and branch are automatically slugified on init."""
         nc = NamingConvention(
-            team="My Team", project="My Project!", branch="feature/ABC_123",
+            team="My Team",
+            project="My Project!",
+            branch="feature/ABC_123",
         )
         assert nc.team == "my-team"
         assert nc.project == "my-project"
@@ -79,7 +89,10 @@ class TestGCS:
     def test_gcs_bucket_with_project(self) -> None:
         """When gcp_project is set, bucket is {gcp_project}-{team}-{project}."""
         nc = NamingConvention(
-            team="teamx", project="projy", branch="main", gcp_project="my-gcp",
+            team="teamx",
+            project="projy",
+            branch="main",
+            gcp_project="my-gcp",
         )
         assert nc.gcs_bucket == "my-gcp-teamx-projy"
 
@@ -154,7 +167,34 @@ class TestFeatureStore:
         """feature_view_id is {entity}_{group}_{branch} (all bq_safe)."""
         result = mock_naming.feature_view_id("customer", "demographics")
         expected = (
-            f"{_bq_safe('customer')}_{_bq_safe('demographics')}"
-            f"_{_bq_safe(mock_naming.branch)}"
+            f"{_bq_safe('customer')}_{_bq_safe('demographics')}_{_bq_safe(mock_naming.branch)}"
         )
         assert result == expected
+
+
+# ── Git helpers ────────────────────────────────────────────────────────────
+
+
+class TestGitHelpers:
+    def test_get_git_branch_without_environment_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """get_git_branch() must not raise KeyError when ENVIRONMENT is unset."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        result = get_git_branch()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_get_git_branch_non_local_returns_local(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """In non-local env without BRANCH var, get_git_branch() returns 'local'."""
+        monkeypatch.setenv("ENVIRONMENT", "dev")
+        result = get_git_branch()
+        assert result == "local"
+
+    def test_get_git_branch_catches_specific_exceptions(self) -> None:
+        """get_git_branch() must not use bare except Exception."""
+        src = inspect.getsource(get_git_branch)
+        assert "except Exception:" not in src, "get_git_branch still uses bare 'except Exception:'"
+
+    def test_get_git_sha_catches_specific_exceptions(self) -> None:
+        """get_git_sha() must not use bare except Exception."""
+        src = inspect.getsource(get_git_sha)
+        assert "except Exception:" not in src, "get_git_sha still uses bare 'except Exception:'"

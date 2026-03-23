@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # --- Layer 1: Dependencies (cached unless pyproject.toml/uv.lock change) ---
 COPY pyproject.toml uv.lock .python-version README.md /app/
 COPY gcp_ml_framework/ /app/gcp_ml_framework/
-COPY third_run/ /app/third_run/
+COPY second_run/ /app/second_run/
 COPY pipelines/ /app/pipelines/
 
 RUN python -m venv /app/.venv
