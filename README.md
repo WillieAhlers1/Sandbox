@@ -4,14 +4,37 @@ A pip-installable ML platform framework where data scientists define pipelines w
 
 ## How It Works
 
-```
-pipeline.py  →  gml compile  →  KFP YAML + Airflow DAG
-                                      │
-                                gml build  →  Cloud Build → Artifact Registry
-                                      │
-                                gml deploy →  Composer (DAG) + GCS (YAML)
-                                      │
-                                gml run    →  Composer DAG → Vertex AI Pipeline
+```mermaid
+flowchart LR
+    subgraph DS ["Data Scientist"]
+        A["pipeline.py\n+ steps/"]
+    end
+
+    subgraph CLI ["GML CLI"]
+        B["gml compile"]
+        C["gml build"]
+        D["gml deploy"]
+        E["gml run"]
+    end
+
+    subgraph GCP ["Google Cloud"]
+        F["Artifact Registry\n(Docker images)"]
+        G["Cloud Composer\n(Airflow DAGs)"]
+        H["Vertex AI\n(ML Pipelines)"]
+        I["Vertex AI\n(Endpoints)"]
+    end
+
+    A -->|define| B
+    B -->|"KFP YAML\n+ Airflow DAG"| C
+    C -->|"Cloud Build"| F
+    D -->|"upload DAGs\n+ YAML"| G
+    E -->|"trigger DAG"| G
+    G -->|"submit pipeline"| H
+    H -->|"deploy model"| I
+
+    style DS fill:#e8f5e9,stroke:#2e7d32
+    style CLI fill:#e3f2fd,stroke:#1565c0
+    style GCP fill:#fff3e0,stroke:#e65100
 ```
 
 Data scientists write pipeline definitions using the builder API:
@@ -41,7 +64,82 @@ pipeline = (
 )
 ```
 
-The framework compiles this into a KFP YAML (for Vertex AI) and an Airflow DAG (for Composer), builds Docker images via Cloud Build, and deploys everything with a single command.
+## Pipeline Lifecycle
+
+```mermaid
+flowchart TD
+    subgraph DEFINE ["1. Define"]
+        P["Pipeline builder\n.add() .for_each() .condition()"]
+    end
+
+    subgraph COMPILE ["2. Compile"]
+        SC["SmartCompiler"]
+        SC --> YAML["KFP YAML\n(Vertex AI steps)"]
+        SC --> DAG["Airflow DAG\n(orchestration)"]
+    end
+
+    subgraph BUILD ["3. Build"]
+        BP["base-python"]
+        BP --> PB["{pipeline}--base\n(framework + deps)"]
+        PB --> PS["{pipeline}--serve\n(FastAPI + model)"]
+    end
+
+    subgraph DEPLOY ["4. Deploy"]
+        GCS["YAML → GCS"]
+        COMP["DAG → Composer"]
+        IMG["Images → verified"]
+    end
+
+    subgraph RUN ["5. Run"]
+        AF["Airflow triggers DAG"]
+        AF --> VTX["Vertex AI runs\nML pipeline"]
+        VTX --> EP["Model deployed\nto endpoint"]
+    end
+
+    P --> SC
+    YAML --> GCS
+    DAG --> COMP
+    GCS --> AF
+    COMP --> AF
+
+    style DEFINE fill:#e8f5e9,stroke:#2e7d32
+    style COMPILE fill:#e3f2fd,stroke:#1565c0
+    style BUILD fill:#f3e5f5,stroke:#6a1b9a
+    style DEPLOY fill:#fff3e0,stroke:#e65100
+    style RUN fill:#fce4ec,stroke:#b71c1c
+```
+
+## Component Model
+
+```mermaid
+flowchart LR
+    subgraph TASK ["@task — Airflow Operators"]
+        BQ["BQQuery"]
+        BT["BQTransform"]
+        DBT["DBTRun"]
+        EM["Email"]
+    end
+
+    subgraph ML ["@ml_task — Vertex AI Containers"]
+        TM["TrainModel"]
+        EV["EvaluateModel"]
+        RM["RegisterModel"]
+        DM["DeployModel"]
+    end
+
+    subgraph LIFECYCLE ["Lifecycle"]
+        direction TB
+        CLI["cli()"] --> EXE["execute()"]
+        EXE --> RUN["run()"]
+    end
+
+    TASK -.->|"render_operator()\n→ Airflow code"| DAG2["Airflow DAG"]
+    ML -.->|"as_kfp_component()\n→ container spec"| KFP["KFP YAML"]
+
+    style TASK fill:#e3f2fd,stroke:#1565c0
+    style ML fill:#f3e5f5,stroke:#6a1b9a
+    style LIFECYCLE fill:#e8f5e9,stroke:#2e7d32
+```
 
 ## Quick Start
 
@@ -97,6 +195,41 @@ second_run/                Shared business logic (estimators, feature engineerin
 tests/                     Unit / integration / e2e test suite
 ```
 
+## Branch Isolation
+
+Every branch gets its own isolated GCP resources — no cross-contamination between developers.
+
+```mermaid
+flowchart TD
+    subgraph SHARED ["Shared (all branches)"]
+        BUCKET["GCS Bucket\nprj-sandbox-mlplatform-second-run"]
+        AR["AR Repo\nmlplatform-second-run"]
+    end
+
+    subgraph BRANCH_A ["Branch: feature-xyz"]
+        BQ_A["BQ Dataset\nmlplatform_second_run_feature_xyz"]
+        GCS_A["GCS Prefix\n/feature-xyz/"]
+        DAG_A["DAG\n...feature_xyz__pipeline"]
+        VTX_A["Vertex AI\n...feature-xyz-..."]
+    end
+
+    subgraph BRANCH_B ["Branch: main"]
+        BQ_B["BQ Dataset\nmlplatform_second_run_main"]
+        GCS_B["GCS Prefix\n/main/"]
+        DAG_B["DAG\n...main__pipeline"]
+        VTX_B["Vertex AI\n...main-..."]
+    end
+
+    BUCKET --> GCS_A
+    BUCKET --> GCS_B
+    AR --> BRANCH_A
+    AR --> BRANCH_B
+
+    style SHARED fill:#fff3e0,stroke:#e65100
+    style BRANCH_A fill:#e3f2fd,stroke:#1565c0
+    style BRANCH_B fill:#e8f5e9,stroke:#2e7d32
+```
+
 ## Configuration
 
 All config via `.env` (gitignored). Key variables:
@@ -134,7 +267,7 @@ uv run -- mypy gcp_ml_framework/
 |---------|-----------------|
 | [Architecture](docs/architecture/) | System design, component model, compilation, ADRs |
 | [Guides](docs/guides/) | Quickstart, writing components, writing pipelines, deployment |
-| [Operations](docs/operations/) | Cloud Build, configuration, testing |
+| [Operations](docs/operations/) | Cloud Build, configuration, GCP resources, platform guide, testing |
 | [Reference](docs/reference/) | Requirements status |
 
 ## Stack
