@@ -4,12 +4,17 @@
 
 Every pipeline produces three Docker images, built in strict order because each layer depends on the previous one:
 
-```
-Tier 0:  base-python              (shared foundation: Python 3.12 + uv)
-           |
-Tier 1:  {pipeline}--base         (framework + pipeline deps, used for training/component execution)
-           |
-Tier 1:  {pipeline}--serve        (extends --base, adds FastAPI + serving app code)
+```mermaid
+graph TD
+    A["<b>Tier 0: base-python</b><br/><i>Shared foundation: Python 3.12 + uv</i>"]
+    B["<b>Tier 1: {pipeline}--base</b><br/><i>Framework + pipeline deps, training/component execution</i>"]
+    C["<b>Tier 1: {pipeline}--serve</b><br/><i>Extends --base, adds FastAPI + serving app code</i>"]
+
+    A --> B --> C
+
+    style A fill:#e0f0ff,stroke:#3399cc
+    style B fill:#e0ffe0,stroke:#33cc33
+    style C fill:#fff0e0,stroke:#cc9933
 ```
 
 ### Tier 0: base-python

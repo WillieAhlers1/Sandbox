@@ -81,13 +81,6 @@ pipeline = (
 
 The compiler scans step boundaries by `task_type` and produces:
 
-```
-[BQQuery, BQTransform]  -->  Airflow DAG operators (BigQueryInsertJobOperator x2)
-                    |
-                    v
-[Train, Evaluate, Register, Deploy]  -->  KFP YAML + RunPipelineJobOperator in DAG
-```
-
 ```mermaid
 graph LR
     subgraph pipeline.py

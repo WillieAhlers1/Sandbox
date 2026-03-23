@@ -4,11 +4,16 @@ Deploying a pipeline is a 4-step flow: **compile, build, deploy, run**. Each ste
 
 ## The 4-Step Flow
 
-```
-compile          build              deploy              run
-pipeline.py  --> Docker images  --> DAGs + YAML to  --> Trigger DAG
-  to YAML +      to Artifact        GCS/Composer        in Composer
-  DAG files      Registry
+```mermaid
+flowchart LR
+    A["<b>Compile</b><br/>pipeline.py → YAML + DAG files"] --> B["<b>Build</b><br/>Docker images → Artifact Registry"]
+    B --> C["<b>Deploy</b><br/>DAGs + YAML → GCS / Composer"]
+    C --> D["<b>Run</b><br/>Trigger DAG in Composer"]
+
+    style A fill:#e0f0ff,stroke:#3399cc
+    style B fill:#e0ffe0,stroke:#33cc33
+    style C fill:#fff0e0,stroke:#cc9933
+    style D fill:#f0e0ff,stroke:#9933cc
 ```
 
 ```mermaid
@@ -138,26 +143,6 @@ Executes all steps sequentially in your local Python process against real GCP de
 ## Docker Image Hierarchy
 
 Cloud Build produces three tiers of images per pipeline:
-
-```
-Tier 0: base-python (shared)
-  |
-  +-- Python 3.12-slim + uv
-  |   Dockerfile: docker/base/base-python/Dockerfile
-  |
-  v
-Tier 1: {pipeline}--base (per-pipeline execution image)
-  |
-  +-- Adds pipeline code, dependencies, framework
-  |   Dockerfile: docker/pipelines/{name}/base.Dockerfile
-  |   ARG BASE_IMAGE=base-python
-  |
-  v
-Tier 1: {pipeline}--serve (per-pipeline serving image)
-      +-- Extends pipeline base, adds FastAPI + uvicorn + app code
-          Dockerfile: docker/pipelines/{name}/serve.Dockerfile
-          ARG BASE_IMAGE={pipeline}--base
-```
 
 ```mermaid
 graph TD

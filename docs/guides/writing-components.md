@@ -36,8 +36,9 @@ flowchart TD
 
 Every component follows the same lifecycle:
 
-```
-cli()  -->  execute()  -->  run()
+```mermaid
+flowchart LR
+    A["cli()"] --> B["execute()"] --> C["run()"]
 ```
 
 - `cli()` -- Auto-generated Typer CLI. Every Pydantic field (except internal ones) becomes a `--flag`. You never override this.

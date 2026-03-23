@@ -52,13 +52,6 @@ flowchart TD
 
 Every component follows a three-layer lifecycle. Data scientists only touch `run()`.
 
-```
-Container starts
-  -> cli()          # Parses CLI flags, instantiates the component, calls execute()
-    -> execute()    # I/O lifecycle: temp dirs, GCS upload, output URI writing
-      -> run()      # Business logic (data scientist writes this)
-```
-
 ```mermaid
 flowchart TD
     Start["Container starts\nor LocalRunner calls"] --> CLI["cli()\n—————————\nAuto-generates Typer CLI\nfrom Pydantic fields\n(--flag per field)"]

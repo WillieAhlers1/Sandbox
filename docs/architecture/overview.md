@@ -25,26 +25,37 @@
 
 ## 1. High-Level System Architecture
 
-```
- DATA SCIENTIST                     GML CLI                           GCP
- +------------------+    +----------------------------+    +------------------------+
- |                  |    |                            |    |                        |
- | pipelines/       |    |  gml compile               |    |  Cloud Composer        |
- |   my_pipeline/   |--->|    SmartCompiler           |--->|    (Airflow DAGs)      |
- |     pipeline.py  |    |    PipelineCompiler        |    |                        |
- |     steps/       |    |                            |    |  Vertex AI Pipelines   |
- |     sql/         |    |  gml build                 |    |    (KFP YAML)          |
- |     config.yaml  |    |    Cloud Build / Docker    |--->|                        |
- |                  |    |                            |    |  Artifact Registry     |
- | .env             |    |  gml deploy                |    |    (Docker images)     |
- | framework.yaml   |--->|    gsutil / gcloud         |--->|                        |
- |                  |    |                            |    |  BigQuery              |
- |                  |    |  gml run                   |    |    (datasets, tables)  |
- |                  |    |    --local | --composer     |--->|                        |
- |                  |    |                            |    |  GCS                   |
- |                  |    |  gml teardown              |    |    (artifacts, YAMLs)  |
- |                  |    |    delete branch resources  |--->|                        |
- +------------------+    +----------------------------+    +------------------------+
+```mermaid
+flowchart LR
+    subgraph DS["DATA SCIENTIST"]
+        P["pipelines/\nmy_pipeline/\npipeline.py\nsteps/ sql/\nconfig.yaml"]
+        E[".env\nframework.yaml"]
+    end
+    subgraph CLI["GML CLI"]
+        compile["gml compile\nSmartCompiler\nPipelineCompiler"]
+        build["gml build\nCloud Build / Docker"]
+        deploy["gml deploy\ngsutil / gcloud"]
+        run["gml run\n--local | --composer"]
+        teardown["gml teardown\ndelete branch resources"]
+    end
+    subgraph GCP["GCP"]
+        composer["Cloud Composer\n(Airflow DAGs)"]
+        vertex["Vertex AI Pipelines\n(KFP YAML)"]
+        ar["Artifact Registry\n(Docker images)"]
+        bq["BigQuery\n(datasets, tables)"]
+        gcs["GCS\n(artifacts, YAMLs)"]
+    end
+    P --> compile
+    E --> deploy
+    compile --> composer
+    compile --> vertex
+    build --> ar
+    deploy --> gcs
+    deploy --> composer
+    run --> vertex
+    run --> bq
+    teardown --> gcs
+    teardown --> bq
 ```
 
 **Legend:**
@@ -214,16 +225,16 @@ Sandbox/
 
 ### Resolution Chain
 
+```mermaid
+flowchart LR
+    A["1. Defaults\n(Pydantic field defaults)"] --> B["2. config.yaml\n(pipeline-level\nYAML overrides)"]
+    B --> C["3. Env Vars\n(FrameworkConfig: no prefix;\nGCPConfig: GCP_ prefix)"]
+    C --> D["4. CLI Flags\n(explicit kwargs\nvia load_config)"]
+    style D fill:#f9f,stroke:#333
+    linkStyle 0,1,2 stroke:#333,stroke-width:2px
 ```
-+------------------+     +------------------+     +------------------+     +------------------+
-| 1. Defaults      |---->| 2. config.yaml   |---->| 3. Env Vars      |---->| 4. CLI Flags     |
-| (Pydantic field  |     | (pipeline-level  |     | (FrameworkConfig: |     | (explicit kwargs |
-|  defaults)       |     |  YAML overrides) |     |  no prefix;      |     |  via load_config |
-|                  |     |                  |     |  GCPConfig:       |     |  **overrides)    |
-|                  |     |                  |     |  GCP_ prefix)     |     |                  |
-+------------------+     +------------------+     +------------------+     +------------------+
-                                   LATER WINS -->
-```
+
+> **LATER WINS -->**
 
 **How it works:** `load_config()` in `config.py`:
 1. Starts with empty base dict
@@ -346,27 +357,6 @@ Full image URI via `docker_image_uri()`: `{ar_repo}/{name}:{branch}-{sha}`
 
 ### Class Hierarchy
 
-```
-pydantic_settings.BaseSettings
-  |
-  +-- BaseComponent                          # Abstract base (base.py)
-       |                                     #   Fields: machine_type, project, region, branch,
-       |                                     #           environment, output_uri_path, run_date, dataset
-       |                                     #   Methods: cli(), execute(), run(), as_kfp_component()
-       |
-       +-- @task components                  # Compiled to native Airflow operators
-       |   |-- BQQuery                       #   -> BigQueryInsertJobOperator
-       |   |-- BQTransform                   #   -> BigQueryInsertJobOperator
-       |   |-- Email                         #   -> EmailOperator
-       |   |-- WriteFeatures                 #   -> PythonOperator
-       |
-       +-- @ml_task components               # Compiled to KFP container_component
-           |-- TrainModel                    #   Custom execute(): run() -> GCS upload -> write output URI
-           |-- EvaluateModel                 #   Custom execute(): run() -> experiment tracking
-           |-- RegisterModel                 #   SINGLE OWNER of serving container image
-           |-- DeployModel                   #   Pure deployment -- NO serving image fields
-```
-
 ```mermaid
 classDiagram
     class BaseSettings["pydantic_settings.BaseSettings"]
@@ -413,33 +403,22 @@ classDiagram
 
 ### Component Lifecycle
 
-```
-  COMPILE TIME                    CONTAINER RUNTIME                 LOCAL RUNTIME
-  (gml compile)                   (KFP container)                   (gml run --local)
-  +------------------+            +------------------+              +------------------+
-  | as_kfp_component |            | cli()            |              | execute()        |
-  |   Pydantic fields |            |   Typer auto-gen |              |   called directly|
-  |   -> KFP params   |            |   --flag per     |              |   with merged    |
-  |   -> ContainerSpec |            |   field          |              |   params         |
-  |   -> YAML          |            |   -> instantiate |              +--------+---------+
-  +------------------+            |   -> execute()   |                       |
-                                  +--------+---------+                       v
-                                           |                          +------+------+
-                                           v                          |   run()     |
-                                  +--------+---------+                | (business   |
-                                  |   execute()      |                |  logic)     |
-                                  |   (I/O lifecycle) |                +-------------+
-                                  |   - temp dirs     |
-                                  |   - GCS upload    |
-                                  |   - output URI    |
-                                  +--------+---------+
-                                           |
-                                           v
-                                  +--------+---------+
-                                  |   run()          |
-                                  | (data scientist  |
-                                  |  overrides this) |
-                                  +------------------+
+```mermaid
+flowchart TD
+    subgraph COMPILE["COMPILE TIME (gml compile)"]
+        kfp["as_kfp_component()\nPydantic fields → KFP params\n→ ContainerSpec → YAML"]
+    end
+    subgraph CONTAINER["CONTAINER RUNTIME (KFP container)"]
+        cli["cli()\nTyper auto-gen --flag per field\n→ instantiate → execute()"]
+        exec1["execute()\n(I/O lifecycle)\ntemp dirs, GCS upload, output URI"]
+        run1["run()\n(data scientist overrides this)"]
+        cli --> exec1 --> run1
+    end
+    subgraph LOCAL["LOCAL RUNTIME (gml run --local)"]
+        exec2["execute()\ncalled directly with merged params"]
+        run2["run()\n(business logic)"]
+        exec2 --> run2
+    end
 ```
 
 **Key design:** Data scientists only override `run()`. The framework handles `cli()` (auto-generates `--flag` per Pydantic field), `execute()` (I/O lifecycle), and `as_kfp_component()` (KFP wiring).
@@ -493,21 +472,17 @@ pipeline = (
 
 ### Data Model
 
-```
-Pipeline (builder)
-  |
-  .build()
-  |
-  v
-PipelineDefinition (frozen)
-  |-- name: str
-  |-- schedule: str | None
-  |-- description: str
-  |-- tags: list[str]
-  |-- steps: list[PipelineStep]
-        |-- name: str
-        |-- component: BaseComponent
-        |-- task_type: TaskType
+```mermaid
+flowchart TD
+    P["Pipeline (builder)"] -->|".build()"| PD["PipelineDefinition (frozen)"]
+    PD --> name["name: str"]
+    PD --> schedule["schedule: str | None"]
+    PD --> description["description: str"]
+    PD --> tags["tags: list#91;str#93;"]
+    PD --> steps["steps: list#91;PipelineStep#93;"]
+    steps --> sn["name: str"]
+    steps --> sc["component: BaseComponent"]
+    steps --> st["task_type: TaskType"]
 ```
 
 `Pipeline.add()` reads the component's `task_type` ClassVar (set by `@task` or `@ml_task`). Default step name: `{ClassName}_{index}`.
@@ -532,63 +507,70 @@ This is the core of the framework -- transforming a `PipelineDefinition` into de
 
 ### End-to-End Flow
 
-```
- pipeline.py                    SmartCompiler                     Output
- +------------------+           +---------------------------+     +---------------------------+
- |                  |           |                           |     |                           |
- | Pipeline(...)    |           |  1. _group_steps()        |     |  dags/                    |
- |   .add(BQQuery)  |---------->|     Group consecutive     |---->|    {dag_id}.py            |
- |   .add(BQTrans)  |           |     same-type steps       |     |    (self-contained DAG)   |
- |   .add(Train)    |           |                           |     |                           |
- |   .add(Eval)     |           |  2. For each ML_TASK      |     |  compiled_pipelines/      |
- |   .add(Register) |           |     group: delegate to    |---->|    {pipeline_name}.yaml   |
- |   .add(Deploy)   |           |     PipelineCompiler      |     |    (KFP v2 YAML)         |
- |   .build()       |           |                           |     |                           |
- +------------------+           |  3. _generate_dag()       |     +---------------------------+
-                                |     Render DAG source     |
-                                |     with all groups       |
-                                +---------------------------+
+```mermaid
+flowchart LR
+    subgraph Input["pipeline.py"]
+        P["Pipeline(...)\n.add(BQQuery)\n.add(BQTrans)\n.add(Train)\n.add(Eval)\n.add(Register)\n.add(Deploy)\n.build()"]
+    end
+    subgraph SC["SmartCompiler"]
+        S1["1. _group_steps()\nGroup consecutive\nsame-type steps"]
+        S2["2. For each ML_TASK group:\ndelegate to\nPipelineCompiler"]
+        S3["3. _generate_dag()\nRender DAG source\nwith all groups"]
+        S1 --> S2 --> S3
+    end
+    subgraph Output["Output"]
+        DAG["dags/\n{dag_id}.py\n(self-contained DAG)"]
+        YAML["compiled_pipelines/\n{pipeline_name}.yaml\n(KFP v2 YAML)"]
+    end
+    P --> S1
+    S2 --> YAML
+    S3 --> DAG
 ```
 
 ### Step 1: Step Grouping (`_group_steps`)
 
 The `SmartCompiler` uses `itertools.groupby` to split steps into consecutive runs of the same `task_type`:
 
+```mermaid
+flowchart LR
+    subgraph G0["Group 0: TASK"]
+        BQ["BQQuery"]
+        BT["BQTransform"]
+    end
+    subgraph G1["Group 1: ML_TASK"]
+        TM["TrainModel"]
+        EM["EvaluateModel"]
+        RM["RegisterModel"]
+        DM["DeployModel"]
+    end
+    BQ --> BT
+    BT --> TM
+    TM --> EM --> RM --> DM
 ```
-Input steps:    [BQQuery, BQTransform, TrainModel, EvaluateModel, RegisterModel, DeployModel]
-Task types:     [TASK,    TASK,        ML_TASK,    ML_TASK,       ML_TASK,       ML_TASK     ]
-                 \___________/          \________________________________________________/
-Groups:          _StepGroup(0,TASK)      _StepGroup(1,ML_TASK)
 
-Output:
-  Group 0: task_type=TASK,    steps=[BQQuery, BQTransform]
-  Group 1: task_type=ML_TASK, steps=[TrainModel, EvaluateModel, RegisterModel, DeployModel]
-```
+> Input: `[BQQuery, BQTransform, TrainModel, EvaluateModel, RegisterModel, DeployModel]`
+> Grouped by consecutive `task_type` into `_StepGroup(0, TASK)` and `_StepGroup(1, ML_TASK)`.
 
 ### Step 2: ML Group Compilation (`_compile_ml_group`)
 
 Each `ML_TASK` group is compiled to KFP YAML by delegating to `PipelineCompiler`:
 
-```
-PipelineCompiler.compile()
-  |
-  _build_kfp_pipeline()
-  |   |-- Build context params (project, region, dataset, experiment_name, etc.)
-  |   |-- Build per-step derived params (job_name, model_display_name, etc.)
-  |   |-- Create @dsl.pipeline function:
-  |   |     |-- Pipeline params: run_date, dataset_uri, model_uri
-  |   |     |-- For each step:
-  |   |     |     1. Resolve image via _resolve_image_uri(runtime_dockerfile)
-  |   |     |     2. component.as_kfp_component(step_module, base_image)
-  |   |     |     3. Merge: component_fields + ctx_params + derived_params
-  |   |     |     4. Wire cross-step: last_dataset_output, last_model_output
-  |   |     |     5. task.after(prev_task) for sequential ordering
-  |   |     |     6. Track outputs by component type
-  |   |
-  |   kfp.compiler.Compiler().compile(pipeline_fn, output_path)
-  |
-  v
-  compiled_pipelines/{name}.yaml
+```mermaid
+flowchart TD
+    A["PipelineCompiler.compile()"] --> B["_build_kfp_pipeline()"]
+    B --> C["Build context params\n(project, region, dataset, experiment_name)"]
+    B --> D["Build per-step derived params\n(job_name, model_display_name)"]
+    B --> E["Create @dsl.pipeline function"]
+    E --> F["Pipeline params:\nrun_date, dataset_uri, model_uri"]
+    E --> G["For each step"]
+    G --> G1["1. Resolve image via\n_resolve_image_uri(runtime_dockerfile)"]
+    G --> G2["2. as_kfp_component(step_module, base_image)"]
+    G --> G3["3. Merge: component_fields\n+ ctx_params + derived_params"]
+    G --> G4["4. Wire cross-step:\nlast_dataset_output, last_model_output"]
+    G --> G5["5. task.after(prev_task)"]
+    G --> G6["6. Track outputs by component type"]
+    B --> H["kfp.compiler.Compiler().compile()"]
+    H --> I["compiled_pipelines/{name}.yaml"]
 ```
 
 ### Step 3: DAG Generation (`_generate_dag`)
@@ -630,11 +612,11 @@ This ensures Airflow Jinja macros (`{{ ds }}`, `{{ ds_nodash }}`) are resolved i
 
 The `PipelineCompiler` resolves `runtime_dockerfile` paths to full AR image URIs:
 
-```
-runtime_dockerfile path                  ->  (pipeline_name, stem)     ->  image name
-"pipelines/house_price/base.Dockerfile"  ->  ("house_price", "base")   ->  "house-price--base"
-"train.Dockerfile"                       ->  (None, "train")           ->  "train"
-None (default)                           ->  (None, "train")           ->  "train"
+```mermaid
+flowchart LR
+    A1["pipelines/house_price/base.Dockerfile"] -->|"pipeline=house_price, stem=base"| B1["house-price--base"]
+    A2["train.Dockerfile"] -->|"pipeline=None, stem=train"| B2["train"]
+    A3["None (default)"] -->|"pipeline=None, stem=train"| B3["train"]
 ```
 
 Full URI: `{region}-docker.pkg.dev/{gcp_project}/{team}-{project}/{name}:{branch}-{sha}`
@@ -665,58 +647,42 @@ The client's design (documented in `docs/deploy.md` PR #26) is a **2-tier** hier
 `base-python` (foundation) + two Dockerfiles per pipeline (`base.Dockerfile` + `serve.Dockerfile`).
 Root-level default Dockerfiles are removed.
 
-```
-Tier 0: Foundation (built once, rarely changes)
-+-------------------------------+
-| base-python:latest            |
-| docker/base/base-python/      |
-|                               |
-| Python 3.12-slim + uv         |
-| build-essential, curl         |
-| WORKDIR /app                  |
-| PATH=/app/.venv/bin:$PATH     |
-+---------------+---------------+
-                |
-                | ARG BASE_IMAGE=base-python
-                |
-Tier 1: Per-Pipeline Images (two per pipeline)
-+-------------------------------+    +-------------------------------+
-| house-price--base:{tag}       |    | house-price--serve:{tag}      |
-| docker/pipelines/house_price/ |    | docker/pipelines/house_price/ |
-|   base.Dockerfile             |    |   serve.Dockerfile            |
-|                               |    |                               |
-| Extends base-python           |    | Extends base                  |
-| + framework code              |    | + FastAPI + uvicorn           |
-| + all deps (uv sync)          |    | + app/house_price/            |
-| + pipelines/ + second_run/    |    | EXPOSE 8080                   |
-|                               |    | CMD uvicorn                   |
-| Used by: TrainModel,          |    | Used by: RegisterModel        |
-| EvaluateModel, RegisterModel, |    |   (serving_dockerfile)        |
-| DeployModel                   |    |                               |
-| (runtime_dockerfile)          |    |                               |
-+-------------------------------+    +-------------------------------+
+```mermaid
+flowchart TD
+    T0["Tier 0: base-python:latest\ndocker/base/base-python/\nPython 3.12-slim + uv\nbuild-essential, curl\nWORKDIR /app"]
+    T0 -->|"ARG BASE_IMAGE=base-python"| BASE
+    T0 -->|"ARG BASE_IMAGE=base-python"| SERVE
+
+    subgraph Tier1["Tier 1: Per-Pipeline Images"]
+        BASE["house-price--base:{tag}\nbase.Dockerfile\nExtends base-python\n+ framework code + deps\n+ pipelines/ + second_run/\nUsed by: runtime_dockerfile"]
+        SERVE["house-price--serve:{tag}\nserve.Dockerfile\nExtends base\n+ FastAPI + uvicorn\n+ app/house_price/\nEXPOSE 8080\nUsed by: serving_dockerfile"]
+    end
+    BASE --> SERVE
 ```
 
 ### Image Count Patterns
 
 Different pipelines require different numbers of Docker images:
 
-```
-Simplest pipeline (2 images):
-  base-python --> base.Dockerfile --> serve.Dockerfile
-  One execution image + one serving image.
+```mermaid
+flowchart LR
+    subgraph simplest["Simplest (2 images)"]
+        S_BP["base-python"] --> S_BASE["base.Dockerfile"] --> S_SERVE["serve.Dockerfile"]
+    end
 
-Typical pipeline (3 images):
-  base-python --> base.Dockerfile --> train.Dockerfile
-                                  --> serve.Dockerfile
-  Separate training and serving images when deps diverge.
+    subgraph typical["Typical (3 images)"]
+        T_BP["base-python"] --> T_BASE["base.Dockerfile"]
+        T_BASE --> T_TRAIN["train.Dockerfile"]
+        T_BASE --> T_SERVE["serve.Dockerfile"]
+    end
 
-Multi-model pipeline (1 + 2N images):
-  base-python --> base.Dockerfile --> model_A/train.Dockerfile
-                                  --> model_A/serve.Dockerfile
-                                  --> model_B/train.Dockerfile
-                                  --> model_B/serve.Dockerfile
-  One base + a train/serve pair per model.
+    subgraph multi["Multi-model (1 + 2N images)"]
+        M_BP["base-python"] --> M_BASE["base.Dockerfile"]
+        M_BASE --> MA_T["model_A/train.Dockerfile"]
+        M_BASE --> MA_S["model_A/serve.Dockerfile"]
+        M_BASE --> MB_T["model_B/train.Dockerfile"]
+        M_BASE --> MB_S["model_B/serve.Dockerfile"]
+    end
 ```
 
 The current client target for `house_price` is the simplest pattern: `base.Dockerfile` + `serve.Dockerfile`.
@@ -745,19 +711,17 @@ The current client target for `house_price` is the simplest pattern: `base.Docke
 
 The build script (`docker_build.sh`) maintains an in-memory **registry** (stem -> full tag).
 
+```mermaid
+flowchart TD
+    A["1. Seed registry:\nbase-python → {ar_repo}/base-python:latest"] --> B["2. Build pipeline images\n(docker/pipelines/{name}/*.Dockerfile)"]
+    B --> C["Read ARG BASE_IMAGE=stem\nfrom Dockerfile"]
+    C --> D["Look up stem in registry\n→ resolved full tag"]
+    D --> E["Build with\n--build-arg BASE_IMAGE={resolved}"]
+    E --> F["Image name from\nNamingConvention.docker_image_name()"]
+    F --> G["Register: house-price--base\n→ {ar_repo}/house-price--base:{tag}"]
 ```
-1. Seed registry: "base-python" -> "{ar_repo}/base-python:latest"
 
-2. Build pipeline images (docker/pipelines/{name}/*.Dockerfile):
-   - Read ARG BASE_IMAGE=<stem> from Dockerfile
-   - Look up <stem> in registry -> resolved full tag
-   - Build with --build-arg BASE_IMAGE={resolved}
-   - Image name from NamingConvention.docker_image_name(pipeline, stem)
-   - Register: "house-price--base" -> "{ar_repo}/house-price--base:{tag}"
-
-NOTE: With root-level defaults removed, build script goes directly from
-base-python to per-pipeline images. Build script needs updating to match.
-```
+> **Note:** With root-level defaults removed, build script goes directly from base-python to per-pipeline images. Build script needs updating to match.
 
 ### Image Tagging
 
@@ -786,19 +750,12 @@ print(NamingConvention.docker_image_name(\"$pipeline_name\", \"$stem\"))
 
 The framework tracks two output channels across steps:
 
-```
-                   last_dataset_output                  last_model_output
-                   (BQ table ref or URI)                (model resource name)
-                          |                                    |
-  +-------+         +----+----+         +-------+        +----+----+        +--------+
-  |BQQuery|-------->|BQTrans  |-------->| Train |------->|Register |------->| Deploy |
-  +-------+         +---------+         +---+---+        +----+----+        +---+----+
-       |                 |                  |                  |                 |
-       v                 v                  v                  v                 v
-  destination_table  output_table     output_uri          output_uri        (reads from
-  known at           known at         (model GCS path)    (resource name)    Model Registry
-  compile time       compile time     runtime KFP         runtime KFP        by display_name)
-                                      artifact             artifact
+```mermaid
+flowchart LR
+    BQ["BQQuery\n→ destination_table\n(compile time)"] -->|"last_dataset_output\n(BQ table ref)"| BT["BQTransform\n→ output_table\n(compile time)"]
+    BT -->|"last_dataset_output"| TR["Train\n→ output_uri\n(model GCS path,\nruntime KFP artifact)"]
+    TR -->|"last_model_output\n(model resource name)"| RG["Register\n→ output_uri\n(resource name,\nruntime KFP artifact)"]
+    RG -->|"last_model_output"| DP["Deploy\n(reads from\nModel Registry\nby display_name)"]
 ```
 
 ### @task Outputs (Compile-Time Deterministic)
@@ -848,18 +805,13 @@ The KFP pipeline receives `dataset_uri` as a pipeline input parameter, which flo
 
 ### End-to-End Flow
 
-```
-+----------+     +----------+     +----------+     +----------+     +----------+
-|  Train   |---->| Evaluate |---->| Register |---->|  Deploy  |---->|  Serve   |
-|          |     |          |     |          |     |          |     |          |
-| run()    |     | run()    |     | run()    |     | run()    |     | /predict |
-| -> model |     | -> metrics|    | -> Model |     | -> Endpt |     | /health  |
-|    .pkl  |     |    + gates|    |    Registry|   |    deploy|    |          |
-+----+-----+     +----+-----+     +----+-----+     +----+-----+     +----------+
-     |                |                |                |
-     v                v                v                v
-  GCS: model/      output_uri:     Vertex AI        Vertex AI
-  model.pkl        metrics JSON    Model Registry   Endpoint
+```mermaid
+flowchart LR
+    Train["Train\nrun() → model.pkl"] -->|"GCS: model/"| Evaluate
+    Evaluate["Evaluate\nrun() → metrics + gates"] -->|"output_uri:\nmetrics JSON"| Register
+    Register["Register\nrun() → Model Registry"] -->|"Vertex AI\nModel Registry"| Deploy
+    Deploy["Deploy\nrun() → Endpoint deploy"] -->|"Vertex AI\nEndpoint"| Serve
+    Serve["/predict\n/health"]
 ```
 
 ### TrainModel (`components/ml/train.py`)
@@ -914,19 +866,13 @@ Model versioning logic:
 
 Resolved in `PipelineCompiler._build_derived_params()` for `RegisterModel`:
 
-```
-Priority 1: serving_container_image (full URI)
-  -> Use as-is. For external images (e.g., Google pre-built CPR).
-  Example: "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest"
-
-Priority 2: serving_dockerfile (path relative to docker/)
-  -> Resolved via NamingConvention.docker_image_uri()
-  Example: "pipelines/house_price/serve.Dockerfile"
-           -> "us-east4-docker.pkg.dev/proj/dsci-gcpdemo/house-price--serve:branch-sha"
-
-Priority 3: Neither set
-  -> Falls back to the pipeline's base image (runtime_dockerfile)
-  -> Image name: "train"
+```mermaid
+flowchart TD
+    Check{"serving_container_image\nset?"}
+    Check -->|"Yes (Priority 1)"| P1["Use full URI as-is\ne.g. us-docker.pkg.dev/.../sklearn-cpu.1-3:latest"]
+    Check -->|No| Check2{"serving_dockerfile\nset?"}
+    Check2 -->|"Yes (Priority 2)"| P2["Resolve via NamingConvention.docker_image_uri()\ne.g. house-price--serve:branch-sha"]
+    Check2 -->|"No (Priority 3)"| P3["Fall back to pipeline base image\n(runtime_dockerfile)\nImage name: train"]
 ```
 
 ### sync=False Design (PR #26 docs/register.md)
@@ -1203,8 +1149,9 @@ The alternative -- constructing names ad-hoc across the codebase -- would lead t
 
 ### Why 2-tier Docker Hierarchy (Per Client PR #26)
 
-```
-base-python (Tier 0) -> per-pipeline base + serve (Tier 1)
+```mermaid
+flowchart LR
+    T0["base-python (Tier 0)"] --> T1["per-pipeline base + serve (Tier 1)"]
 ```
 
 **Tier 0 (base-python):** Changes rarely (Python version, system packages). Tagged `:latest` only. Built separately via `docker_build_base.sh`. Shared across all projects.
