@@ -2,6 +2,22 @@
 
 Get a working ML pipeline running on GCP from scratch.
 
+```mermaid
+graph LR
+    A["Install<br/><code>uv sync</code>"] --> B["Configure<br/><code>.env</code>"]
+    B --> C["Compile<br/><code>gml compile</code>"]
+    C --> D["Build<br/><code>gml build</code>"]
+    D --> E["Deploy<br/><code>gml deploy</code>"]
+    E --> F["Run<br/><code>gml run</code>"]
+
+    style A fill:#e0f0ff,stroke:#3399cc
+    style B fill:#e0f0ff,stroke:#3399cc
+    style C fill:#e0ffe0,stroke:#33cc33
+    style D fill:#e0ffe0,stroke:#33cc33
+    style E fill:#fff0e0,stroke:#cc9933
+    style F fill:#fff0e0,stroke:#cc9933
+```
+
 ## Prerequisites
 
 | Tool | Version | Check |

@@ -95,6 +95,29 @@ BQQuery → BQTransform → TrainModel → EvaluateModel → RegisterModel → E
 [------@task group------] [--------@ml_task group---------] [-@task-]
 ```
 
+```mermaid
+flowchart LR
+    subgraph G1 ["@task group 1"]
+        BQ["BQQuery"] --> BT["BQTransform"]
+    end
+
+    subgraph G2 ["@ml_task group → KFP YAML"]
+        TM["TrainModel"] --> EM["EvaluateModel"] --> RM["RegisterModel"]
+    end
+
+    subgraph G3 ["@task group 2"]
+        Email["Email"]
+    end
+
+    G1 -->|"dataset_uri\n(bridged)"| G2
+    G2 --> G3
+
+    subgraph DAG ["Generated Airflow DAG"]
+        direction LR
+        O1["BigQueryInsert\nJobOperator"] --> O2["BigQueryInsert\nJobOperator"] --> O3["RunPipelineJob\nOperator"] --> O4["EmailOperator"]
+    end
+```
+
 Each `@ml_task` group is compiled to a separate KFP YAML file via `PipelineCompiler`. The Airflow DAG then orchestrates all groups sequentially:
 
 ```
@@ -103,6 +126,30 @@ bq_query >> bq_transform >> run_vertex_pipeline >> email_notify
 ```
 
 ### Cross-Step Data Flow (Bridging)
+
+```mermaid
+flowchart LR
+    subgraph AIRFLOW ["Airflow (@task steps)"]
+        BQ["BQQuery\ndestination_table:\nproject.dataset.table"]
+    end
+
+    subgraph BRIDGE ["SmartCompiler Bridge"]
+        DS["dataset_uri =\nproject.dataset.table"]
+        MU["model_uri =\ngs://bucket/.../model"]
+    end
+
+    subgraph VERTEX ["Vertex AI (@ml_task steps)"]
+        TM["TrainModel\nreceives: dataset_uri"]
+        RM["RegisterModel\nreceives: model_uri"]
+        DM["DeployModel\nuses: model_display_name"]
+    end
+
+    BQ -->|"output table ref"| DS
+    DS -->|"RunPipelineJobOperator\nparameter_values"| TM
+    TM -->|"KFP OutputPath"| MU
+    MU --> RM
+    RM -->|"model_name contract"| DM
+```
 
 When a `@task` group produces data that a subsequent `@ml_task` group needs, SmartCompiler bridges the gap:
 
@@ -234,6 +281,28 @@ Since KFP's `output_uri_path` file mechanism is not available locally, `LocalRun
 - `BQTransform` -> `project.dataset.output_table`
 
 ## Compilation Flow Summary
+
+```mermaid
+flowchart TD
+    A["pipeline.py\nPipeline builder API"] --> B["PipelineDefinition\n(.build())"]
+    B --> C["SmartCompiler.compile()"]
+    C --> D["Group steps by task_type\n(itertools.groupby)"]
+
+    D --> E{"@ml_task\ngroup?"}
+    D --> F{"@task\ngroup?"}
+
+    E -->|"For each group"| G["PipelineCompiler.compile()"]
+    G --> H["component.as_kfp_component()\nfor each step"]
+    H --> I["kfp.compiler.Compiler()"]
+    I --> YAML["compiled_pipelines/\n{name}.yaml"]
+
+    F -->|"For each step"| J["render_operator()\n→ native Airflow code"]
+
+    J --> DAG["dags/{dag_id}.py"]
+    YAML --> DAG
+
+    DAG --> NOTE["Airflow DAG wires:\n@task → native operators\n@ml_task groups → RunPipelineJobOperator\nwith cross-type bridging"]
+```
 
 ```
 pipeline.py (Pipeline builder)

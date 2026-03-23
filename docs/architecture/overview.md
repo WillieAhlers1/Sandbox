@@ -61,6 +61,16 @@
 | `gml run` | Triggers DAG in Composer or executes all steps in-process (`--local`) |
 | `gml teardown` | Deletes all branch-scoped GCP resources (GCS prefix, BQ dataset, DAGs) |
 
+```mermaid
+flowchart LR
+    A["pipeline.py\n(Pipeline builder)"] -->|"gml compile"| B["SmartCompiler"]
+    B --> C["KFP YAML\n+ Airflow DAG"]
+    C -->|"gml build"| D["Cloud Build\n→ Artifact Registry"]
+    D -->|"gml deploy"| E["GCS + Composer\n(DAGs uploaded)"]
+    E -->|"gml run"| F["Vertex AI Pipelines\n+ Airflow orchestration"]
+    F --> G["BigQuery\nGCS\nModel Registry\nEndpoints"]
+```
+
 ---
 
 ## 2. Project Directory Structure
@@ -355,6 +365,42 @@ pydantic_settings.BaseSettings
            |-- EvaluateModel                 #   Custom execute(): run() -> experiment tracking
            |-- RegisterModel                 #   SINGLE OWNER of serving container image
            |-- DeployModel                   #   Pure deployment -- NO serving image fields
+```
+
+```mermaid
+classDiagram
+    class BaseSettings["pydantic_settings.BaseSettings"]
+    class BaseComponent {
+        +machine_type: str
+        +project: str
+        +region: str
+        +branch: str
+        +environment: str
+        +cli()
+        +execute()
+        +run()
+        +as_kfp_component()
+    }
+    BaseSettings <|-- BaseComponent
+
+    class BQQuery["BQQuery\n@task → BigQueryInsertJobOperator"]
+    class BQTransform["BQTransform\n@task → BigQueryInsertJobOperator"]
+    class Email["Email\n@task → EmailOperator"]
+    class WriteFeatures["WriteFeatures\n@task → PythonOperator"]
+
+    class TrainModel["TrainModel\n@ml_task → KFP container"]
+    class EvaluateModel["EvaluateModel\n@ml_task → KFP container"]
+    class RegisterModel["RegisterModel\n@ml_task → KFP container\n(owns serving image)"]
+    class DeployModel["DeployModel\n@ml_task → KFP container\n(no serving image)"]
+
+    BaseComponent <|-- BQQuery
+    BaseComponent <|-- BQTransform
+    BaseComponent <|-- Email
+    BaseComponent <|-- WriteFeatures
+    BaseComponent <|-- TrainModel
+    BaseComponent <|-- EvaluateModel
+    BaseComponent <|-- RegisterModel
+    BaseComponent <|-- DeployModel
 ```
 
 ### Design Contracts (PRs #23-#26)

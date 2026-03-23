@@ -11,6 +11,52 @@ pipeline.py  --> Docker images  --> DAGs + YAML to  --> Trigger DAG
   DAG files      Registry
 ```
 
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant CLI as gml CLI
+    participant CB as Cloud Build
+    participant AR as Artifact Registry
+    participant GCS as GCS Bucket
+    participant Composer as Cloud Composer
+    participant Vertex as Vertex AI
+
+    rect rgb(240, 248, 255)
+    note right of Dev: Step 1 — Compile
+    Dev->>CLI: gml compile --all
+    CLI->>CLI: Discover pipelines/*/pipeline.py
+    CLI->>CLI: SmartCompiler groups @task vs @ml_task
+    CLI-->>Dev: compiled_pipelines/*.yaml + dags/*.py
+    end
+
+    rect rgb(240, 255, 240)
+    note right of Dev: Step 2 — Build
+    Dev->>CLI: gml build training_pipeline
+    CLI->>CB: gcloud builds submit (cloudbuild.yaml)
+    CB->>CB: Build base-python → pipeline--base → pipeline--serve
+    CB->>AR: Push images with :branch-sha tag
+    end
+
+    rect rgb(255, 248, 240)
+    note right of Dev: Step 3 — Deploy
+    Dev->>CLI: gml deploy --all
+    CLI->>CLI: Re-compile (ensure fresh artifacts)
+    CLI->>AR: Verify image tags exist
+    CLI->>GCS: Upload DAG files
+    CLI->>GCS: Upload KFP YAML
+    CLI-->>Dev: Deployment complete
+    end
+
+    rect rgb(248, 240, 255)
+    note right of Dev: Step 4 — Run
+    Dev->>CLI: gml run training_pipeline
+    CLI->>Composer: gcloud composer dags trigger
+    Composer->>Vertex: RunPipelineJobOperator → KFP YAML
+    Vertex->>AR: Pull container images
+    Vertex-->>Composer: Pipeline complete
+    end
+```
+
 ### Step 1: Compile
 
 ```bash
@@ -111,6 +157,20 @@ Tier 1: {pipeline}--serve (per-pipeline serving image)
       +-- Extends pipeline base, adds FastAPI + uvicorn + app code
           Dockerfile: docker/pipelines/{name}/serve.Dockerfile
           ARG BASE_IMAGE={pipeline}--base
+```
+
+```mermaid
+graph TD
+    A["<b>base-python</b><br/><i>docker/base/base-python/Dockerfile</i><br/>Python 3.12-slim + uv"]
+    B["<b>{pipeline}--base</b><br/><i>docker/pipelines/{name}/base.Dockerfile</i><br/>+ pipeline code, deps, framework"]
+    C["<b>{pipeline}--serve</b><br/><i>docker/pipelines/{name}/serve.Dockerfile</i><br/>+ FastAPI, uvicorn, app/ code"]
+
+    A -->|"FROM base-python"| B
+    B -->|"FROM {pipeline}--base"| C
+
+    style A fill:#e0f0ff,stroke:#3399cc
+    style B fill:#e0ffe0,stroke:#33cc33
+    style C fill:#fff0e0,stroke:#cc9933
 ```
 
 Concrete example for `house_price`:

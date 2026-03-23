@@ -33,6 +33,21 @@ class TrainLargeModel(BaseComponent):
 
 These override the default `machine_type`, `accelerator_type`, and `accelerator_count` fields on `BaseComponent` and trigger a Pydantic `model_rebuild()`.
 
+```mermaid
+flowchart TD
+    Q1{"Does it interact with\nGCP ML services?\n(training, model registry,\nendpoints, feature store)"}
+    Q1 -->|Yes| Q2{"Needs custom Docker\nimage / GPU / heavy compute?"}
+    Q1 -->|No| Q3{"Is it a BigQuery,\nemail, or Airflow-native\noperation?"}
+
+    Q2 -->|Yes| ML["Use @ml_task\n→ KFP container on Vertex AI\n(supports machine_type,\naccelerator overrides)"]
+    Q2 -->|No| ML
+
+    Q3 -->|Yes| TASK["Use @task\n→ Native Airflow operator\n(BigQueryInsertJobOperator,\nEmailOperator, etc.)"]
+    Q3 -->|No| Q4{"Does it need to run\ninside a container?"}
+    Q4 -->|Yes| ML
+    Q4 -->|No| TASK
+```
+
 ## Component Lifecycle: cli() -> execute() -> run()
 
 Every component follows a three-layer lifecycle. Data scientists only touch `run()`.
@@ -42,6 +57,34 @@ Container starts
   -> cli()          # Parses CLI flags, instantiates the component, calls execute()
     -> execute()    # I/O lifecycle: temp dirs, GCS upload, output URI writing
       -> run()      # Business logic (data scientist writes this)
+```
+
+```mermaid
+flowchart TD
+    Start["Container starts\nor LocalRunner calls"] --> CLI["cli()\n—————————\nAuto-generates Typer CLI\nfrom Pydantic fields\n(--flag per field)"]
+    CLI --> Instantiate["Instantiate component\nwith parsed flags"]
+    Instantiate --> Execute
+
+    subgraph Execute ["execute() — framework-owned"]
+        direction TB
+        E1["Create temp dir\n(self._work_dir)"]
+        E1 --> E2["Call self.run()"]
+        E2 --> E3["Upload _work_dir to GCS\n(TrainModel)"]
+        E3 --> E4["Write output URI\nto KFP OutputPath"]
+        E4 --> E5["Log to Vertex AI\nExperiments (best-effort)"]
+    end
+
+    Execute --> Done["Step complete"]
+
+    subgraph Run ["run() — data scientist owns"]
+        direction TB
+        R1["Read inputs\n(self.project, self.dataset_uri, etc.)"]
+        R1 --> R2["Business logic\n(train, evaluate, transform)"]
+        R2 --> R3["Write artifacts\nto self._work_dir"]
+    end
+
+    E2 -.-> Run
+    Run -.-> E3
 ```
 
 ### cli()

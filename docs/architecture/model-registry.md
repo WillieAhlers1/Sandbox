@@ -7,6 +7,31 @@ The pipeline has two distinct steps with strict ownership boundaries:
 1. **RegisterModel** -- uploads model artifacts to Vertex AI Model Registry and captures the serving container image. Single owner of the serving image.
 2. **DeployModel** -- looks up the registered model by display name and deploys it to a Vertex AI Endpoint. No serving image fields. No model URI. Pure deployment concern.
 
+```mermaid
+flowchart LR
+    subgraph PIPELINE ["Pipeline Definition"]
+        TM["TrainModel\nruntime_dockerfile"] -->|"model_uri\n(GCS path)"| RM
+        RM["RegisterModel\nmodel_name='regression'\nserving_dockerfile"] -->|"model_name contract"| DM["DeployModel\nmodel_name='regression'\n(no serving image)"]
+    end
+
+    subgraph COMPILER ["Compiler Derives"]
+        MN["model_display_name\n= NamingConvention\n.vertex_model_name()"]
+        EN["endpoint_display_name\n= NamingConvention\n.vertex_endpoint_name()"]
+    end
+
+    subgraph GCP ["GCP Resources"]
+        MR["Vertex AI\nModel Registry\n(model + serving image)"]
+        EP["Vertex AI\nEndpoint"]
+    end
+
+    RM --> MN
+    DM --> MN
+    DM --> EN
+    RM -->|"Model.upload()\nartifact_uri + serving_image"| MR
+    DM -->|"Model.list(display_name)\n→ Endpoint.deploy()"| MR
+    DM -->|"find or create"| EP
+```
+
 ## The model_name Contract
 
 `model_name` is the contract between `RegisterModel` and `DeployModel`. Both components declare the same `model_name` value, and the compiler uses it to derive matching display names:
@@ -54,6 +79,28 @@ vertex_model_name("house_price", "classifier") -> "...-house-price-classifier"
 ## RegisterModel
 
 ### Serving Image Resolution (Three-Tier Priority)
+
+```mermaid
+flowchart TD
+    Start["RegisterModel\nat compile time"] --> Q1{"serving_container_image\nset? (full URI)"}
+
+    Q1 -->|Yes| R1["Use as-is\ne.g. us-docker.pkg.dev/vertex-ai/\nprediction/sklearn-cpu.1-3:latest"]
+
+    Q1 -->|No| Q2{"serving_dockerfile\nset? (path relative to docker/)"}
+
+    Q2 -->|Yes| R2["Resolve via NamingConvention\n.docker_image_uri()\ne.g. .../house-price--serve:main-abc1234"]
+
+    Q2 -->|No| Q3{"default_image\navailable from pipeline?"}
+
+    Q3 -->|Yes| R3["Fall back to pipeline's\ntraining image\n(batch prediction use case)"]
+
+    Q3 -->|No| R4["No serving image\n(error at registration)"]
+
+    style R1 fill:#d4edda
+    style R2 fill:#d4edda
+    style R3 fill:#fff3cd
+    style R4 fill:#f8d7da
+```
 
 The serving container image is resolved at compile time using this priority:
 

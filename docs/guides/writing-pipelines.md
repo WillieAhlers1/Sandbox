@@ -88,6 +88,42 @@ The compiler scans step boundaries by `task_type` and produces:
 [Train, Evaluate, Register, Deploy]  -->  KFP YAML + RunPipelineJobOperator in DAG
 ```
 
+```mermaid
+graph LR
+    subgraph pipeline.py
+        S1["BQQuery<br/>@task"]
+        S2["BQTransform<br/>@task"]
+        S3["TrainModel<br/>@ml_task"]
+        S4["Evaluate<br/>@ml_task"]
+        S5["Register<br/>@ml_task"]
+        S6["Deploy<br/>@ml_task"]
+    end
+
+    subgraph "SmartCompiler Output"
+        subgraph "Airflow DAG (dags/*.py)"
+            A1["BigQueryInsertJobOperator<br/><i>ingest_raw_data</i>"]
+            A2["BigQueryInsertJobOperator<br/><i>transform_features</i>"]
+            A3["RunPipelineJobOperator<br/><i>points to KFP YAML</i>"]
+        end
+        subgraph "KFP YAML (compiled_pipelines/*.yaml)"
+            K1[Train] --> K2[Evaluate] --> K3[Register] --> K4[Deploy]
+        end
+    end
+
+    S1 & S2 -->|"@task group"| A1
+    S3 & S4 & S5 & S6 -->|"@ml_task group"| K1
+    A1 --> A2 --> A3
+    A3 -.->|triggers| K1
+
+    style A1 fill:#e0f0ff,stroke:#3399cc
+    style A2 fill:#e0f0ff,stroke:#3399cc
+    style A3 fill:#fff0e0,stroke:#cc9933
+    style K1 fill:#e0ffe0,stroke:#33cc33
+    style K2 fill:#e0ffe0,stroke:#33cc33
+    style K3 fill:#e0ffe0,stroke:#33cc33
+    style K4 fill:#e0ffe0,stroke:#33cc33
+```
+
 The generated DAG wires the operators sequentially: `ingest >> transform >> run_vertex_pipeline`. Data bridging between `@task` and `@ml_task` groups (e.g., passing a BQ table reference to the training step) is handled automatically by the compiler.
 
 ## `for_each()` Loops
@@ -124,6 +160,19 @@ Parameters:
 The `item_param` field must exist on the component class. For the example above, `TrainVerifyModelStep` inherits `job_name` from `TrainModel`.
 
 The compiler generates a KFP `ParallelFor` that runs all items in parallel.
+
+```mermaid
+graph TD
+    Pre[Previous steps] --> FE{"for_each<br/>items: [us-market, eu-market]"}
+    FE -->|"item = us-market"| P1["TrainVerifyModelStep<br/>job_name = us-market"]
+    FE -->|"item = eu-market"| P2["TrainVerifyModelStep<br/>job_name = eu-market"]
+    P1 --> Join[Continue pipeline]
+    P2 --> Join
+
+    style FE fill:#fff3cd,stroke:#cc9933
+    style P1 fill:#e0ffe0,stroke:#33cc33
+    style P2 fill:#e0ffe0,stroke:#33cc33
+```
 
 ## `condition()` Branching
 
@@ -165,6 +214,21 @@ Parameters:
 | `else_steps` | `list[BaseComponent] \| None` | Steps if condition is false (optional) |
 
 The compiler generates a KFP `dsl.If` block. In this example, registration and deployment only happen if the evaluation step produced a non-empty output (meaning the model passed quality gates).
+
+```mermaid
+graph TD
+    Eval["Evaluate Model<br/><i>output_uri</i>"]
+    Cond{"condition<br/>output_uri != ''"}
+    Eval --> Cond
+    Cond -->|"True (model passed)"| Reg[RegisterModel]
+    Reg --> Dep[DeployModel]
+    Cond -->|"False (model failed)"| Skip["Pipeline ends<br/><i>no deployment</i>"]
+
+    style Cond fill:#fff3cd,stroke:#cc9933
+    style Reg fill:#e0ffe0,stroke:#33cc33
+    style Dep fill:#e0ffe0,stroke:#33cc33
+    style Skip fill:#f8d7da,stroke:#cc3333
+```
 
 ## Dockerfile Fields
 

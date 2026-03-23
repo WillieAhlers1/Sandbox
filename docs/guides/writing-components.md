@@ -13,6 +13,25 @@ The framework has two task types, set by decorators:
 
 The decorator determines how the SmartCompiler handles the component. You do not choose at compile time -- it is fixed on the class.
 
+```mermaid
+flowchart TD
+    Q1{"Does the step run<br/>in a container<br/>on Vertex AI?"}
+    Q1 -->|Yes| ML["Use <b>@ml_task</b><br/>Compiled to KFP container component"]
+    Q1 -->|No| Q2{"Does it run as a<br/>native Airflow operator?"}
+    Q2 -->|Yes| TK["Use <b>@task</b><br/>Compiled to Airflow operator"]
+    Q2 -->|No| Q3{"Lightweight<br/>orchestration?"}
+    Q3 -->|Yes| TK
+    Q3 -->|No| ML
+
+    ML --> EX1["Examples: TrainModel, EvaluateModel,<br/>RegisterModel, DeployModel"]
+    TK --> EX2["Examples: BQQuery, BQTransform,<br/>Email, DBTRun"]
+
+    style ML fill:#e0ffe0,stroke:#33cc33
+    style TK fill:#e0f0ff,stroke:#3399cc
+    style EX1 fill:#f0f0f0,stroke:#999
+    style EX2 fill:#f0f0f0,stroke:#999
+```
+
 ## Component Lifecycle
 
 Every component follows the same lifecycle:
@@ -34,6 +53,31 @@ cli()  -->  execute()  -->  run()
 - Automatic GCS upload of everything in `_work_dir` after `run()` completes
 - Output URI writing for cross-step data flow
 - Experiment tracking (best-effort, non-fatal)
+
+```mermaid
+sequenceDiagram
+    participant KFP as KFP / Local Runner
+    participant CLI as cli()
+    participant Exec as execute()
+    participant Run as run()
+    participant GCS as GCS
+
+    KFP->>CLI: python -m steps.train --project ... --region ...
+    CLI->>Exec: Parses flags → calls execute()
+
+    rect rgb(240, 255, 240)
+    note right of Exec: TrainModel.execute() lifecycle
+    Exec->>Exec: Create temp _work_dir
+    Exec->>Exec: Init experiment tracking (best-effort)
+    Exec->>Run: Call run()
+    Run->>Run: Train model, write artifacts to _work_dir
+    Run-->>Exec: return
+    Exec->>GCS: Upload _work_dir/* → model_output_uri
+    Exec->>Exec: Write output_uri for next step
+    end
+
+    Exec-->>KFP: Step complete
+```
 
 ### 2. Override `run()` and write artifacts to `self._work_dir`
 
