@@ -16,7 +16,7 @@ from gcp_ml_framework.components.ml.train import TrainModel
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
-    from gcp_ml_framework.pipeline.builder import PipelineDefinition
+    from gcp_ml_framework.pipeline.builder import PipelineDefinition, PipelineStep
 
 
 class PipelineCompiler:
@@ -94,6 +94,8 @@ class PipelineCompiler:
             dataset_uri: str = "",
             model_uri: str = "",
         ):
+            from gcp_ml_framework.components.base import _INTERNAL_FIELDS
+
             prev_task = None
             last_dataset_output = None  # output from data-producing steps (ingest/transform)
             last_model_output = None  # output from train step
@@ -108,9 +110,6 @@ class PipelineCompiler:
                     base_image=step_image,
                 )
                 step_extra = derived_params.get(step.name, {})
-
-                # Build flat param dict: component fields (base), then context + derived overlay
-                from gcp_ml_framework.components.base import _INTERNAL_FIELDS
 
                 component_fields = {}
                 for name in type(step.component).model_fields:
@@ -187,7 +186,9 @@ class PipelineCompiler:
                             step_module=step_module,
                             base_image=step_image,
                         )
-                        step_extra = derived_params.get(step.name, {})
+                        step_extra = self._derive_step_params(
+                            context, pipeline_def, step, default_image
+                        )
                         comp_fields = {}
                         for fname in type(step.component).model_fields:
                             if fname in _INTERNAL_FIELDS:
@@ -260,7 +261,9 @@ class PipelineCompiler:
                             step_module=step_module,
                             base_image=step_image,
                         )
-                        step_extra = derived_params.get(bstep.name, {})
+                        step_extra = self._derive_step_params(
+                            context, pipeline_def, bstep, default_image
+                        )
                         comp_fields = {}
                         for fname in type(bstep.component).model_fields:
                             if fname in _INTERNAL_FIELDS:
@@ -380,6 +383,64 @@ class PipelineCompiler:
             ),
         }
 
+    def _derive_step_params(
+        self,
+        context: "MLContext",
+        pipeline_def: "PipelineDefinition",
+        step: "PipelineStep",
+        default_image: str = "",
+    ) -> dict:
+        """Compute derived params for a single pipeline step.
+
+        This is the single source of truth for parameter derivation,
+        called for ALL steps regardless of where they appear (sequential,
+        loop blocks, condition blocks).
+        """
+        comp = step.component
+        extra: dict = {}
+
+        # WriteFeatures: need feature_view_id and feature_group_id
+        if hasattr(comp, "entity") and hasattr(comp, "feature_group"):
+            fv_id = context.naming.feature_view_id(comp.entity, comp.feature_group)
+            extra["feature_view_id"] = fv_id
+            extra["feature_group_id"] = fv_id
+
+        # TrainModel: needs job_name and model_output_uri
+        if isinstance(comp, TrainModel):
+            extra["job_name"] = context.naming.vertex_training_job_name(pipeline_def.name)
+            extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
+
+        # RegisterModel: needs model_display_name + serving_container_image
+        # Serving image resolution (uses serving_dockerfile, NOT runtime_dockerfile):
+        #   1. serving_container_image (full URI) — use as-is
+        #   2. serving_dockerfile — resolve via naming convention
+        #   3. Neither set — fall back to pipeline default training image
+        if isinstance(comp, RegisterModel):
+            extra["model_display_name"] = context.naming.vertex_model_name(
+                pipeline_def.name, comp.model_name or None
+            )
+            if not comp.serving_container_image:
+                if comp.serving_dockerfile:
+                    extra["serving_container_image"] = self._resolve_image_uri(
+                        context, comp.serving_dockerfile
+                    )
+                elif default_image:
+                    extra["serving_container_image"] = default_image
+
+        # DeployModel: needs model_display_name and endpoint_display_name.
+        # Both are derived from pipeline_name + model_name via naming convention.
+        # No serving image needed — it's already captured during registration.
+        if isinstance(comp, DeployModel):
+            model_name_val = comp.model_name or None
+            extra["model_display_name"] = context.naming.vertex_model_name(
+                pipeline_def.name, model_name_val
+            )
+            extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
+                pipeline_def.name, model_name_val
+            )
+
+        return extra
+
     def _build_derived_params(
         self,
         context: "MLContext",
@@ -391,49 +452,7 @@ class PipelineCompiler:
         """Compute per-step derived params that aren't simple dataclass fields."""
         derived: dict[str, dict] = {}
         for step in steps:
-            comp = step.component
-            extra: dict = {}
-
-            # WriteFeatures: need feature_view_id and feature_group_id
-            if hasattr(comp, "entity") and hasattr(comp, "feature_group"):
-                fv_id = context.naming.feature_view_id(comp.entity, comp.feature_group)
-                extra["feature_view_id"] = fv_id
-                extra["feature_group_id"] = fv_id
-
-            # TrainModel: needs job_name and model_output_uri
-            if isinstance(comp, TrainModel):
-                extra["job_name"] = context.naming.vertex_training_job_name(pipeline_def.name)
-                extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
-
-            # RegisterModel: needs model_display_name + serving_container_image
-            # Serving image resolution (uses serving_dockerfile, NOT runtime_dockerfile):
-            #   1. serving_container_image (full URI) — use as-is
-            #   2. serving_dockerfile — resolve via naming convention
-            #   3. Neither set — fall back to pipeline default training image
-            if isinstance(comp, RegisterModel):
-                extra["model_display_name"] = context.naming.vertex_model_name(
-                    pipeline_def.name, comp.model_name or None
-                )
-                if not comp.serving_container_image:
-                    if comp.serving_dockerfile:
-                        extra["serving_container_image"] = self._resolve_image_uri(
-                            context, comp.serving_dockerfile
-                        )
-                    elif default_image:
-                        extra["serving_container_image"] = default_image
-
-            # DeployModel: needs model_display_name and endpoint_display_name.
-            # Both are derived from pipeline_name + model_name via naming convention.
-            # No serving image needed — it's already captured during registration.
-            if isinstance(comp, DeployModel):
-                model_name_val = comp.model_name or None
-                extra["model_display_name"] = context.naming.vertex_model_name(
-                    pipeline_def.name, model_name_val
-                )
-                extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
-                    pipeline_def.name, model_name_val
-                )
-
+            extra = self._derive_step_params(context, pipeline_def, step, default_image)
             if extra:
                 derived[step.name] = extra
         return derived

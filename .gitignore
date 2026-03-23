@@ -30,7 +30,6 @@ dags/
 
 # Claude local settings
 .claude/settings.local.json
-CLAUDE.md
 
 # Documents
 REQS.docx
