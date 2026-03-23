@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
-
 import typer
 
 from gcp_ml_framework.cli._helpers import console, load_context, print_kv_table
@@ -14,8 +11,7 @@ context_app = typer.Typer(help="Show context and resolved resource names.")
 
 @context_app.command("show")
 def show(
-    framework_yaml: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to framework.yaml"),
-    branch: Optional[str] = typer.Option(None, "--branch", "-b", help="Override git branch"),
+    branch: str | None = typer.Option(None, "--branch", "-b", help="Override git branch"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """
@@ -26,38 +22,53 @@ def show(
         gml context show
         gml context show --branch main
     """
-    ctx = load_context(framework_yaml=framework_yaml, branch=branch)
+    ctx = load_context(branch=branch)
 
     if json_output:
         import json
+
         typer.echo(json.dumps(ctx.summary(), indent=2))
         return
 
     console.print()
-    console.print(f"[bold cyan]GCP ML Framework[/bold cyan] — context for branch [yellow]{ctx.raw_branch!r}[/yellow]")
+    console.print(
+        f"[bold cyan]GCP ML Framework[/bold cyan] — context for "
+        f"branch [yellow]{ctx.raw_branch!r}[/yellow]"
+    )
     console.print()
-    print_kv_table("Identity", {
-        "team": ctx.naming.team,
-        "project": ctx.naming.project,
-        "branch (raw)": ctx.raw_branch,
-        "branch (slug)": ctx.naming.branch,
-        "git_state": ctx.git_state.value.upper(),
-    })
+    print_kv_table(
+        "Identity",
+        {
+            "team": ctx.naming.team,
+            "project": ctx.naming.project,
+            "branch (raw)": ctx.raw_branch,
+            "branch (slug)": ctx.naming.branch,
+            "environment": ctx.environment.value.upper(),
+        },
+    )
     console.print()
-    print_kv_table("GCP", {
-        "project": ctx.gcp_project,
-        "region": ctx.region,
-        "composer_env": ctx.composer_env or "(not configured)",
-    })
+    print_kv_table(
+        "GCP",
+        {
+            "project": ctx.gcp_project,
+            "region": ctx.region,
+            "composer_dags_path": (
+                str(ctx.composer_dags_path) if ctx.composer_dags_path else "(not configured)"
+            ),
+        },
+    )
     console.print()
-    print_kv_table("Resource Names", {
-        "namespace": ctx.namespace,
-        "gcs_bucket": ctx.naming.gcs_bucket,
-        "gcs_prefix": ctx.gcs_prefix,
-        "bq_dataset": ctx.bq_dataset,
-        "feature_store_id": ctx.feature_store_id,
-        "dag_id pattern": ctx.naming.dag_id("{pipeline}"),
-        "vertex_experiment pattern": ctx.naming.vertex_experiment("{pipeline}"),
-        "secret_prefix": ctx.secret_prefix,
-    })
+    print_kv_table(
+        "Resource Names",
+        {
+            "namespace": ctx.namespace,
+            "gcs_bucket": ctx.naming.gcs_bucket,
+            "gcs_prefix": ctx.gcs_prefix,
+            "bq_dataset": ctx.bq_dataset,
+            "feature_store_id": ctx.feature_store_id,
+            "dag_id pattern": ctx.naming.dag_id("{pipeline}"),
+            "vertex_experiment pattern": ctx.naming.vertex_experiment("{pipeline}"),
+            "secret_prefix": ctx.secret_prefix,
+        },
+    )
     console.print()

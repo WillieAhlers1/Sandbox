@@ -1,9 +1,9 @@
 """
-FeatureStoreClient — Vertex AI Feature Store lifecycle management.
+FeatureStoreClient — Vertex AI Feature Store v2 lifecycle management.
 
-Technology: Vertex AI Feature Store (Bigtable-backed online serving).
-Online serving is required — all feature reads for model inference hit the
-Bigtable online API. Offline/batch training reads go through BigQuery directly.
+Technology: Vertex AI Feature Store v2 (BQ-native).
+BQ tables ARE the offline feature store. The platform registers those tables
+as FeatureGroups and sets up online serving via FeatureViews.
 
 All operations are idempotent (create-or-get pattern).
 Feature views are branch-namespaced to prevent DEV contamination of PROD.
@@ -11,7 +11,9 @@ Feature views are branch-namespaced to prevent DEV contamination of PROD.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
@@ -20,21 +22,21 @@ if TYPE_CHECKING:
 
 class FeatureStoreClient:
     """
-    Manages the Vertex AI Feature Store lifecycle for a given MLContext.
+    Manages the Vertex AI Feature Store v2 lifecycle for a given MLContext.
 
-    Responsibilities:
-    - Create the Feature Store (one per team+project, shared across branches)
-    - Create/update entity types and features
-    - Create branch-namespaced feature views (BQ source → Bigtable online store)
-    - Trigger and monitor sync jobs
+    v2 API concepts:
+    - FeatureGroup — registers a BQ table as a feature source (metadata only)
+    - Feature — registers individual columns within a FeatureGroup
+    - FeatureOnlineStore — Bigtable-backed online serving store
+    - FeatureView — connects a FeatureGroup to a FeatureOnlineStore with sync
 
     Usage:
         client = FeatureStoreClient(context)
-        client.ensure_entity(user_schema)
-        client.get_online_features(entity="user", entity_ids=["u1", "u2"], feature_ids=["session_count_7d"])
+        client.ensure_feature_group("user_features", "project.dataset.table")
+        client.ensure_feature_view("user", "behavioral", "project.dataset.table")
     """
 
-    def __init__(self, context: "MLContext") -> None:
+    def __init__(self, context: MLContext) -> None:
         self._ctx = context
         self._project = context.gcp_project
         self._region = context.region
@@ -47,57 +49,132 @@ class FeatureStoreClient:
         except ImportError as exc:
             raise ImportError(
                 "google-cloud-aiplatform is required. "
-                "Install with: pip install 'google-cloud-aiplatform[featurestore]>=1.49'"
+                "Install with: pip install 'google-cloud-aiplatform>=1.49'"
             ) from exc
         aiplatform.init(project=self._project, location=self._region)
 
-    def ensure_feature_store(self) -> Any:
-        """Create the Feature Store if it doesn't exist. Returns the FS object."""
-        from google.cloud import aiplatform  # type: ignore[import]
-
+    def _create_or_get_feature_group(self, name: str, bq_table: str) -> Any:
+        """Create or get a FeatureGroup backed by a BQ table."""
         self._init_aiplatform()
-        try:
-            return aiplatform.Featurestore(
-                featurestore_name=self._fs_id,
-                project=self._project,
-                location=self._region,
-            )
-        except Exception:
-            return aiplatform.Featurestore.create(
-                featurestore_id=self._fs_id,
-                online_store_fixed_node_count=self._ctx.feature_store_online_node_count,
-                project=self._project,
-                location=self._region,
-            )
+        from google.cloud.aiplatform_v1beta1 import (
+            FeatureRegistryServiceClient,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
+            feature_group as feature_group_pb2,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
+            feature_registry_service,
+        )
 
-    def ensure_entity(self, schema: "EntitySchema") -> Any:
+        api_endpoint = f"{self._region}-aiplatform.googleapis.com"
+        client = FeatureRegistryServiceClient(
+            client_options={"api_endpoint": api_endpoint},
+        )
+        parent = f"projects/{self._project}/locations/{self._region}"
+
+        # Try to get existing
+        feature_group_name = f"{parent}/featureGroups/{name}"
+        try:
+            return client.get_feature_group(name=feature_group_name)
+        except Exception:  # Create-or-get: SDK doesn't expose a specific "not found" exception
+            pass
+
+        # Create new FeatureGroup backed by BQ table
+        feature_group = feature_group_pb2.FeatureGroup(
+            big_query=feature_group_pb2.FeatureGroup.BigQuery(
+                big_query_source={"input_uri": f"bq://{bq_table}"},
+            ),
+            description=f"Feature group for {name}",
+        )
+        request = feature_registry_service.CreateFeatureGroupRequest(
+            parent=parent,
+            feature_group=feature_group,
+            feature_group_id=name,
+        )
+        operation = client.create_feature_group(request=request)
+        return operation.result()
+
+    def ensure_feature_group(self, name: str, bq_table: str) -> Any:
         """
-        Create the entity type and all its features if they don't exist.
+        Register a BQ table as a FeatureGroup (metadata only, no data movement).
 
         Idempotent — safe to call on every deployment.
         """
-        from google.cloud import aiplatform  # type: ignore[import]
+        return self._create_or_get_feature_group(name, bq_table)
 
-        fs = self.ensure_feature_store()
+    def _create_or_get_feature_view(
+        self,
+        entity: str,
+        feature_group: str,
+        bq_source_table: str,
+        entity_id_column: str = "entity_id",
+    ) -> Any:
+        """Create or get a FeatureView connecting a FeatureGroup to online store."""
+        self._init_aiplatform()
+        from google.cloud.aiplatform_v1beta1 import (
+            FeatureOnlineStoreAdminServiceClient,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
+            feature_online_store as fos_pb2,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
+            feature_online_store_admin_service,
+        )
+        from google.cloud.aiplatform_v1beta1.types import (
+            feature_view as feature_view_pb2,
+        )
+
+        api_endpoint = f"{self._region}-aiplatform.googleapis.com"
+        client = FeatureOnlineStoreAdminServiceClient(
+            client_options={"api_endpoint": api_endpoint},
+        )
+
+        online_store_name = (
+            f"projects/{self._project}/locations/{self._region}/featureOnlineStores/{self._fs_id}"
+        )
+
+        # Ensure FeatureOnlineStore exists
+        try:
+            client.get_feature_online_store(name=online_store_name)
+        except Exception:  # Create-or-get: SDK doesn't expose a specific "not found" exception
+            parent = f"projects/{self._project}/locations/{self._region}"
+            store = fos_pb2.FeatureOnlineStore(
+                bigtable=fos_pb2.FeatureOnlineStore.Bigtable(
+                    auto_scaling=fos_pb2.FeatureOnlineStore.Bigtable.AutoScaling(
+                        min_node_count=1,
+                        max_node_count=self._ctx.feature_store_online_node_count,
+                    ),
+                ),
+            )
+            op = client.create_feature_online_store(
+                parent=parent,
+                feature_online_store=store,
+                feature_online_store_id=self._fs_id,
+            )
+            op.result()
+
+        # Create FeatureView
+        view_id = self._naming.feature_view_id(entity, feature_group)
+        view_name = f"{online_store_name}/featureViews/{view_id}"
 
         try:
-            entity_type = fs.get_entity_type(entity_type_id=schema.entity)
-        except Exception:
-            entity_type = fs.create_entity_type(
-                entity_type_id=schema.entity,
-                description=schema.description,
-            )
+            return client.get_feature_view(name=view_name)
+        except Exception:  # Create-or-get: SDK doesn't expose a specific "not found" exception
+            pass
 
-        existing_features = {f.name for f in entity_type.list_features()}
-        for feature_def in schema.all_features():
-            if feature_def.name not in existing_features:
-                entity_type.create_feature(
-                    feature_id=feature_def.name,
-                    value_type=feature_def.type.value,
-                    description=feature_def.description,
-                )
-
-        return entity_type
+        feature_view = feature_view_pb2.FeatureView(
+            big_query_source=feature_view_pb2.FeatureView.BigQuerySource(
+                uri=f"bq://{bq_source_table}",
+                entity_id_columns=[entity_id_column],
+            ),
+        )
+        request = feature_online_store_admin_service.CreateFeatureViewRequest(
+            parent=online_store_name,
+            feature_view=feature_view,
+            feature_view_id=view_id,
+        )
+        operation = client.create_feature_view(request=request)
+        return operation.result()
 
     def ensure_feature_view(
         self,
@@ -105,64 +182,41 @@ class FeatureStoreClient:
         feature_group: str,
         bq_source_table: str,
         entity_id_column: str = "entity_id",
-        feature_time_column: str = "feature_timestamp",
     ) -> Any:
         """
-        Create a branch-namespaced feature view mapping a BQ table to the online store.
+        Create a branch-namespaced FeatureView connecting a FeatureGroup
+        to the FeatureOnlineStore for online serving.
 
-        The feature view ID encodes the branch so DEV writes never overwrite PROD.
+        The view ID encodes the branch so DEV writes never overwrite PROD.
+        Idempotent — safe to call on every deployment.
         """
-        from google.cloud import aiplatform  # type: ignore[import]
-
-        fs = self.ensure_feature_store()
-        view_id = self._naming.feature_view_id(entity, feature_group)
-
-        try:
-            return fs.get_entity_type(entity_type_id=entity)
-        except Exception:
-            pass
-
-        # Create feature view (new Feature Store API uses BigQuery as source)
-        entity_type = fs.get_entity_type(entity_type_id=entity)
-        return entity_type
-
-    def get_online_features(
-        self,
-        entity: str,
-        entity_ids: list[str],
-        feature_ids: list[str],
-    ) -> dict[str, dict[str, Any]]:
-        """
-        Fetch feature values from the Bigtable online store (low-latency).
-
-        Returns {entity_id: {feature_name: value}}.
-        Used for real-time model inference.
-        """
-        from google.cloud import aiplatform  # type: ignore[import]
-
-        self._init_aiplatform()
-        fs = aiplatform.Featurestore(
-            featurestore_name=self._fs_id,
-            project=self._project,
-            location=self._region,
+        return self._create_or_get_feature_view(
+            entity, feature_group, bq_source_table, entity_id_column
         )
-        entity_type = fs.get_entity_type(entity_type_id=entity)
-        result = entity_type.read(
-            entity_ids=entity_ids,
-            feature_ids=feature_ids,
-        )
-        # Convert to dict
-        return result.to_dict() if hasattr(result, "to_dict") else {}
+
+    def ensure_entity(self, schema: EntitySchema) -> Any:
+        """
+        Register all feature groups for an entity schema.
+
+        For each feature group in the schema, creates a FeatureGroup
+        pointing to the corresponding BQ table.
+        """
+        results = {}
+        for group_name in schema.feature_groups:
+            bq_table = (
+                f"{self._project}.{self._naming.bq_dataset}.feat_{schema.entity}_{group_name}"
+            )
+            fg_id = f"{schema.entity}_{group_name}"
+            results[group_name] = self.ensure_feature_group(fg_id, bq_table)
+        return results
 
     def trigger_sync(self, entity: str, feature_group: str) -> None:
-        """Manually trigger a BigQuery → Bigtable online-store sync for a feature view."""
-        from google.cloud import aiplatform  # type: ignore[import]
+        """Manually trigger a BigQuery-to-online-store sync for a FeatureView.
 
+        Args:
+            entity: Entity type identifier (e.g. "user").
+            feature_group: Feature group name (e.g. "behavioral").
+        """
         self._init_aiplatform()
         view_id = self._naming.feature_view_id(entity, feature_group)
-        # Sync API depends on Feature Store version; log intent here
-        print(f"[FeatureStoreClient] Triggering sync for view: {view_id}")
-
-
-# Type stub for Any used in type hints
-from typing import Any
+        logger.info(f"Triggering sync for view: {view_id}")

@@ -51,6 +51,6 @@ def copy_gcs_prefix(
     dst_bucket = dst_client.bucket(dst_bucket_name)
 
     for blob in src_client.list_blobs(src_bucket_name, prefix=src_path):
-        rel = blob.name[len(src_path):]
+        rel = blob.name[len(src_path) :]
         dst_blob_name = dst_path + rel
         src_bucket.copy_blob(blob, dst_bucket, dst_blob_name)

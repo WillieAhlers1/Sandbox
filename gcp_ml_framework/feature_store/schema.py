@@ -19,14 +19,14 @@ YAML format:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import yaml
+from pydantic import BaseModel, Field
 
 
-class FeatureType(str, Enum):
+class FeatureType(StrEnum):
     INT64 = "INT64"
     FLOAT64 = "FLOAT64"
     STRING = "STRING"
@@ -38,22 +38,19 @@ class FeatureType(str, Enum):
     STRING_ARRAY = "STRING_ARRAY"
 
 
-@dataclass
-class FeatureDef:
+class FeatureDef(BaseModel):
     name: str
     type: FeatureType
     description: str = ""
 
 
-@dataclass
-class FeatureGroupSchema:
+class FeatureGroupSchema(BaseModel):
     name: str
     description: str
-    features: list[FeatureDef] = field(default_factory=list)
+    features: list[FeatureDef] = Field(default_factory=list)
 
 
-@dataclass
-class EntitySchema:
+class EntitySchema(BaseModel):
     """
     Describes a Vertex AI Feature Store entity type and all its feature groups.
 
@@ -61,16 +58,18 @@ class EntitySchema:
     Feature groups partition features by domain (behavioral, demographic, etc.).
     """
 
-    entity: str          # Entity type ID, e.g. "user"
-    id_column: str       # Source table column used as the entity ID
+    entity: str  # Entity type ID, e.g. "user"
+    id_column: str  # Source table column used as the entity ID
     id_type: FeatureType = FeatureType.STRING
     description: str = ""
-    feature_groups: dict[str, FeatureGroupSchema] = field(default_factory=dict)
+    feature_groups: dict[str, FeatureGroupSchema] = Field(default_factory=dict)
 
     def all_features(self) -> list[FeatureDef]:
+        """Return a flat list of all feature definitions across all groups."""
         return [f for g in self.feature_groups.values() for f in g.features]
 
     def feature_names(self) -> list[str]:
+        """Return a flat list of all feature names across all groups."""
         return [f.name for f in self.all_features()]
 
 

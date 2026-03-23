@@ -1,108 +1,115 @@
-"""TrainModel — submit a Vertex AI Custom Training Job."""
+"""TrainModel — train a model directly inside the pipeline container."""
 
-from __future__ import annotations
+import os
+import tempfile
+from pathlib import Path
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from loguru import logger
+from pydantic import PrivateAttr
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
-
-if TYPE_CHECKING:
-    from gcp_ml_framework.context import MLContext
+from gcp_ml_framework.components.base import _INTERNAL_FIELDS, BaseComponent
+from gcp_ml_framework.decorators import ml_task
 
 
-@dataclass
+@ml_task
 class TrainModel(BaseComponent):
     """
-    Submit a Vertex AI Custom Training Job using a custom container.
+    Train a model directly inside the KFP pipeline container.
 
-    The training container receives:
-        --model-output <gcs_path>   — where to write the model artifact
-        --dataset-path <gcs_path>   — input dataset URI (from upstream component)
+    component_name is the step file name under steps/.
+    E.g. component_name="train_house_model" → steps/train_house_model.py
 
-    Plus any additional `trainer_args` you specify.
+    Lifecycle (per REQS 1.0):
+        execute() creates a temp dir as self._work_dir, calls self.run(),
+        uploads everything in self._work_dir to GCS, and writes the output URI.
+        Data scientists override run() only — pure business logic.
+        They write model artifacts to self._work_dir and never touch GCS.
 
     Example:
         TrainModel(
-            trainer_image="us-central1-docker.pkg.dev/my-proj/trainers/churn:latest",
-            machine_type="n1-standard-8",
-            hyperparameters={"learning_rate": 0.01, "max_depth": 6},
+            component_name="train_house_model",
+            machine_type="n2-standard-8",
         )
     """
 
-    trainer_image: str
-    machine_type: str = "n1-standard-4"
-    accelerator_type: str = ""
-    accelerator_count: int = 0
-    trainer_args: list[str] = field(default_factory=list)
-    hyperparameters: dict[str, Any] = field(default_factory=dict)
-    component_name: str = "train_model"
-    config: ComponentConfig = field(default_factory=ComponentConfig)
+    # Component-specific fields
+    model_output_uri: str = ""
+    job_name: str = ""
+    run_id: str = ""
+    experiment_name: str = ""
 
-    def as_kfp_component(self):
-        from kfp import dsl  # type: ignore[import]
+    component_name: str = ""
 
-        @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=["google-cloud-aiplatform>=1.49"],
+    # Managed by execute() — data scientists write model artifacts here in run()
+    _work_dir: Path = PrivateAttr(default=Path())
+
+    def execute(self) -> None:
+        """Container lifecycle: create temp dir, call run(), upload to GCS, write output URI."""
+        from gcp_ml_framework.utils.gcs import upload_file
+
+        # Create temp dir — data scientist writes model files to self._work_dir
+        self._work_dir = Path(tempfile.mkdtemp())
+        self.run()
+
+        # Upload all files in _work_dir to GCS
+        if self.model_output_uri:
+            versioned_uri = self.model_output_uri
+            if self.run_id:
+                versioned_uri = f"{self.model_output_uri.rstrip('/')}/{self.run_id}"
+
+            for root, _dirs, files in os.walk(self._work_dir):
+                for fname in files:
+                    local_path = Path(root) / fname
+                    rel_path = local_path.relative_to(self._work_dir)
+                    gcs_uri = f"{versioned_uri.rstrip('/')}/{rel_path}"
+                    upload_file(local_path, gcs_uri, self.project)
+                    logger.info(f"Uploaded {rel_path} → {gcs_uri}")
+
+        # Write output URI (create parent dirs — KFP FUSE mounts don't pre-exist)
+        if self.output_uri_path:
+            Path(self.output_uri_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(self.output_uri_path, "w") as f:
+                f.write(self.model_output_uri)
+
+        # Experiment tracking (best-effort — never fail the pipeline)
+        if self.experiment_name and self.project and self.region:
+            try:
+                from google.cloud import aiplatform
+
+                aiplatform.init(
+                    project=self.project,
+                    location=self.region,
+                    experiment=self.experiment_name,
+                )
+                run_id = f"train-{self.run_date or 'no-date'}"
+                aiplatform.start_run(run=run_id, resume=True)
+                params = {
+                    k: str(v)
+                    for k, v in self.model_dump().items()
+                    if k not in _INTERNAL_FIELDS
+                    and k != "output_uri_path"
+                    and v not in ("", None, [], {})
+                }
+                aiplatform.log_params(params)
+                logger.info(
+                    "Logged training params to experiment: %s",
+                    self.experiment_name,
+                )
+            except Exception:
+                logger.warning("Experiment tracking failed (non-fatal)", exc_info=True)
+
+    def run(self) -> None:
+        """Business logic: train model, write artifacts to self._work_dir.
+
+        Override this method with your training code. Write model files
+        (e.g. model.pkl) to self._work_dir. The base execute() creates the
+        temp directory and handles GCS upload and output URI writing.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__}.run() is not implemented. "
+            "Override this method in your step subclass."
         )
-        def train_model(
-            project: str,
-            region: str,
-            staging_bucket: str,
-            experiment_name: str,
-            job_name: str,
-            trainer_image: str,
-            machine_type: str,
-            accelerator_type: str,
-            accelerator_count: int,
-            trainer_args: str,  # JSON list
-            hyperparameters: str,  # JSON dict
-            model_output_uri: str,
-            dataset_uri: str = "",
-        ) -> str:
-            """Returns GCS URI of the saved model artifact."""
-            import json
-            from google.cloud import aiplatform
 
-            aiplatform.init(project=project, location=region, staging_bucket=staging_bucket)
 
-            args = json.loads(trainer_args) + [f"--model-output={model_output_uri}"]
-            if dataset_uri:
-                args.append(f"--dataset-path={dataset_uri}")
-            for k, v in json.loads(hyperparameters).items():
-                args.append(f"--{k}={v}")
-
-            worker_pool: dict = {
-                "machine_spec": {"machine_type": machine_type},
-                "replica_count": 1,
-                "container_spec": {"image_uri": trainer_image, "args": args},
-            }
-            if accelerator_type and accelerator_count > 0:
-                worker_pool["machine_spec"]["accelerator_type"] = accelerator_type
-                worker_pool["machine_spec"]["accelerator_count"] = accelerator_count
-
-            job = aiplatform.CustomJob(
-                display_name=job_name,
-                worker_pool_specs=[worker_pool],
-                staging_bucket=staging_bucket,
-            )
-            job.run(sync=True, experiment=experiment_name)
-            return model_output_uri
-
-        return train_model
-
-    def local_run(self, context: "MLContext", dataset_path: str = "", **kwargs: Any) -> str:
-        """Simulate training locally — writes a placeholder model artifact."""
-        import json
-        import os
-        import tempfile
-
-        print(f"[local] TrainModel: image={self.trainer_image!r}, machine={self.machine_type!r}")
-        print(f"[local] TrainModel: hyperparameters={self.hyperparameters}")
-        out_dir = tempfile.mkdtemp(prefix="gml_model_")
-        # Write a placeholder model file
-        model_path = os.path.join(out_dir, "model.json")
-        with open(model_path, "w") as f:
-            json.dump({"framework": "placeholder", "hyperparameters": self.hyperparameters}, f)
-        return out_dir
+if __name__ == "__main__":
+    TrainModel.cli()

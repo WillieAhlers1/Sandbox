@@ -1,393 +1,281 @@
-# GCP ML Framework
+# GCP ML Framework (`gcp_ml_framework`)
 
-Branch-isolated ML pipelines on Google Cloud Platform.
+A pip-installable ML platform framework where data scientists define pipelines with Python decorators (`@task`, `@ml_task`), write business logic in `run()` methods, and the framework handles compilation to KFP YAML, Airflow DAG generation, Docker image management, and deployment to Vertex AI via Cloud Composer.
 
-One Python file per pipeline. One `gml` command to run, deploy, or promote it. Every branch gets its own namespace — so DEV experiments never touch PROD data.
+## How It Works
 
----
+```mermaid
+flowchart LR
+    subgraph DS ["Data Scientist"]
+        A["pipeline.py\n+ steps/"]
+    end
 
-## How it works
+    subgraph CLI ["GML CLI"]
+        B["gml compile"]
+        C["gml build"]
+        D["gml deploy"]
+        E["gml run"]
+    end
 
-When you push a branch, the framework automatically derives a namespace from your team, project, and branch name:
+    subgraph GCP ["Google Cloud"]
+        F["Artifact Registry\n(Docker images)"]
+        G["Cloud Composer\n(Airflow DAGs)"]
+        H["Vertex AI\n(ML Pipelines)"]
+        I["Vertex AI\n(Endpoints)"]
+    end
 
-```
-branch: feature/user-embeddings
-namespace: dsci-churn-pred-feature-user-embeddings
+    A -->|define| B
+    B -->|"KFP YAML\n+ Airflow DAG"| C
+    C -->|"Cloud Build"| F
+    D -->|"upload DAGs\n+ YAML"| G
+    E -->|"trigger DAG"| G
+    G -->|"submit pipeline"| H
+    H -->|"deploy model"| I
 
-GCS:           gs://dsci-churn-pred/feature-user-embeddings/
-BigQuery:      dsci_churn_pred_feature_user_embeddings
-Feature Store: dsci-churn-pred  (shared per project, views are branch-namespaced)
-Vertex AI:     dsci-churn-pred-feature-user-embeddings-{pipeline}
-Airflow DAG:   dsci_churn_pred_feature_user_embeddings__{pipeline}
-```
-
-Every GCP resource is derived from this namespace — no hardcoding, no collisions.
-
-### Environment lifecycle
-
-| Git state | Environment | GCP project |
-|---|---|---|
-| `feature/*`, `hotfix/*`, any branch | DEV | `dev_project_id` |
-| `main` | STAGING | `staging_project_id` |
-| release tag (`v1.2.3`) | PROD | `prod_project_id` |
-| `prod/*` branch | PROD-EXP | `prod_project_id` |
-
----
-
-## Quickstart
-
-### 1. Install
-
-```bash
-pip install uv
-uv sync
+    style DS fill:#e8f5e9,stroke:#2e7d32
+    style CLI fill:#e3f2fd,stroke:#1565c0
+    style GCP fill:#fff3e0,stroke:#e65100
 ```
 
-### 2. Scaffold a project
-
-```bash
-gml init project dsci churn-pred \
-  --dev-project my-gcp-project-dev \
-  --staging-project my-gcp-project-staging \
-  --prod-project my-gcp-project-prod
-```
-
-This creates:
-
-```
-framework.yaml          ← team/project identity + GCP project IDs
-feature_schemas/        ← entity feature definitions (YAML)
-pipelines/              ← one directory per pipeline
-.github/workflows/      ← CI/CD workflows (dev, stage, promote, teardown)
-scripts/bootstrap.sh    ← one-time GCP setup
-tests/
-```
-
-### 3. Configure
-
-Edit `framework.yaml`:
-
-```yaml
-team: dsci
-project: churn-pred
-
-gcp:
-  dev_project_id: my-gcp-project-dev
-  staging_project_id: my-gcp-project-staging
-  prod_project_id: my-gcp-project-prod
-  region: us-central1
-  composer_env: ml-composer-env
-  artifact_registry_host: us-central1-docker.pkg.dev
-```
-
-### 4. Add a pipeline
-
-```bash
-gml init pipeline churn_prediction
-```
-
-Edit `pipelines/churn_prediction/pipeline.py`:
+Data scientists write pipeline definitions using the builder API:
 
 ```python
-from gcp_ml_framework.pipeline.builder import PipelineBuilder
-from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-from gcp_ml_framework.components.transformation.bq_transform import BQTransform
-from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
-from gcp_ml_framework.components.ml.train import TrainModel
-from gcp_ml_framework.components.ml.evaluate import EvaluateModel
+from gcp_ml_framework import Pipeline
+from gcp_ml_framework.components.ml.register import RegisterModel
 from gcp_ml_framework.components.ml.deploy import DeployModel
+from my_project.steps.train_model import MyTrainStep
 
 pipeline = (
-    PipelineBuilder(name="churn_prediction", schedule="0 6 * * 1")
-    .ingest(
-        BigQueryExtract(
-            query="SELECT * FROM `{bq_dataset}.raw_events` WHERE dt = '{run_date}'",
-            output_table="churn_raw",
-        )
-    )
-    .transform(
-        BQTransform(
-            sql_file="sql/churn_features.sql",
-            output_table="churn_features",
-        )
-    )
-    .write_features(
-        WriteFeatures(entity="user", feature_group="behavioral")
-    )
-    .train(
-        TrainModel(
-            trainer_image="{artifact_registry}/churn-trainer:latest",
-            machine_type="n1-standard-8",
-            hyperparameters={"learning_rate": 0.05, "max_depth": 6},
-        )
-    )
-    .evaluate(
-        EvaluateModel(metrics=["auc", "f1"], gate={"auc": 0.78})
-    )
-    .deploy(
-        DeployModel(endpoint_name="churn-classifier")
-    )
+    Pipeline(name="my_pipeline", schedule="@daily")
+    .add(MyTrainStep(
+        component_name="train",
+        runtime_dockerfile="pipelines/my_pipeline/base.Dockerfile",
+    ), name="Train Model")
+    .add(RegisterModel(
+        model_name="my-model",
+        runtime_dockerfile="pipelines/my_pipeline/base.Dockerfile",
+        serving_dockerfile="pipelines/my_pipeline/serve.Dockerfile",
+    ), name="Register Model")
+    .add(DeployModel(
+        model_name="my-model",
+        runtime_dockerfile="pipelines/my_pipeline/base.Dockerfile",
+    ), name="Deploy Model")
     .build()
 )
 ```
 
-That's the entire pipeline definition. No DAG code. No KFP YAML. No operator wiring.
+## Pipeline Lifecycle
 
-### 5. Check your context
+```mermaid
+flowchart TD
+    subgraph DEFINE ["1. Define"]
+        P["Pipeline builder\n.add() .for_each() .condition()"]
+    end
+
+    subgraph COMPILE ["2. Compile"]
+        SC["SmartCompiler"]
+        SC --> YAML["KFP YAML\n(Vertex AI steps)"]
+        SC --> DAG["Airflow DAG\n(orchestration)"]
+    end
+
+    subgraph BUILD ["3. Build"]
+        BP["base-python"]
+        BP --> PB["{pipeline}--base\n(framework + deps)"]
+        PB --> PS["{pipeline}--serve\n(FastAPI + model)"]
+    end
+
+    subgraph DEPLOY ["4. Deploy"]
+        GCS["YAML → GCS"]
+        COMP["DAG → Composer"]
+        IMG["Images → verified"]
+    end
+
+    subgraph RUN ["5. Run"]
+        AF["Airflow triggers DAG"]
+        AF --> VTX["Vertex AI runs\nML pipeline"]
+        VTX --> EP["Model deployed\nto endpoint"]
+    end
+
+    P --> SC
+    YAML --> GCS
+    DAG --> COMP
+    GCS --> AF
+    COMP --> AF
+
+    style DEFINE fill:#e8f5e9,stroke:#2e7d32
+    style COMPILE fill:#e3f2fd,stroke:#1565c0
+    style BUILD fill:#f3e5f5,stroke:#6a1b9a
+    style DEPLOY fill:#fff3e0,stroke:#e65100
+    style RUN fill:#fce4ec,stroke:#b71c1c
+```
+
+## Component Model
+
+```mermaid
+flowchart LR
+    subgraph TASK ["@task — Airflow Operators"]
+        BQ["BQQuery"]
+        BT["BQTransform"]
+        DBT["DBTRun"]
+        EM["Email"]
+    end
+
+    subgraph ML ["@ml_task — Vertex AI Containers"]
+        TM["TrainModel"]
+        EV["EvaluateModel"]
+        RM["RegisterModel"]
+        DM["DeployModel"]
+    end
+
+    subgraph LIFECYCLE ["Lifecycle"]
+        direction TB
+        CLI["cli()"] --> EXE["execute()"]
+        EXE --> RUN["run()"]
+    end
+
+    TASK -.->|"render_operator()\n→ Airflow code"| DAG2["Airflow DAG"]
+    ML -.->|"as_kfp_component()\n→ container spec"| KFP["KFP YAML"]
+
+    style TASK fill:#e3f2fd,stroke:#1565c0
+    style ML fill:#f3e5f5,stroke:#6a1b9a
+    style LIFECYCLE fill:#e8f5e9,stroke:#2e7d32
+```
+
+## Quick Start
 
 ```bash
-gml context show
+# Install
+git clone <repo-url> && cd <repo>
+uv sync
+
+# Configure
+cp .env.example .env
+# Edit .env with your GCP project, team, service accounts
+
+# Compile → Build → Deploy → Run
+UV_ENV_FILE=.env uv run -- gml compile --all
+UV_ENV_FILE=.env uv run -- gml build house_price
+UV_ENV_FILE=.env uv run -- gml deploy --all
+UV_ENV_FILE=.env uv run -- gml run house_price
 ```
 
+See [docs/guides/quickstart.md](docs/guides/quickstart.md) for the full walkthrough.
+
+## CLI
+
+| Command | Description |
+|---------|-------------|
+| `gml compile [name \| --all]` | Compile pipeline(s) to KFP YAML + Airflow DAG |
+| `gml build [name \| --all]` | Build Docker images via Cloud Build |
+| `gml deploy [name \| --all]` | Deploy DAGs + YAMLs + verify images |
+| `gml run [name] [--local]` | Trigger via Composer, or `--local` for in-process |
+| `gml context show` | Show resolved config and resource names |
+| `gml teardown [--branch]` | Delete ephemeral dev resources |
+
+## Project Structure
+
 ```
-GCP ML Framework — context for branch 'feature/churn-v2'
+gcp_ml_framework/          Framework library
+├── cli/                     CLI commands (compile, build, deploy, run)
+├── components/              BaseComponent + ML/operator/transformation components
+├── pipeline/                Builder, SmartCompiler, PipelineCompiler, LocalRunner
+├── config.py                FrameworkConfig + GCPConfig (pydantic-settings)
+├── context.py               MLContext (immutable runtime context)
+├── naming.py                NamingConvention (all GCP resource names)
+└── decorators.py            @task and @ml_task decorators
 
-Identity
-  team             dsci
-  project          churn-pred
-  branch (raw)     feature/churn-v2
-  branch (slug)    feature-churn-v2
-  git_state        DEV
+pipelines/                 Pipeline definitions
+├── house_price/             Reference implementation (train → register → deploy)
+├── training_pipeline/       Full lifecycle (ingest → transform → train → eval → register → deploy)
+└── verification_pipeline/   Exercises ALL capabilities (loops, conditions, monitoring)
 
-GCP
-  project          my-gcp-project-dev
-  region           us-central1
-
-Resource Names
-  namespace        dsci-churn-pred-feature-churn-v2
-  gcs_prefix       gs://dsci-churn-pred/feature-churn-v2/
-  bq_dataset       dsci_churn_pred_feature_churn_v2
-  feature_store_id dsci-churn-pred
-  secret_prefix    dsci-churn-pred-feature-churn-v2
+app/                       Per-pipeline FastAPI serving apps
+docker/                    Dockerfiles (base-python → pipeline--base → pipeline--serve)
+second_run/                Shared business logic (estimators, feature engineering)
+tests/                     Unit / integration / e2e test suite
 ```
 
-### 6. Run locally
+## Branch Isolation
 
-No GCP access required. DuckDB and pandas replace BQ and GCS calls.
+Every branch gets its own isolated GCP resources — no cross-contamination between developers.
+
+```mermaid
+flowchart TD
+    subgraph SHARED ["Shared (all branches)"]
+        BUCKET["GCS Bucket\nprj-sandbox-mlplatform-second-run"]
+        AR["AR Repo\nmlplatform-second-run"]
+    end
+
+    subgraph BRANCH_A ["Branch: feature-xyz"]
+        BQ_A["BQ Dataset\nmlplatform_second_run_feature_xyz"]
+        GCS_A["GCS Prefix\n/feature-xyz/"]
+        DAG_A["DAG\n...feature_xyz__pipeline"]
+        VTX_A["Vertex AI\n...feature-xyz-..."]
+    end
+
+    subgraph BRANCH_B ["Branch: main"]
+        BQ_B["BQ Dataset\nmlplatform_second_run_main"]
+        GCS_B["GCS Prefix\n/main/"]
+        DAG_B["DAG\n...main__pipeline"]
+        VTX_B["Vertex AI\n...main-..."]
+    end
+
+    BUCKET --> GCS_A
+    BUCKET --> GCS_B
+    AR --> BRANCH_A
+    AR --> BRANCH_B
+
+    style SHARED fill:#fff3e0,stroke:#e65100
+    style BRANCH_A fill:#e3f2fd,stroke:#1565c0
+    style BRANCH_B fill:#e8f5e9,stroke:#2e7d32
+```
+
+## Configuration
+
+All config via `.env` (gitignored). Key variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `TEAM` | Team identifier | `mlplatform` |
+| `PROJECT` | Project name | `second_run` |
+| `ENVIRONMENT` | Runtime environment | `dev` |
+| `GCP_PROJECT_ID` | GCP project | `prj-my-sandbox` |
+| `GCP_REGION` | GCP region | `us-east4` |
+
+All GCP resource names are derived from `{team}-{project}-{branch}` via `NamingConvention`. See [docs/operations/configuration.md](docs/operations/configuration.md).
+
+## Development
 
 ```bash
-gml run local churn_prediction
+# Unit tests (fast, no GCP)
+uv run -- pytest tests/ -m unit -v
+
+# Lint + type check
+uv run -- ruff check gcp_ml_framework tests
+uv run -- mypy gcp_ml_framework/
 ```
 
-```bash
-# Print the execution plan without running
-gml run local churn_prediction --dry-run
-```
+| Tier | Scope | GCP Required | Speed |
+|------|-------|-------------|-------|
+| Unit | Framework logic, mocked | No | <30s |
+| Integration | Real BQ/GCS on dev | Yes | Minutes |
+| E2E | Full pipeline on Vertex AI | Yes | 5-10 min |
 
-### 7. Run on Vertex AI
+## Documentation
 
-```bash
-gml run vertex churn_prediction
-gml run vertex churn_prediction --sync       # wait for completion
-gml run vertex --all                         # run all pipelines
-```
+| Section | What you'll find |
+|---------|-----------------|
+| [Architecture](docs/architecture/) | System design, component model, compilation, ADRs |
+| [Guides](docs/guides/) | Quickstart, writing components, writing pipelines, deployment |
+| [Operations](docs/operations/) | Cloud Build, configuration, GCP resources, platform guide, testing |
+| [Reference](docs/reference/) | Requirements status |
 
-### 8. Deploy to Composer
+## Stack
 
-```bash
-# Generate DAG files and sync them to the Composer GCS bucket
-gml deploy dags
-
-# Upsert Feature Store entity types and feature views
-gml deploy features
-```
-
----
-
-## Core concepts
-
-### Naming convention
-
-All resource names are derived from a single `NamingConvention` object. Nothing is hardcoded anywhere in your pipeline code.
-
-```python
-from gcp_ml_framework.naming import NamingConvention
-
-nc = NamingConvention(team="dsci", project="churn-pred", branch="feature/xyz")
-
-nc.namespace               # "dsci-churn-pred-feature-xyz"
-nc.bq_dataset              # "dsci_churn_pred_feature_xyz"
-nc.gcs_prefix              # "gs://dsci-churn-pred/feature-xyz/"
-nc.feature_store_id        # "dsci-churn-pred"  (shared across branches)
-nc.dag_id("churn_train")   # "dsci_churn_pred_feature_xyz__churn_train"
-```
-
-### MLContext
-
-Every component receives an `MLContext`. It carries the resolved GCP project, namespace, region, and naming convention for the current branch. Components never import config directly.
-
-```python
-from gcp_ml_framework.config import load_config
-from gcp_ml_framework.context import MLContext
-
-cfg = load_config()                  # reads framework.yaml + env vars
-ctx = MLContext.from_config(cfg)
-
-ctx.gcp_project                      # "my-gcp-project-dev"
-ctx.bq_dataset                       # "dsci_churn_pred_feature_xyz"
-ctx.gcs_prefix                       # "gs://dsci-churn-pred/feature-xyz/"
-ctx.is_production()                  # False  (DEV branch)
-ctx.secret_name("db-password")       # "dsci-churn-pred-feature-xyz-db-password"
-```
-
-### PipelineBuilder
-
-The fluent DSL produces a `PipelineDefinition` that is compiled to KFP YAML for Vertex AI and rendered as an Airflow DAG for Composer. The `schedule` parameter is the single source of truth — set it once, it flows through to both.
-
-```python
-pipeline = (
-    PipelineBuilder(name="my-pipeline", schedule="@daily")
-    .ingest(...)
-    .transform(...)
-    .train(...)
-    .evaluate(...)
-    .deploy(...)
-    .build()
-)
-```
-
-### Secrets
-
-Reference secrets by a short key in config or pipeline code. They are resolved at runtime from GCP Secret Manager using the branch namespace as a prefix.
-
-```python
-# In any config dict or YAML value:
-{"db_url": "!secret db-url"}
-
-# At runtime:
-from gcp_ml_framework.secrets.client import make_secret_client
-client = make_secret_client(ctx)
-client.resolve_dict({"db_url": "!secret db-url"})
-# → {"db_url": "<actual value of dsci-churn-pred-main-db-url>"}
-```
-
-Local development resolves secrets from environment variables instead:
-
-```bash
-export GML_SECRET_DB_URL="postgres://localhost/mydb"
-```
-
-### Feature schemas
-
-Define features in YAML — the framework handles Feature Store entity creation and schema migration on `gml deploy features`.
-
-```yaml
-# feature_schemas/user.yaml
-entity: user
-id_column: user_id
-id_type: STRING
-feature_groups:
-  behavioral:
-    features:
-      - name: session_count_7d
-        type: INT64
-      - name: total_purchases_30d
-        type: FLOAT64
-```
-
----
-
-## CLI reference
-
-```
-gml init project <team> <project>      Scaffold a new project
-gml init pipeline <name>               Add a pipeline to an existing project
-
-gml context show                       Show resolved namespace and resource names
-
-gml run local <pipeline>               Run pipeline locally (no GCP)
-gml run vertex <pipeline>              Compile and submit to Vertex AI
-gml run compile [--all]                Compile to KFP YAML only (CI validation)
-
-gml deploy dags                        Generate and sync Airflow DAGs to Composer
-gml deploy features [entity ...]       Upsert Feature Store schemas
-
-gml promote --from main --to prod --tag v1.2.3
-                                       Promote STAGE artifacts to PROD
-
-gml teardown --branch <branch>         Delete all DEV resources for a branch
-```
-
----
-
-## CI/CD
-
-Four workflows are scaffolded automatically by `gml init project`:
-
-| Workflow | Trigger | What it does |
-|---|---|---|
-| `ci-dev.yaml` | Push to `feature/*` | Lint, test, compile pipelines, deploy DAGs + features to DEV |
-| `ci-stage.yaml` | Push to `main` | Full test suite, deploy DAGs + features to STAGE, run pipelines on Vertex AI |
-| `promote.yaml` | Push tag `v*` | Copy STAGE artifacts → PROD, sync PROD DAGs |
-| `teardown.yaml` | PR closed / daily | Delete ephemeral DEV resources for merged branches |
-
-### One-time GCP setup
-
-Run once per environment (dev/staging/prod):
-
-```bash
-GITHUB_ORG=your-org GITHUB_REPO=your-repo \
-  ./scripts/bootstrap.sh --project my-gcp-project-dev --env dev
-```
-
-This enables the required APIs, creates a service account with the right roles, and configures Workload Identity Federation for keyless GitHub Actions auth.
-
-Then add the printed values to your GitHub repo secrets:
-
-```
-WIF_PROVIDER_DEV=projects/.../providers/github-provider
-SA_EMAIL_DEV=gcp-ml-framework-sa@my-gcp-project-dev.iam.gserviceaccount.com
-GCP_PROJECT_ID_DEV=my-gcp-project-dev
-```
-
----
-
-## Project layout
-
-```
-framework.yaml                  ← team/project identity + per-env GCP project IDs
-feature_schemas/
-  user.yaml                     ← entity schema definitions
-  item.yaml
-pipelines/
-  churn_prediction/
-    pipeline.py                 ← the only file you write per pipeline
-    config.yaml                 ← optional pipeline-level config overrides
-    sql/
-      churn_features.sql
-gcp_ml_framework/               ← framework source (not edited by pipeline authors)
-  naming.py
-  config.py
-  context.py
-  secrets/
-  components/
-  pipeline/
-  dag/
-  feature_store/
-  cli/
-  utils/
-tests/
-  unit/
-  integration/
-scripts/
-  bootstrap.sh
-.github/workflows/
-```
-
----
-
-## Environment variables
-
-All config can be overridden via environment variables with the `GML_` prefix:
-
-```bash
-GML_TEAM=dsci
-GML_PROJECT=churn-pred
-GML_GCP__DEV_PROJECT_ID=my-gcp-project-dev
-GML_GCP__STAGING_PROJECT_ID=my-gcp-project-staging
-GML_GCP__PROD_PROJECT_ID=my-gcp-project-prod
-GML_GCP__REGION=us-central1
-GML_ENV_OVERRIDE=staging          # force a specific environment (useful in CI)
-```
-
-Nested config uses double underscore as the delimiter (`GML_GCP__REGION` → `gcp.region`).
+- **Language:** Python 3.12
+- **Package manager:** uv (exclusively)
+- **Orchestration:** KFP v2 on Vertex AI, triggered by Airflow (Cloud Composer)
+- **Docker:** Per-pipeline images built via Google Cloud Build
+- **Serving:** Per-pipeline FastAPI apps on Vertex AI endpoints
+- **Testing:** pytest with three-tier strategy (unit/integration/e2e)
+- **Logging:** loguru

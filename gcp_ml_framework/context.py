@@ -7,59 +7,79 @@ This keeps components decoupled from config loading and testable in isolation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import BaseModel, ConfigDict, Field
 
-from gcp_ml_framework.config import FrameworkConfig, GitState
+from gcp_ml_framework.config import Environment, FrameworkConfig
 from gcp_ml_framework.naming import NamingConvention
 
 
-@dataclass(frozen=True)
-class MLContext:
+class MLContext(BaseModel):
     """
     Immutable runtime context derived from FrameworkConfig + NamingConvention.
 
     All GCP resource names are available via `ctx.naming.*`.
-    The active GCP project for the current git state is `ctx.gcp_project`.
+    The active GCP project for the current environment is `ctx.gcp_project`.
 
     Usage:
         ctx = MLContext.from_config(cfg)
         ctx.naming.bq_dataset        # branch-namespaced BQ dataset
         ctx.naming.gcs_prefix        # gs://{bucket}/{branch}/
         ctx.gcp_project              # resolved GCP project ID
-        ctx.git_state                # GitState.DEV | STAGING | PROD | PROD_EXP
+        ctx.environment              # Environment.DEV | STAGING | PROD | EXPERIMENT
     """
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     naming: NamingConvention
     gcp_project: str
     region: str
-    git_state: GitState
-    composer_env: str | None
+    environment: Environment
     artifact_registry_host: str
-    service_account_email: str | None
-    feature_store_online_node_count: int
-    secret_project_id: str
-    secret_prefix: str
+    composer_dags_path: str = ""
+    composer_environment_name: str = ""
+    feature_store_online_node_count: int = 1
+    secret_project_id: str = ""
+    secret_prefix: str = ""
+    pipeline_service_account_email: str = ""
     # Raw branch for display; naming.branch is the sanitized slug
-    raw_branch: str = field(compare=False)
+    raw_branch: str = Field(exclude=True)
 
     @classmethod
-    def from_config(cls, cfg: FrameworkConfig) -> "MLContext":
+    def from_config(cls, cfg: FrameworkConfig) -> MLContext:
+        """Create an MLContext from a FrameworkConfig.
+
+        Derives all runtime values (naming convention, AR host, composer env name,
+        secret prefix) from the config and returns a frozen context object.
+
+        Args:
+            cfg: Loaded framework configuration.
+
+        Returns:
+            Immutable MLContext for the given config.
+        """
+        gcp_project = cfg.active_gcp_project
         naming = NamingConvention(
             team=cfg.team,
             project=cfg.project,
             branch=cfg.branch,
+            gcp_project=gcp_project,
         )
-        gcp_project = cfg.active_gcp_project
         secret_prefix = cfg.secrets.secret_prefix or naming.namespace
+        ar_host = f"{cfg.gcp.region}-docker.pkg.dev"
+        composer_env_name = (
+            cfg.gcp.composer_environment_name
+            or f"{naming.team}-{naming.project}-{cfg.environment}"
+        )
 
         return cls(
             naming=naming,
             gcp_project=gcp_project,
             region=cfg.gcp.region,
-            git_state=cfg.git_state,
-            composer_env=cfg.gcp.composer_env,
-            artifact_registry_host=cfg.gcp.artifact_registry_host,
-            service_account_email=cfg.gcp.service_account_email,
+            environment=Environment(cfg.environment),
+            artifact_registry_host=ar_host,
+            composer_dags_path=cfg.gcp.composer_dags_path,
+            pipeline_service_account_email=cfg.gcp.pipeline_service_account_email,
+            composer_environment_name=composer_env_name,
             feature_store_online_node_count=cfg.feature_store.online_serving_fixed_node_count,
             secret_project_id=cfg.secrets.project_id or gcp_project,
             secret_prefix=secret_prefix,
@@ -70,26 +90,46 @@ class MLContext:
 
     @property
     def namespace(self) -> str:
+        """Canonical namespace token: {team}-{project}-{branch}."""
         return self.naming.namespace
 
     @property
     def bq_dataset(self) -> str:
+        """Branch-namespaced BigQuery dataset name."""
         return self.naming.bq_dataset
 
     @property
     def gcs_prefix(self) -> str:
+        """GCS path prefix for this branch: gs://{bucket}/{branch}/."""
         return self.naming.gcs_prefix
 
     @property
     def feature_store_id(self) -> str:
+        """Vertex AI Feature Store ID (shared per team+project)."""
         return self.naming.feature_store_id
 
     def secret_name(self, key: str) -> str:
         """Returns the fully-qualified Secret Manager secret name for a key."""
         return f"{self.secret_prefix}-{key}"
 
+    @property
+    def pipeline_service_account(self) -> str:
+        """Pipeline SA email — explicit override or derived from naming convention.
+
+        Follows Terraform convention when not overridden:
+        {team}-{project}-{env}-pipeline@{project}.iam.gserviceaccount.com
+        """
+        if self.pipeline_service_account_email:
+            return self.pipeline_service_account_email
+        env = self.environment.value  # dev, staging, prod
+        return (
+            f"{self.naming.team}-{self.naming.project}-{env}-pipeline"
+            f"@{self.gcp_project}.iam.gserviceaccount.com"
+        )
+
     def is_production(self) -> bool:
-        return self.git_state in (GitState.PROD, GitState.PROD_EXP)
+        """Return True if the environment is PROD or EXPERIMENT."""
+        return self.environment in (Environment.PROD, Environment.EXPERIMENT)
 
     def summary(self) -> dict[str, str]:
         """Human-readable summary for `gml context show`."""
@@ -98,7 +138,7 @@ class MLContext:
             "project": self.naming.project,
             "branch (raw)": self.raw_branch,
             "branch (slug)": self.naming.branch,
-            "git_state": self.git_state.value,
+            "environment": self.environment.value,
             "gcp_project": self.gcp_project,
             "region": self.region,
             "namespace": self.namespace,
@@ -107,5 +147,7 @@ class MLContext:
             "bq_dataset": self.bq_dataset,
             "feature_store_id": self.feature_store_id,
             "secret_prefix": self.secret_prefix,
-            "composer_env": self.composer_env or "(not configured)",
+            "composer_dags_path": (
+                str(self.composer_dags_path) if self.composer_dags_path else "(not configured)"
+            ),
         }

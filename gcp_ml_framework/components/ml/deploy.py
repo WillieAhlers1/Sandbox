@@ -1,107 +1,78 @@
-"""DeployModel — upload a model to Vertex AI Model Registry and deploy to an Endpoint."""
+"""DeployModel — deploy a registered model to a Vertex AI Endpoint."""
 
-from __future__ import annotations
+from pydantic import Field
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
-
-if TYPE_CHECKING:
-    from gcp_ml_framework.context import MLContext
+from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import ml_task
 
 
-@dataclass
+@ml_task
 class DeployModel(BaseComponent):
-    """
-    Upload a trained model to Vertex AI Model Registry and deploy it to an Endpoint.
+    """Deploy a registered model to a Vertex AI Endpoint as a web service.
 
-    Supports canary deployments via `traffic_split`. The Endpoint uses a stable
-    name derived from the namespace so the URL never changes across releases.
+    Every model is deployed as its own endpoint. The endpoint display name is
+    derived from the naming convention using pipeline name + model name:
 
-    PROD promotion: the stable Endpoint alias (`{team}-{project}-prod-{endpoint_name}`)
-    always points to the current PROD model, updated by `gml promote`.
+        {project}-{branch}-{pipeline}-{model_name}-endpoint
+
+    ``model_name`` must match the value used in ``RegisterModel`` so the
+    compiler can derive matching ``model_display_name`` and
+    ``endpoint_display_name`` values.
+
+    Supports canary deployments via `traffic_split` and optional model monitoring.
 
     Example:
         DeployModel(
-            endpoint_name="churn-v1",
-            serving_container_image="us-central1-docker.pkg.dev/my-proj/serving/churn:latest",
-            traffic_split={"new": 10, "current": 90},   # canary
+            model_name="regression",
+            traffic_split={"new": 10, "current": 90},
         )
     """
 
-    endpoint_name: str
-    serving_container_image: str = ""
-    machine_type: str = "n1-standard-2"
+    # Component-specific fields
+    model_name: str = ""
+    model_display_name: str = ""
+    endpoint_display_name: str = ""
+
+    machine_type: str = "n2-standard-2"
     min_replica_count: int = 1
     max_replica_count: int = 3
-    traffic_split: dict[str, int] = field(default_factory=lambda: {"new": 100})
+    traffic_split: dict[str, int] = Field(default_factory=lambda: {"new": 100})
     component_name: str = "deploy_model"
-    config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def as_kfp_component(self):
-        from kfp import dsl  # type: ignore[import]
+    # Monitoring (optional)
+    enable_monitoring: bool = False
+    monitoring_alert_email: str = ""
+    monitoring_log_sample_rate: float = 0.8
+    monitoring_monitor_interval: int = 3600
+    monitoring_skew_thresholds: dict[str, float] = Field(default_factory=dict)
+    monitoring_drift_thresholds: dict[str, float] = Field(default_factory=dict)
 
-        @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=["google-cloud-aiplatform>=1.49"],
+    def execute(self) -> None:
+        """Container lifecycle: call run()."""
+        self.run()
+
+    def run(self) -> None:
+        """Deploy model to Vertex AI Endpoint. Override for custom deployment logic."""
+        from gcp_ml_framework.utils.vertex import run_deploy
+
+        run_deploy(
+            project=self.project,
+            region=self.region,
+            model_display_name=self.model_display_name,
+            endpoint_display_name=self.endpoint_display_name,
+            machine_type=self.machine_type,
+            min_replica_count=self.min_replica_count,
+            max_replica_count=self.max_replica_count,
+            traffic_split=self.traffic_split,
+            output_uri_path=self.output_uri_path,
+            enable_monitoring=self.enable_monitoring,
+            monitoring_alert_email=self.monitoring_alert_email,
+            monitoring_log_sample_rate=self.monitoring_log_sample_rate,
+            monitoring_monitor_interval=self.monitoring_monitor_interval,
+            monitoring_skew_thresholds=self.monitoring_skew_thresholds,
+            monitoring_drift_thresholds=self.monitoring_drift_thresholds,
         )
-        def deploy_model(
-            project: str,
-            region: str,
-            model_uri: str,
-            model_display_name: str,
-            endpoint_display_name: str,
-            serving_container_image: str,
-            machine_type: str,
-            min_replica_count: int,
-            max_replica_count: int,
-            traffic_split: str,  # JSON dict {"new": 10, "current": 90}
-        ) -> str:
-            """Returns the Endpoint resource name."""
-            import json
-            from google.cloud import aiplatform
 
-            aiplatform.init(project=project, location=region)
 
-            model = aiplatform.Model.upload(
-                display_name=model_display_name,
-                artifact_uri=model_uri,
-                serving_container_image_uri=serving_container_image,
-            )
-
-            # Get or create endpoint
-            existing = aiplatform.Endpoint.list(
-                filter=f'display_name="{endpoint_display_name}"',
-                project=project,
-                location=region,
-            )
-            endpoint = existing[0] if existing else aiplatform.Endpoint.create(
-                display_name=endpoint_display_name,
-                project=project,
-                location=region,
-            )
-
-            split = json.loads(traffic_split)
-            # Vertex AI traffic_split uses deployed_model_id keys; simplify to 100% new
-            endpoint.deploy(
-                model=model,
-                machine_type=machine_type,
-                min_replica_count=min_replica_count,
-                max_replica_count=max_replica_count,
-                traffic_split={"0": split.get("new", 100)},
-            )
-            return endpoint.resource_name
-
-        return deploy_model
-
-    def local_run(
-        self,
-        context: "MLContext",
-        model_path: str = "",
-        **kwargs: Any,
-    ) -> str:
-        endpoint_name = context.naming.vertex_endpoint_name(self.endpoint_name)
-        print(f"[local] DeployModel: would deploy to Endpoint '{endpoint_name}'")
-        print(f"[local] DeployModel: model_path={model_path!r}, traffic={self.traffic_split}")
-        return f"projects/{context.gcp_project}/locations/{context.region}/endpoints/local-stub"
+if __name__ == "__main__":
+    DeployModel.cli()

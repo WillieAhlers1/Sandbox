@@ -1,11 +1,36 @@
+# Python
 .env
-__pycache__/
+.env.*
+*/__pycache__/
 *.py[cod]
+*.pyc
 .mypy_cache/
 .ruff_cache/
+.venv/
+.vscode/
 .pytest_cache/
 dist/
 *.egg-info/
 compiled_pipelines/
+dags/
 .uv/
-dags/*.py
+
+# Terraform secrets & state
+*.tfstate
+*.tfstate.backup
+*.tfvars
+.terraform/
+
+# Credentials & keys
+*.pem
+*.key
+*credentials*.json
+*secret*.json
+*service_account*.json
+
+# Claude local settings
+.claude/settings.local.json
+
+# Documents
+REQS.docx
+docs/custom_local_instructions.md

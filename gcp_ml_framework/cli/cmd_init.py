@@ -12,75 +12,52 @@ console = Console()
 
 # ── Templates ──────────────────────────────────────────────────────────────────
 
-_FRAMEWORK_YAML = """\
-team: {team}
-project: {project}
-gcp:
-  dev_project_id: {dev_project}
-  staging_project_id: {staging_project}
-  prod_project_id: {prod_project}
-  region: us-central1
-  composer_env:              # fill in your Composer env name
-  artifact_registry_host: us-central1-docker.pkg.dev
+_DOT_ENV = """\
+# GCP ML Framework — project config
+# This file is gitignored — never commit real values.
 
-secrets:
-  secret_prefix:             # defaults to namespace token; override only if needed
+# --- Identity (required) ---
+TEAM={team}
+PROJECT={project}
+
+# --- Environment ---
+ENVIRONMENT=dev
+
+# --- GCP ---
+GCP_PROJECT_ID={gcp_project}
+GCP_REGION=us-central1
+
+# --- Cloud Composer (fill after provisioning) ---
+# GCP_COMPOSER_DAGS_PATH=gs://composer-bucket/dags
+# GCP_PIPELINE_SERVICE_ACCOUNT_EMAIL=sa@project.iam.gserviceaccount.com
 """
 
 _PIPELINE_PY = """\
-from gcp_ml_framework.pipeline.builder import PipelineBuilder
-from gcp_ml_framework.components.ingestion.bigquery_extract import BigQueryExtract
-from gcp_ml_framework.components.transformation.bq_transform import BQTransform
-from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+from gcp_ml_framework import Pipeline
+from gcp_ml_framework.components.operators.bq_query import BQQuery
 from gcp_ml_framework.components.ml.train import TrainModel
 from gcp_ml_framework.components.ml.evaluate import EvaluateModel
 from gcp_ml_framework.components.ml.deploy import DeployModel
 
 pipeline = (
-    PipelineBuilder(name="{name}", schedule="@daily")
-    .ingest(
-        BigQueryExtract(
-            query="SELECT * FROM `{{bq_dataset}}.raw_events` WHERE dt = '{{run_date}}'",
-            output_table="raw_events_extract",
-        )
-    )
-    .transform(
-        BQTransform(
-            sql_file="sql/{name}_features.sql",
-            output_table="{name}_features",
-        )
-    )
-    .write_features(
-        WriteFeatures(
-            entity="user",
-            feature_group="{name}_signals",
-            entity_id_column="user_id",
-        )
-    )
-    .train(
-        TrainModel(
-            trainer_image="{{artifact_registry}}/{name}-trainer:latest",
-            machine_type="n1-standard-4",
-        )
-    )
-    .evaluate(
-        EvaluateModel(
-            metrics=["auc", "f1"],
-            gate={{"auc": 0.75}},
-        )
-    )
-    .deploy(
-        DeployModel(
-            endpoint_name="{name}-endpoint",
-        )
-    )
+    Pipeline(name="{name}", schedule="@daily")
+    .add(BQQuery(
+        sql_file="sql/{name}_features.sql",
+        destination_table="{name}_features",
+    ))
+    .add(TrainModel(machine_type="n2-standard-4"))
+    .add(EvaluateModel(
+        metrics=["auc", "f1"],
+        gate={{"auc": 0.75}},
+    ))
+    .add(DeployModel(model_name="{name}"))
     .build()
 )
 """
 
 _PIPELINE_CONFIG_YAML = """\
 # Pipeline-level config overrides.
-# These are merged on top of framework.yaml.
+# These are merged on top of .env defaults.
 # Only set values that differ from the framework defaults.
 
 # feature_store:
@@ -121,9 +98,10 @@ permissions:
   id-token: write
 
 env:
-  GML_GCP__DEV_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_DEV }}}}
-  GML_TEAM: ${{{{ vars.GML_TEAM }}}}
-  GML_PROJECT: ${{{{ vars.GML_PROJECT }}}}
+  GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+  TEAM: ${{{{ vars.TEAM }}}}
+  PROJECT: ${{{{ vars.PROJECT }}}}
+  ENVIRONMENT: dev
 
 jobs:
   ci-dev:
@@ -139,9 +117,8 @@ jobs:
       - run: uv run ruff check gcp_ml_framework tests
       - run: uv run mypy gcp_ml_framework
       - run: uv run pytest tests/unit/ -v
-      - run: gml run --compile-only --all
-      - run: gml deploy dags
-      - run: gml deploy features
+      - run: gml compile --all
+      - run: gml deploy --all
 """
 
 _CI_STAGE_YAML = """\
@@ -155,9 +132,10 @@ permissions:
   id-token: write
 
 env:
-  GML_GCP__STAGING_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_STAGING }}}}
-  GML_TEAM: ${{{{ vars.GML_TEAM }}}}
-  GML_PROJECT: ${{{{ vars.GML_PROJECT }}}}
+  GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+  TEAM: ${{{{ vars.TEAM }}}}
+  PROJECT: ${{{{ vars.PROJECT }}}}
+  ENVIRONMENT: staging
 
 jobs:
   ci-stage:
@@ -171,9 +149,8 @@ jobs:
           service_account: ${{{{ secrets.SA_EMAIL_STAGING }}}}
       - run: uv sync
       - run: uv run pytest tests/unit/ tests/integration/ -v
-      - run: gml deploy dags
-      - run: gml deploy features
-      - run: gml run --vertex --all --sync
+      - run: gml deploy --all
+      - run: gml run --all
 """
 
 _PROMOTE_YAML = """\
@@ -197,10 +174,12 @@ jobs:
           workload_identity_provider: ${{{{ secrets.WIF_PROVIDER_PROD }}}}
           service_account: ${{{{ secrets.SA_EMAIL_PROD }}}}
         env:
-          GML_GCP__STAGING_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_STAGING }}}}
-          GML_GCP__PROD_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_PROD }}}}
+          GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+          ENVIRONMENT: prod
       - run: uv sync
-      - run: gml promote --from main --to prod --tag ${{{{ github.ref_name }}}}
+      # TODO: gml promote is not yet implemented
+      # - run: gml promote --from main --to prod --tag ${{{{ github.ref_name }}}}
+      - run: gml deploy --all
 """
 
 _TEARDOWN_YAML = """\
@@ -227,7 +206,8 @@ jobs:
           workload_identity_provider: ${{{{ secrets.WIF_PROVIDER_DEV }}}}
           service_account: ${{{{ secrets.SA_EMAIL_DEV }}}}
         env:
-          GML_GCP__DEV_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID_DEV }}}}
+          GCP_PROJECT_ID: ${{{{ vars.GCP_PROJECT_ID }}}}
+          ENVIRONMENT: dev
       - run: uv sync
       - run: gml teardown --branch ${{{{ github.head_ref }}}} --confirm
 """
@@ -248,36 +228,39 @@ compiled_pipelines/
 
 # ── Commands ───────────────────────────────────────────────────────────────────
 
+
 @init_app.command("project")
 def init_project(
     team: str = typer.Argument(..., help="Team slug (e.g. 'dsci')"),
     project: str = typer.Argument(..., help="Project name (e.g. 'churn-pred')"),
-    dev_project: str = typer.Option(..., "--dev-project", help="DEV GCP project ID"),
-    staging_project: str = typer.Option("", "--staging-project", help="STAGING GCP project ID"),
-    prod_project: str = typer.Option("", "--prod-project", help="PROD GCP project ID"),
+    gcp_project: str = typer.Option(
+        ...,
+        "--dev-project",
+        "--gcp-project",
+        help="GCP project ID",
+    ),
     output_dir: Path = typer.Option(Path("."), "--out", "-o", help="Output directory"),
 ) -> None:
     """
     Scaffold a new gcp-ml-framework project.
 
-    Creates framework.yaml, feature_schemas/, CI/CD workflows, and an example pipeline.
+    Creates .env, feature_schemas/, CI/CD workflows, and an example pipeline.
 
     Example:
-        gml init project dsci churn-pred --dev-project my-gcp-dev
+        gml init project dsci churn-pred --gcp-project my-gcp-dev
     """
-    staging_project = staging_project or f"{dev_project}-staging"
-    prod_project = prod_project or f"{dev_project}-prod"
-
     root = output_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
 
-    _write(root / "framework.yaml", _FRAMEWORK_YAML.format(
-        team=team, project=project,
-        dev_project=dev_project,
-        staging_project=staging_project,
-        prod_project=prod_project,
-    ))
-    _write(root / ".python-version", "3.11\n")
+    _write(
+        root / ".env",
+        _DOT_ENV.format(
+            team=team,
+            project=project,
+            gcp_project=gcp_project,
+        ),
+    )
+    _write(root / ".python-version", "3.12\n")
     _write(root / ".gitignore", _GITIGNORE)
     _write(root / ".env.example", Path(__file__).parent.parent.parent / ".env.example")
     _write(root / "feature_schemas" / "user.yaml", _FEATURE_SCHEMA_YAML)
@@ -297,9 +280,9 @@ def init_project(
 
     console.print(f"\n[bold green]Project scaffolded at {root}[/bold green]\n")
     console.print("Next steps:")
-    console.print(f"  1. Edit [cyan]framework.yaml[/cyan] — add your Composer env name")
+    console.print("  1. Edit [cyan].env[/cyan] — add your Composer env name")
     console.print(f"  2. Run [cyan]gml init pipeline {project}[/cyan] to add a pipeline")
-    console.print(f"  3. Run [cyan]gml context show[/cyan] to verify your setup\n")
+    console.print("  3. Run [cyan]gml context show[/cyan] to verify your setup\n")
 
 
 @init_app.command("pipeline")
@@ -310,9 +293,9 @@ def init_pipeline(
     """
     Scaffold a new pipeline inside an existing project.
 
-    Creates pipeline.py, config.yaml, and a placeholder SQL file.
+    Creates pipeline.py, config.yaml, and SQL templates.
 
-    Example:
+    Examples:
         gml init pipeline churn_prediction
     """
     pipeline_dir = output_dir / name
@@ -320,11 +303,14 @@ def init_pipeline(
 
     _write(pipeline_dir / "pipeline.py", _PIPELINE_PY.format(name=name))
     _write(pipeline_dir / "config.yaml", _PIPELINE_CONFIG_YAML)
-
     sql_dir = pipeline_dir / "sql"
     sql_dir.mkdir(exist_ok=True)
-    _write(sql_dir / f"{name}_features.sql", f"-- Feature SQL for {name}\nSELECT\n  entity_id,\n  -- add features here\nFROM `{{{{bq_dataset}}}}.raw_events`\n")
-
+    _write(
+        sql_dir / f"{name}_features.sql",
+        f"-- Feature SQL for {name}\nSELECT\n  entity_id,\n"
+        "  -- add features here\n"
+        "FROM `{{bq_dataset}}.raw_events`\n",
+    )
     console.print(f"\n[bold green]Pipeline '{name}' scaffolded at {pipeline_dir}[/bold green]\n")
     console.print(f"  Edit [cyan]pipelines/{name}/pipeline.py[/cyan] to define your steps.\n")
 

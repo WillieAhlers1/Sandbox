@@ -16,11 +16,13 @@ def delete_bq_dataset(dataset: str, project: str) -> None:
 
 
 def table_exists(project: str, dataset: str, table: str) -> bool:
+    """Check if a BQ table exists. Only catches NotFound; other errors propagate."""
+    from google.api_core.exceptions import NotFound
     from google.cloud import bigquery  # type: ignore[import]
 
     client = bigquery.Client(project=project)
     try:
         client.get_table(f"{project}.{dataset}.{table}")
         return True
-    except Exception:
+    except NotFound:
         return False

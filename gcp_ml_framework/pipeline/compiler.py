@@ -5,15 +5,18 @@ The compiled YAML is what gets submitted to Vertex AI Pipelines and stored in GC
 for artifact promotion (STAGE → PROD copies the YAML, never recompiles).
 """
 
-from __future__ import annotations
-
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
+
+from gcp_ml_framework.components.feature_store.write_features import WriteFeatures
+from gcp_ml_framework.components.ml.deploy import DeployModel
+from gcp_ml_framework.components.ml.register import RegisterModel
+from gcp_ml_framework.components.ml.train import TrainModel
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
-    from gcp_ml_framework.pipeline.builder import PipelineDefinition
+    from gcp_ml_framework.pipeline.builder import PipelineDefinition, PipelineStep
 
 
 class PipelineCompiler:
@@ -24,7 +27,7 @@ class PipelineCompiler:
     steps, then invokes kfp.compiler.Compiler() to produce the YAML artifact.
     """
 
-    def __init__(self, output_dir: Path | str = "compiled_pipelines") -> None:
+    def __init__(self, output_dir: "Path | str" = "compiled_pipelines") -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -32,6 +35,7 @@ class PipelineCompiler:
         self,
         pipeline_def: "PipelineDefinition",
         context: "MLContext",
+        pipeline_dir: "Path | None" = None,
     ) -> Path:
         """
         Compile the pipeline to a KFP YAML file.
@@ -40,13 +44,12 @@ class PipelineCompiler:
         """
         try:
             import kfp.compiler as kfp_compiler
-            from kfp import dsl
         except ImportError as exc:
             raise ImportError(
                 "kfp is required for compilation. Install with: pip install kfp>=2.7"
             ) from exc
 
-        pipeline_fn = self._build_kfp_pipeline(pipeline_def, context)
+        pipeline_fn = self._build_kfp_pipeline(pipeline_def, context, pipeline_dir)
 
         output_path = self.output_dir / f"{pipeline_def.name}.yaml"
         kfp_compiler.Compiler().compile(
@@ -55,12 +58,18 @@ class PipelineCompiler:
         )
         return output_path
 
-    def _build_kfp_pipeline(self, pipeline_def: "PipelineDefinition", context: "MLContext"):
+    def _build_kfp_pipeline(
+        self,
+        pipeline_def: "PipelineDefinition",
+        context: "MLContext",
+        pipeline_dir: "Path | None" = None,
+    ):
         """
         Dynamically construct a @dsl.pipeline decorated function from the steps.
 
         Each step's component.as_kfp_component() provides the KFP function.
         Steps are wired in sequence using .after() for dependency ordering.
+        Cross-step data flow is wired via prev_task.output.
         """
         from kfp import dsl
 
@@ -68,51 +77,382 @@ class PipelineCompiler:
         pipeline_root = context.naming.gcs_pipeline_root(pipeline_def.name)
         ctx_params = self._build_context_params(context, pipeline_def)
 
+        # Default pipeline image — used when serving_dockerfile is not set
+        default_image = self._resolve_image_uri(context, None)
+
+        derived_params = self._build_derived_params(
+            context, pipeline_def, steps, pipeline_dir, default_image
+        )
+
         @dsl.pipeline(
             name=pipeline_def.name,
             description=pipeline_def.description,
             pipeline_root=pipeline_root,
         )
-        def _pipeline(run_date: str = ""):
+        def _pipeline(
+            run_date: str = "",
+            dataset_uri: str = "",
+            model_uri: str = "",
+        ):
+            from gcp_ml_framework.components.base import _INTERNAL_FIELDS
+
             prev_task = None
+            last_dataset_output = None  # output from data-producing steps (ingest/transform)
+            last_model_output = None  # output from train step
+            task_map: dict[str, object] = {}  # step.name → KFP task (for condition source lookup)
             for step in steps:
-                component_fn = step.component.as_kfp_component()
-                params = {**ctx_params, **self._step_params(step, ctx_params, run_date)}
-                task = component_fn(**params)
+                # Derive step_module from the component's class module path
+                step_module = step.component.__class__.__module__
+                # Resolve per-component image from runtime_dockerfile
+                step_image = self._resolve_image_uri(context, step.component.runtime_dockerfile)
+                component_fn = step.component.as_kfp_component(
+                    step_module=step_module,
+                    base_image=step_image,
+                )
+                step_extra = derived_params.get(step.name, {})
+
+                component_fields = {}
+                for name in type(step.component).model_fields:
+                    if name in _INTERNAL_FIELDS:
+                        continue
+                    val = getattr(step.component, name)
+                    if val is None:
+                        continue
+                    component_fields[name] = val
+                # Component fields are the base; context and derived params override them
+                merged = {**component_fields, **ctx_params, **step_extra}
+
+                # Inject bridged params from pipeline inputs
+                # (may be overridden by cross-step wiring below)
+                if dataset_uri:
+                    merged["dataset_uri"] = dataset_uri
+                if model_uri:
+                    merged["model_uri"] = model_uri
+
+                # Wire cross-step data flow from tracked outputs
+                if last_dataset_output is not None:
+                    merged["dataset_uri"] = last_dataset_output
+                if last_model_output is not None:
+                    merged["model_uri"] = last_model_output
+
+                # Inject run_date from pipeline param
+                merged["run_date"] = run_date
+
+                # Filter to only params the component declares as KFP inputs
+                accepted = set(component_fn.component_spec.inputs or {})  # type: ignore[attr-defined]
+                call_kwargs = {}
+                for k, v in merged.items():
+                    if k not in accepted:
+                        continue
+                    # Serialize non-string values to JSON strings for KFP
+                    if isinstance(v, (dict, list)):
+                        call_kwargs[k] = json.dumps(v)
+                    elif not isinstance(v, str):
+                        call_kwargs[k] = str(v)
+                    else:
+                        call_kwargs[k] = v
+
+                task = component_fn(**call_kwargs)
+                task.set_display_name(step.name)
                 if prev_task is not None:
                     task.after(prev_task)
                 prev_task = task
+                task_map[step.name] = task
+
+                # Track output — train/register → model output, others → dataset.
+                # WriteFeatures is metadata-only and should not overwrite dataset output.
+                if component_fn.component_spec.outputs:  # type: ignore[attr-defined]
+                    is_model_producer = isinstance(step.component, (TrainModel, RegisterModel))
+                    is_metadata_only = isinstance(step.component, WriteFeatures)
+                    task_output = task.outputs["output_uri"]
+                    if is_model_producer:
+                        last_model_output = task_output
+                    elif not is_metadata_only:
+                        last_dataset_output = task_output
+
+            # ── Loop blocks: dsl.ParallelFor ─────────────────────
+            for loop_block in pipeline_def.loop_blocks:
+                with dsl.ParallelFor(
+                    items=loop_block.items,
+                    name=f"loop_{loop_block.index}",
+                ) as loop_item:
+                    loop_prev = prev_task
+                    for step in loop_block.steps:
+                        step_module = step.component.__class__.__module__
+                        step_image = self._resolve_image_uri(
+                            context, step.component.runtime_dockerfile
+                        )
+                        component_fn = step.component.as_kfp_component(
+                            step_module=step_module,
+                            base_image=step_image,
+                        )
+                        step_extra = self._derive_step_params(
+                            context, pipeline_def, step, default_image
+                        )
+                        comp_fields = {}
+                        for fname in type(step.component).model_fields:
+                            if fname in _INTERNAL_FIELDS:
+                                continue
+                            val = getattr(step.component, fname)
+                            if val is not None:
+                                comp_fields[fname] = val
+                        merged = {**comp_fields, **ctx_params, **step_extra}
+                        merged["run_date"] = run_date
+                        # Inject loop variable into the designated param
+                        merged[loop_block.item_param] = loop_item
+
+                        accepted = set(
+                            component_fn.component_spec.inputs or {}  # type: ignore[attr-defined]
+                        )
+                        call_kwargs = {}
+                        for k, v in merged.items():
+                            if k not in accepted:
+                                continue
+                            if isinstance(v, (dict, list)):
+                                call_kwargs[k] = json.dumps(v)
+                            elif not isinstance(v, str):
+                                call_kwargs[k] = str(v)
+                            else:
+                                call_kwargs[k] = v
+
+                        task = component_fn(**call_kwargs)
+                        task.set_display_name(step.name)
+                        if loop_prev is not None:
+                            task.after(loop_prev)
+                        loop_prev = task
+
+            # ── Condition blocks: dsl.If / dsl.Else ───────────────
+            for cond_block in pipeline_def.condition_blocks:
+                # Look up the named source step (fall back to prev_task)
+                source_task = task_map.get(cond_block.source_step, prev_task)
+                if source_task is None or not hasattr(source_task, "outputs"):
+                    continue
+                source_output = source_task.outputs.get(  # type: ignore[union-attr]
+                    cond_block.output_key,
+                    source_task.outputs.get("output_uri"),  # type: ignore[union-attr]
+                )
+                if source_output is None:
+                    continue
+
+                # Build comparison expression
+                op = cond_block.operator
+                cond_val = cond_block.value
+                ops = {
+                    "!=": lambda s, v: s != v,
+                    "==": lambda s, v: s == v,
+                    ">": lambda s, v: s > v,
+                    "<": lambda s, v: s < v,
+                    ">=": lambda s, v: s >= v,
+                    "<=": lambda s, v: s <= v,
+                }
+                cond_expr = ops.get(op, ops["!="])(source_output, cond_val)
+
+                # Helper: compile a list of steps inside a condition branch
+                def _compile_branch(
+                    branch_steps: list,
+                    branch_prev: object,
+                ) -> None:
+                    for bstep in branch_steps:
+                        step_module = bstep.component.__class__.__module__
+                        step_image = self._resolve_image_uri(
+                            context, bstep.component.runtime_dockerfile
+                        )
+                        component_fn = bstep.component.as_kfp_component(
+                            step_module=step_module,
+                            base_image=step_image,
+                        )
+                        step_extra = self._derive_step_params(
+                            context, pipeline_def, bstep, default_image
+                        )
+                        comp_fields = {}
+                        for fname in type(bstep.component).model_fields:
+                            if fname in _INTERNAL_FIELDS:
+                                continue
+                            fval = getattr(bstep.component, fname)
+                            if fval is not None:
+                                comp_fields[fname] = fval
+                        merged = {**comp_fields, **ctx_params, **step_extra}
+                        merged["run_date"] = run_date
+                        # Wire cross-step data into condition branches
+                        if last_model_output is not None:
+                            merged["model_uri"] = last_model_output
+                        if last_dataset_output is not None:
+                            merged["dataset_uri"] = last_dataset_output
+
+                        accepted = set(
+                            component_fn.component_spec.inputs or {}  # type: ignore[attr-defined]
+                        )
+                        call_kwargs = {}
+                        for k, v in merged.items():
+                            if k not in accepted:
+                                continue
+                            if isinstance(v, (dict, list)):
+                                call_kwargs[k] = json.dumps(v)
+                            elif not isinstance(v, str):
+                                call_kwargs[k] = str(v)
+                            else:
+                                call_kwargs[k] = v
+
+                        btask = component_fn(**call_kwargs)
+                        btask.set_display_name(bstep.name)
+                        if branch_prev is not None:
+                            btask.after(branch_prev)
+                        branch_prev = btask
+
+                with dsl.If(cond_expr, name=f"condition_{cond_block.index}"):
+                    _compile_branch(cond_block.then_steps, source_task)
+
+                if cond_block.else_steps:
+                    with dsl.Else(name=f"condition_{cond_block.index}_else"):
+                        _compile_branch(cond_block.else_steps, source_task)
 
         return _pipeline
 
-    def _build_context_params(self, context: "MLContext", pipeline_def: "PipelineDefinition") -> dict:
+    @staticmethod
+    def _parse_dockerfile_path(dockerfile_path: str) -> tuple[str | None, str]:
+        """Extract pipeline_name and dockerfile_stem from a dockerfile path.
+
+        The path is relative to the docker/ directory:
+            "pipelines/house_price/regression_serve.Dockerfile"
+            → pipeline_name="house_price", stem="regression_serve"
+
+            "train.Dockerfile"
+            → pipeline_name=None, stem="train"
+
+        Returns:
+            (pipeline_name, dockerfile_stem)
+        """
+        p = PurePosixPath(dockerfile_path)
+        stem = p.stem  # "regression_serve" from "regression_serve.Dockerfile"
+        parts = p.parts
+        if len(parts) >= 3 and parts[0] == "pipelines":
+            # docker/pipelines/{pipeline_name}/{file}.Dockerfile
+            return parts[1], stem
+        # Root-level: docker/{file}.Dockerfile
+        return None, stem
+
+    def _resolve_image_uri(
+        self,
+        context: "MLContext",
+        dockerfile_path: str | None,
+    ) -> str:
+        """Resolve a dockerfile path to a full AR image URI.
+
+        Uses NamingConvention.docker_image_uri() — the single source of truth
+        for image naming shared with docker_build.sh.
+
+        Args:
+            context: Runtime context with AR host, project, naming.
+            dockerfile_path: Path relative to docker/ (e.g.,
+                "pipelines/house_price/regression_serve.Dockerfile"), or None
+                for the default training image.
+        """
+        if dockerfile_path is None:
+            # Default: root-level train.Dockerfile
+            return context.naming.docker_image_uri(
+                registry_host=context.artifact_registry_host,
+                gcp_project=context.gcp_project,
+                pipeline_name=None,
+                dockerfile_stem="train",
+            )
+        pipeline_name, stem = self._parse_dockerfile_path(dockerfile_path)
+        return context.naming.docker_image_uri(
+            registry_host=context.artifact_registry_host,
+            gcp_project=context.gcp_project,
+            pipeline_name=pipeline_name,
+            dockerfile_stem=stem,
+        )
+
+    def _build_context_params(
+        self, context: "MLContext", pipeline_def: "PipelineDefinition"
+    ) -> dict:
         return {
             "project": context.gcp_project,
             "region": context.region,
+            "project_name": context.naming.project,
+            "branch": context.naming.branch,
+            "environment": context.environment.value,
             "dataset": context.bq_dataset,
             "gcs_prefix": context.gcs_prefix,
             "feature_store_id": context.feature_store_id,
             "staging_bucket": context.naming.gcs_bucket,
             "experiment_name": context.naming.vertex_experiment(pipeline_def.name),
+            "artifact_registry": context.naming.artifact_registry_repo(
+                context.artifact_registry_host,
+                context.gcp_project,
+            ),
         }
 
-    def _step_params(self, step, ctx_params: dict, run_date: str) -> dict:
-        """Extract component-specific params from the component dataclass fields."""
-        from dataclasses import asdict, fields
-        import dataclasses
+    def _derive_step_params(
+        self,
+        context: "MLContext",
+        pipeline_def: "PipelineDefinition",
+        step: "PipelineStep",
+        default_image: str = "",
+    ) -> dict:
+        """Compute derived params for a single pipeline step.
 
-        component = step.component
+        This is the single source of truth for parameter derivation,
+        called for ALL steps regardless of where they appear (sequential,
+        loop blocks, condition blocks).
+        """
+        comp = step.component
         extra: dict = {}
 
-        # Pull dataclass fields (excluding component_name and config)
-        if dataclasses.is_dataclass(component):
-            for f in fields(component):
-                if f.name in ("component_name", "config"):
-                    continue
-                val = getattr(component, f.name)
-                if isinstance(val, (list, dict)):
-                    extra[f.name] = json.dumps(val)
-                else:
-                    extra[f.name] = val
+        # WriteFeatures: need feature_view_id and feature_group_id
+        if hasattr(comp, "entity") and hasattr(comp, "feature_group"):
+            fv_id = context.naming.feature_view_id(comp.entity, comp.feature_group)
+            extra["feature_view_id"] = fv_id
+            extra["feature_group_id"] = fv_id
+
+        # TrainModel: needs job_name and model_output_uri
+        if isinstance(comp, TrainModel):
+            extra["job_name"] = context.naming.vertex_training_job_name(pipeline_def.name)
+            extra["model_output_uri"] = context.naming.gcs_model_path(pipeline_def.name)
+
+        # RegisterModel: needs model_display_name + serving_container_image
+        # Serving image resolution (uses serving_dockerfile, NOT runtime_dockerfile):
+        #   1. serving_container_image (full URI) — use as-is
+        #   2. serving_dockerfile — resolve via naming convention
+        #   3. Neither set — fall back to pipeline default training image
+        if isinstance(comp, RegisterModel):
+            extra["model_display_name"] = context.naming.vertex_model_name(
+                pipeline_def.name, comp.model_name or None
+            )
+            if not comp.serving_container_image:
+                if comp.serving_dockerfile:
+                    extra["serving_container_image"] = self._resolve_image_uri(
+                        context, comp.serving_dockerfile
+                    )
+                elif default_image:
+                    extra["serving_container_image"] = default_image
+
+        # DeployModel: needs model_display_name and endpoint_display_name.
+        # Both are derived from pipeline_name + model_name via naming convention.
+        # No serving image needed — it's already captured during registration.
+        if isinstance(comp, DeployModel):
+            model_name_val = comp.model_name or None
+            extra["model_display_name"] = context.naming.vertex_model_name(
+                pipeline_def.name, model_name_val
+            )
+            extra["endpoint_display_name"] = context.naming.vertex_endpoint_name(
+                pipeline_def.name, model_name_val
+            )
 
         return extra
+
+    def _build_derived_params(
+        self,
+        context: "MLContext",
+        pipeline_def: "PipelineDefinition",
+        steps: list,
+        pipeline_dir: "Path | None" = None,
+        default_image: str = "",
+    ) -> dict:
+        """Compute per-step derived params that aren't simple dataclass fields."""
+        derived: dict[str, dict] = {}
+        for step in steps:
+            extra = self._derive_step_params(context, pipeline_def, step, default_image)
+            if extra:
+                derived[step.name] = extra
+        return derived

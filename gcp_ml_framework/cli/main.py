@@ -6,11 +6,12 @@ All sub-commands are registered here. Each sub-app lives in its own module.
 
 import typer
 
+from gcp_ml_framework.cli.cmd_build import build
+from gcp_ml_framework.cli.cmd_compile import compile_cmd
 from gcp_ml_framework.cli.cmd_context import context_app
-from gcp_ml_framework.cli.cmd_deploy import deploy_app
+from gcp_ml_framework.cli.cmd_deploy import deploy
 from gcp_ml_framework.cli.cmd_init import init_app
-from gcp_ml_framework.cli.cmd_promote import promote_app
-from gcp_ml_framework.cli.cmd_run import run_app
+from gcp_ml_framework.cli.cmd_run import run
 from gcp_ml_framework.cli.cmd_teardown import teardown_app
 
 app = typer.Typer(
@@ -22,9 +23,10 @@ app = typer.Typer(
 
 app.add_typer(init_app, name="init")
 app.add_typer(context_app, name="context")
-app.add_typer(run_app, name="run")
-app.add_typer(deploy_app, name="deploy")
-app.add_typer(promote_app, name="promote")
+app.command("build")(build)
+app.command("run")(run)
+app.command("compile")(compile_cmd)
+app.command("deploy")(deploy)
 app.add_typer(teardown_app, name="teardown")
 
 if __name__ == "__main__":

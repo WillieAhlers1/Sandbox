@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from gcp_ml_framework.components.base import BaseComponent, ComponentConfig
+from pydantic import model_validator
+
+from gcp_ml_framework.components.base import BaseComponent
+from gcp_ml_framework.decorators import task
 
 if TYPE_CHECKING:
     from gcp_ml_framework.context import MLContext
 
 
-@dataclass
+@task
 class BQTransform(BaseComponent):
     """
     Execute a SQL file as a BigQuery job and materialise results to a table.
@@ -27,21 +29,29 @@ class BQTransform(BaseComponent):
 
     Example:
         BQTransform(
+            component_name="transform",
             sql_file="sql/churn_features.sql",
             output_table="churn_features",
         )
     """
+
+    # Component-specific fields
+    dataset: str = ""
 
     output_table: str
     sql_file: str | None = None
     sql: str | None = None
     write_disposition: str = "WRITE_TRUNCATE"
     component_name: str = "bq_transform"
-    config: ComponentConfig = field(default_factory=ComponentConfig)
 
-    def __post_init__(self) -> None:
+    # Airflow connection ID for BigQuery operator
+    gcp_conn_id: str = "google_cloud_default"
+
+    @model_validator(mode="after")
+    def _check_sql_source(self) -> BQTransform:
         if not self.sql_file and not self.sql:
             raise ValueError("BQTransform requires either sql_file or sql")
+        return self
 
     def _get_sql(self) -> str:
         if self.sql:
@@ -51,92 +61,58 @@ class BQTransform(BaseComponent):
             raise FileNotFoundError(f"SQL file not found: {path}")
         return path.read_text()
 
-    def as_kfp_component(self):
-        from kfp import dsl  # type: ignore[import]
+    def execute(self) -> None:
+        """Container lifecycle: delegate to utils.bq_transform.run_bq_transform()."""
+        from gcp_ml_framework.utils.bq_transform import run_bq_transform
 
-        @dsl.component(
-            base_image="python:3.11-slim",
-            packages_to_install=["google-cloud-bigquery>=3.17"],
+        sql = self.sql or self._get_sql()
+        run_bq_transform(
+            project=self.project,
+            dataset=self.dataset,
+            sql=sql,
+            output_table=self.output_table,
+            write_disposition=self.write_disposition,
+            run_date=self.run_date,
+            output_uri_path=self.output_uri_path,
         )
-        def bq_transform(
-            project: str,
-            dataset: str,
-            sql: str,
-            output_table: str,
-            write_disposition: str,
-            run_date: str = "",
-        ) -> str:
-            """Returns the fully-qualified output table name."""
-            from google.cloud import bigquery
 
-            client = bigquery.Client(project=project)
-            rendered = sql.format(
-                bq_dataset=dataset,
-                run_date=run_date,
-            )
-            dest = f"{project}.{dataset}.{output_table}"
-            cfg = bigquery.QueryJobConfig(
-                destination=dest,
-                write_disposition=write_disposition,
-                use_legacy_sql=False,
-            )
-            client.query(rendered, job_config=cfg).result()
-            return dest
+    def render_operator(
+        self,
+        context: MLContext,
+        pipeline_dir: Path | None = None,
+    ) -> tuple[str, set[str]]:
+        """Return (operator_code, imports) for Airflow DAG generation."""
+        from gcp_ml_framework.components.operators.bq_query import _resolve_templates
 
-        return bq_transform
-
-    def local_run(self, context: "MLContext", run_date: str = "", **kwargs: Any) -> str:
-        import duckdb
-        import tempfile
-        import os
-
-        # Use the shared connection from LocalRunner so intermediate tables are visible.
-        # Fall back to a fresh connection when called outside the runner (e.g. tests).
-        conn: duckdb.DuckDBPyConnection = kwargs.get("db_conn") or duckdb.connect()
+        imports = {
+            "from airflow.providers.google.cloud.operators.bigquery"
+            " import BigQueryInsertJobOperator",
+        }
 
         sql = self._get_sql()
-        rendered = sql.format(
-            bq_dataset=context.bq_dataset,
-            gcs_prefix=context.gcs_prefix,
-            run_date=run_date or "2024-01-01",
-        )
-        # Translate BigQuery SQL idioms to DuckDB-compatible equivalents.
-        from gcp_ml_framework.utils.sql_compat import bq_to_duckdb
-        rendered = bq_to_duckdb(rendered)
-        out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")
-        out_path = os.path.join(out_dir, f"{self.output_table}.parquet")
-        conn.sql(f"COPY ({rendered}) TO '{out_path}' (FORMAT PARQUET)")
-        return out_path
+        resolved_sql = _resolve_templates(sql, context)
+        escaped_sql = resolved_sql.replace("\\", "\\\\").replace("'''", "\\'\\'\\'")
+
+        dest = {
+            "projectId": context.gcp_project,
+            "datasetId": context.bq_dataset,
+            "tableId": self.output_table,
+        }
+
+        code = f"""BigQueryInsertJobOperator(
+        task_id="{{{{ task_id }}}}",
+        configuration={{"query": {{
+            "query": '''{escaped_sql}''',
+            "useLegacySql": False,
+            "destinationTable": {dest!r},
+            "writeDisposition": "{self.write_disposition}",
+            "createDisposition": "CREATE_IF_NEEDED",
+        }}}},
+        gcp_conn_id="{self.gcp_conn_id}",
+    )"""
+
+        return code, imports
 
 
-@dataclass
-class PandasTransform(BaseComponent):
-    """
-    Apply a Python function transformation (local only, used by LocalRunner stubs).
-
-    Not submitted to Vertex AI — maps to a BQTransform for production runs.
-    Useful for rapid local iteration where you don't need BigQuery.
-    """
-
-    transform_fn: Any  # callable(df: pd.DataFrame, ctx: MLContext) -> pd.DataFrame
-    output_table: str
-    input_table: str = ""
-    component_name: str = "pandas_transform"
-    config: ComponentConfig = field(default_factory=ComponentConfig)
-
-    def as_kfp_component(self):
-        raise NotImplementedError(
-            "PandasTransform is a local-only stub. Use BQTransform for production."
-        )
-
-    def local_run(self, context: "MLContext", input_path: str = "", **kwargs: Any) -> str:
-        import pandas as pd
-        import tempfile
-        import os
-
-        df = pd.read_parquet(input_path) if input_path else pd.DataFrame()
-        result = self.transform_fn(df, context)
-        out_dir = tempfile.mkdtemp(prefix=f"gml_{self.output_table}_")
-        out_path = os.path.join(out_dir, f"{self.output_table}.parquet")
-        result.to_parquet(out_path, index=False)
-        return out_path
+if __name__ == "__main__":
+    BQTransform.cli()

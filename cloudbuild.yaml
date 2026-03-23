@@ -1,0 +1,94 @@
+# Cloud Build config for GCP ML Framework.
+# Usage: gcloud builds submit --config cloudbuild.yaml \
+#   --substitutions _TAG=...,_PIPELINE=...,_AR_REPO=...
+#
+# Docker hierarchy (per client PR #26):
+#   Tier 0: base-python (shared foundation)
+#   Tier 1: {pipeline}--base (per-pipeline execution image)
+#   Tier 1: {pipeline}--serve (per-pipeline serving image)
+#
+# Cache strategy: pull :latest → build with --cache-from → push :latest + :{tag}
+
+steps:
+  # Step 0: Pull cached base-python (ignore if first build)
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args: ["-c", "docker pull ${_AR_REPO}/base-python:latest || true"]
+
+  # Step 1: Build base-python
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_AR_REPO}/base-python:${_TAG}"
+      - "-t"
+      - "${_AR_REPO}/base-python:latest"
+      - "--cache-from"
+      - "${_AR_REPO}/base-python:latest"
+      - "-f"
+      - "docker/base/base-python/Dockerfile"
+      - "docker/base/base-python"
+
+  # Step 2: Push base-python
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "--all-tags", "${_AR_REPO}/base-python"]
+
+  # Step 3: Pull cached pipeline base image
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args: ["-c", "docker pull ${_AR_REPO}/${_PIPELINE}--base:latest || true"]
+
+  # Step 4: Build pipeline base image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_AR_REPO}/${_PIPELINE}--base:${_TAG}"
+      - "-t"
+      - "${_AR_REPO}/${_PIPELINE}--base:latest"
+      - "--cache-from"
+      - "${_AR_REPO}/${_PIPELINE}--base:latest"
+      - "--build-arg"
+      - "BASE_IMAGE=${_AR_REPO}/base-python:${_TAG}"
+      - "-f"
+      - "docker/pipelines/${_PIPELINE_DIR}/base.Dockerfile"
+      - "."
+
+  # Step 5: Push pipeline base image
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "--all-tags", "${_AR_REPO}/${_PIPELINE}--base"]
+
+  # Step 6: Pull cached pipeline serve image
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args: ["-c", "docker pull ${_AR_REPO}/${_PIPELINE}--serve:latest || true"]
+
+  # Step 7: Build pipeline serve image (extends pipeline base, not base-python)
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_AR_REPO}/${_PIPELINE}--serve:${_TAG}"
+      - "-t"
+      - "${_AR_REPO}/${_PIPELINE}--serve:latest"
+      - "--cache-from"
+      - "${_AR_REPO}/${_PIPELINE}--serve:latest"
+      - "--build-arg"
+      - "BASE_IMAGE=${_AR_REPO}/${_PIPELINE}--base:${_TAG}"
+      - "-f"
+      - "docker/pipelines/${_PIPELINE_DIR}/serve.Dockerfile"
+      - "."
+
+  # Step 8: Push pipeline serve image
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "--all-tags", "${_AR_REPO}/${_PIPELINE}--serve"]
+
+substitutions:
+  _TAG: "latest"
+  _PIPELINE: "house-price"
+  _PIPELINE_DIR: "house_price"
+  _AR_REPO: ""
+
+options:
+  machineType: "E2_HIGHCPU_8"
+  logging: "CLOUD_LOGGING_ONLY"
