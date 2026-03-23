@@ -142,6 +142,8 @@ class SmartCompiler:
             steps=group.steps,
             description=pipeline_def.description,
             tags=pipeline_def.tags,
+            loop_blocks=pipeline_def.loop_blocks,
+            condition_blocks=pipeline_def.condition_blocks,
         )
 
         compiler = PipelineCompiler(output_dir=self.output_dir)

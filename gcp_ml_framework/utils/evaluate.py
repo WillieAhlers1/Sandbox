@@ -117,5 +117,6 @@ def run_evaluate(
     if failures:
         raise ValueError(f"Model failed evaluation gates: {', '.join(failures)}")
 
-    Path(output_uri_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(output_uri_path).write_text(json.dumps(computed))
+    if output_uri_path:
+        Path(output_uri_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_uri_path).write_text(json.dumps(computed))

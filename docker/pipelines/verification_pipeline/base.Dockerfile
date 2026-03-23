@@ -1,4 +1,4 @@
-# House price base image — framework + all pipeline deps.
+# Verification pipeline base image — framework + all pipeline deps.
 # Used for training steps and as the base for serve.Dockerfile.
 ARG BASE_IMAGE=base-python
 FROM ${BASE_IMAGE}

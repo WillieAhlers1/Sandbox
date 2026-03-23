@@ -5,7 +5,6 @@ The component's execute() handles I/O lifecycle (temp dirs, GCS upload, output U
 """
 
 import pickle
-from pathlib import Path
 
 from loguru import logger
 
@@ -44,8 +43,8 @@ class HouseTrainModelStep(TrainModel):
         model = HousePredictionModel()
         model.fit(df, df["price"])
 
-        # Save model to _work_dir — TrainModel.execute() uploads to GCS
-        local_path = Path(self._work_dir) / "model.pkl"
+        # Save model to self._work_dir — execute() uploads to GCS
+        local_path = self._work_dir / "model.pkl"
         with open(local_path, "wb") as f:
             pickle.dump(model, f)
         logger.info(f"[train_house_model] Model saved to {local_path}")

@@ -128,6 +128,8 @@ class RegisterModel(BaseComponent):
             upload_kwargs["is_default_version"] = True
 
         model = aiplatform.Model.upload(**upload_kwargs)
+        # sync=False per PR #26 (CRUD quota). Wait before accessing resource_name.
+        model.wait()
         logger.info(f"Registered model: {model.resource_name}")
         return str(model.resource_name)
 

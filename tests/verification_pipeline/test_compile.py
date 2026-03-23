@@ -16,7 +16,8 @@ class TestVerificationPipelineDefinition:
     def test_step_count(self):
         from pipelines.verification_pipeline.pipeline import pipeline
 
-        assert len(pipeline.steps) == 7
+        # 4 sequential steps; register+deploy are in the condition block
+        assert len(pipeline.steps) == 4
 
     def test_step_names(self):
         from pipelines.verification_pipeline.pipeline import pipeline
@@ -24,11 +25,8 @@ class TestVerificationPipelineDefinition:
         assert pipeline.step_names == [
             "Ingest Raw Data",
             "Transform Features",
-            "DBT Models",
             "Train Model",
             "Evaluate Model",
-            "Register Model",
-            "Deploy Model",
         ]
 
     def test_mixed_types(self):
@@ -43,12 +41,31 @@ class TestVerificationPipelineDefinition:
         assert types == [
             TaskType.TASK,
             TaskType.TASK,
-            TaskType.TASK,
-            TaskType.ML_TASK,
-            TaskType.ML_TASK,
             TaskType.ML_TASK,
             TaskType.ML_TASK,
         ]
+
+    def test_has_control_flow(self):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        assert pipeline.has_control_flow is True
+        assert len(pipeline.loop_blocks) == 1
+        assert len(pipeline.condition_blocks) == 1
+
+    def test_loop_block_items(self):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        loop = pipeline.loop_blocks[0]
+        assert loop.items == ["us-market", "eu-market"]
+        assert loop.item_param == "job_name"
+
+    def test_condition_block_source(self):
+        from pipelines.verification_pipeline.pipeline import pipeline
+
+        cond = pipeline.condition_blocks[0]
+        assert cond.source_step == "Evaluate Model"
+        assert cond.operator == "!="
+        assert len(cond.then_steps) == 2
 
 
 class TestEvaluateVerifyStep:
@@ -113,8 +130,6 @@ class TestVerificationPipelineCompile:
             pytest.skip("kfp not installed")
         source = result.dag_path.read_text()
         assert source.count("BigQueryInsertJobOperator") >= 2
-        # DBTRun renders as BashOperator
-        assert "BashOperator" in source
 
     def test_dag_has_vertex_operator(self, mock_context, tmp_path):
         from pipelines.verification_pipeline.pipeline import pipeline

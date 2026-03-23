@@ -1,9 +1,11 @@
 """TrainModel — train a model directly inside the pipeline container."""
 
 import os
+import tempfile
 from pathlib import Path
 
 from loguru import logger
+from pydantic import PrivateAttr
 
 from gcp_ml_framework.components.base import _INTERNAL_FIELDS, BaseComponent
 from gcp_ml_framework.decorators import ml_task
@@ -17,11 +19,16 @@ class TrainModel(BaseComponent):
     component_name is the step file name under steps/.
     E.g. component_name="train_house_model" → steps/train_house_model.py
 
+    Lifecycle (per REQS 1.0):
+        execute() creates a temp dir as self._work_dir, calls self.run(),
+        uploads everything in self._work_dir to GCS, and writes the output URI.
+        Data scientists override run() only — pure business logic.
+        They write model artifacts to self._work_dir and never touch GCS.
+
     Example:
         TrainModel(
             component_name="train_house_model",
             machine_type="n2-standard-8",
-            hyperparameters={"learning_rate": 0.01, "max_depth": 6},
         )
     """
 
@@ -33,23 +40,27 @@ class TrainModel(BaseComponent):
 
     component_name: str = ""
 
+    # Managed by execute() — data scientists write model artifacts here in run()
+    _work_dir: Path = PrivateAttr(default=Path())
+
     def execute(self) -> None:
         """Container lifecycle: create temp dir, call run(), upload to GCS, write output URI."""
         from gcp_ml_framework.utils.gcs import upload_file
 
-        # Call run() — data scientist writes model files to self._work_dir
-        artifact_location = self.run()
+        # Create temp dir — data scientist writes model files to self._work_dir
+        self._work_dir = Path(tempfile.mkdtemp())
+        self.run()
 
-        # Upload all files in temp_dir to GCS
+        # Upload all files in _work_dir to GCS
         if self.model_output_uri:
             versioned_uri = self.model_output_uri
             if self.run_id:
                 versioned_uri = f"{self.model_output_uri.rstrip('/')}/{self.run_id}"
 
-            for root, _dirs, files in os.walk(artifact_location):
+            for root, _dirs, files in os.walk(self._work_dir):
                 for fname in files:
                     local_path = Path(root) / fname
-                    rel_path = local_path.relative_to(artifact_location)
+                    rel_path = local_path.relative_to(self._work_dir)
                     gcs_uri = f"{versioned_uri.rstrip('/')}/{rel_path}"
                     upload_file(local_path, gcs_uri, self.project)
                     logger.info(f"Uploaded {rel_path} → {gcs_uri}")
@@ -87,12 +98,12 @@ class TrainModel(BaseComponent):
             except Exception:
                 logger.warning("Experiment tracking failed (non-fatal)", exc_info=True)
 
-    def run(self) -> Path:
-        """Business logic: train model, write to temp dir, return artifact location.
+    def run(self) -> None:
+        """Business logic: train model, write artifacts to self._work_dir.
 
-        Override this method with your training code. Return the local path to the
-        trained model artifact (e.g. a directory or .tar.gz file).
-        The base execute() implementation will handle GCS upload and output URI writing.
+        Override this method with your training code. Write model files
+        (e.g. model.pkl) to self._work_dir. The base execute() creates the
+        temp directory and handles GCS upload and output URI writing.
         """
         raise NotImplementedError(
             f"{self.__class__.__name__}.run() is not implemented. "

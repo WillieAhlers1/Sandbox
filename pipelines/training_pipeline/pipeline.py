@@ -52,7 +52,7 @@ pipeline = (
         HouseTrainModelStep(
             component_name="train_house_model",
             machine_type="n2-standard-4",
-            runtime_dockerfile="pipelines/house_price/base.Dockerfile",
+            runtime_dockerfile="pipelines/training_pipeline/base.Dockerfile",
         ),
         name="Train Model",
     )
@@ -61,7 +61,7 @@ pipeline = (
             metrics=["rmse", "mae", "r2"],
             gate={"rmse": 1_000_000},
             component_name="evaluate_house_model",
-            runtime_dockerfile="pipelines/house_price/base.Dockerfile",
+            runtime_dockerfile="pipelines/training_pipeline/base.Dockerfile",
         ),
         name="Evaluate Model",
     )
@@ -69,8 +69,8 @@ pipeline = (
         RegisterModel(
             model_name="housing-predictor",
             component_name="register_model",
-            runtime_dockerfile="pipelines/house_price/base.Dockerfile",
-            serving_dockerfile="pipelines/house_price/serve.Dockerfile",
+            runtime_dockerfile="pipelines/training_pipeline/base.Dockerfile",
+            serving_dockerfile="pipelines/training_pipeline/serve.Dockerfile",
         ),
         name="Register Model",
     )
@@ -81,7 +81,7 @@ pipeline = (
             min_replica_count=1,
             max_replica_count=1,
             component_name="deploy_model",
-            runtime_dockerfile="pipelines/house_price/base.Dockerfile",
+            runtime_dockerfile="pipelines/training_pipeline/base.Dockerfile",
         ),
         name="Deploy Model",
     )

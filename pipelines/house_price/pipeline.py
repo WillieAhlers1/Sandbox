@@ -1,7 +1,7 @@
 from gcp_ml_framework import Pipeline
-from pipelines.house_price.steps.train_regression_model import HouseTrainModelStep
-from gcp_ml_framework.components.ml.register import RegisterModel
 from gcp_ml_framework.components.ml.deploy import DeployModel
+from gcp_ml_framework.components.ml.register import RegisterModel
+from pipelines.house_price.steps.train_regression_model import HouseTrainModelStep
 
 pipeline = (
     Pipeline(name="house_price", schedule="@daily")

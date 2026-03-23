@@ -45,15 +45,12 @@ class TestTrainModelExecute:
     """Verify execute() creates a temp dir, calls run(), uploads, and writes output."""
 
     @patch("gcp_ml_framework.utils.gcs.upload_file")
-    def test_train_model_execute_uploads(self, mock_upload: MagicMock, tmp_path: Path):
-        """execute() calls run(), uses returned path for GCS upload."""
-        model_dir = tmp_path / "artifacts"
-        model_dir.mkdir()
-        (model_dir / "model.pkl").write_text("fake-model")
+    def test_train_model_execute_uploads(self, mock_upload: MagicMock) -> None:
+        """execute() creates temp dir as self._work_dir, calls run(), uploads to GCS."""
 
         class _TestTrainer(TrainModel):
-            def run(self) -> Path:
-                return model_dir
+            def run(self) -> None:
+                (self._work_dir / "model.pkl").write_text("fake-model")
 
         trainer = _TestTrainer(
             model_output_uri="gs://bucket/models/test",
@@ -68,15 +65,13 @@ class TestTrainModelExecute:
         assert "gs://bucket/models/test" in call_args[0][1]
 
     @patch("gcp_ml_framework.utils.gcs.upload_file")
-    def test_train_model_writes_output_uri(self, mock_upload: MagicMock, tmp_path: Path):
+    def test_train_model_writes_output_uri(self, mock_upload: MagicMock, tmp_path: Path) -> None:
         """execute() writes model_output_uri to the output_uri_path file."""
         output_file = tmp_path / "output" / "uri"
-        model_dir = tmp_path / "artifacts"
-        model_dir.mkdir()
 
         class _TestTrainer(TrainModel):
-            def run(self) -> Path:
-                return model_dir
+            def run(self) -> None:
+                pass
 
         trainer = _TestTrainer(
             model_output_uri="gs://bucket/models/churn/latest",
@@ -110,13 +105,9 @@ class TestTrainModelExperiments:
         sys.modules[token] = mock_aip
         google.cloud.aiplatform = mock_aip
         try:
-            model_dir = tmp_path / "artifacts"
-            model_dir.mkdir()
-            (model_dir / "model.pkl").write_bytes(b"fake")
-
             class _TestTrainer(TrainModel):
-                def run(self) -> Path:
-                    return model_dir
+                def run(self) -> None:
+                    (self._work_dir / "model.pkl").write_bytes(b"fake")
 
             trainer = _TestTrainer(
                 experiment_name="test-exp",

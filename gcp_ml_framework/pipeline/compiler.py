@@ -97,6 +97,7 @@ class PipelineCompiler:
             prev_task = None
             last_dataset_output = None  # output from data-producing steps (ingest/transform)
             last_model_output = None  # output from train step
+            task_map: dict[str, object] = {}  # step.name → KFP task (for condition source lookup)
             for step in steps:
                 # Derive step_module from the component's class module path
                 step_module = step.component.__class__.__module__
@@ -157,6 +158,7 @@ class PipelineCompiler:
                 if prev_task is not None:
                     task.after(prev_task)
                 prev_task = task
+                task_map[step.name] = task
 
                 # Track output — train/register → model output, others → dataset.
                 # WriteFeatures is metadata-only and should not overwrite dataset output.
@@ -218,74 +220,88 @@ class PipelineCompiler:
                             task.after(loop_prev)
                         loop_prev = task
 
-            # ── Condition blocks: dsl.If ─────────────────────────
-            # MVP: conditions reference the last sequential task's output
+            # ── Condition blocks: dsl.If / dsl.Else ───────────────
             for cond_block in pipeline_def.condition_blocks:
-                # MVP: condition checks the last sequential task's output
-                if prev_task is not None and hasattr(prev_task, "outputs"):
-                    source_output = prev_task.outputs.get(
-                        cond_block.output_key, prev_task.outputs.get("output_uri")
-                    )
-                    if source_output is not None:
-                        # Build comparison
-                        op = cond_block.operator
-                        val = cond_block.value
-                        if op == "!=":
-                            cond_expr = source_output != val
-                        elif op == "==":
-                            cond_expr = source_output == val
-                        elif op == ">":
-                            cond_expr = source_output > val
-                        elif op == "<":
-                            cond_expr = source_output < val
-                        elif op == ">=":
-                            cond_expr = source_output >= val
-                        elif op == "<=":
-                            cond_expr = source_output <= val
-                        else:
-                            cond_expr = source_output != val
+                # Look up the named source step (fall back to prev_task)
+                source_task = task_map.get(cond_block.source_step, prev_task)
+                if source_task is None or not hasattr(source_task, "outputs"):
+                    continue
+                source_output = source_task.outputs.get(  # type: ignore[union-attr]
+                    cond_block.output_key,
+                    source_task.outputs.get("output_uri"),  # type: ignore[union-attr]
+                )
+                if source_output is None:
+                    continue
 
-                        with dsl.If(cond_expr, name=f"condition_{cond_block.index}"):
-                            cond_prev = prev_task
-                            for step in cond_block.then_steps:
-                                step_module = step.component.__class__.__module__
-                                step_image = self._resolve_image_uri(
-                                    context, step.component.runtime_dockerfile
-                                )
-                                component_fn = step.component.as_kfp_component(
-                                    step_module=step_module,
-                                    base_image=step_image,
-                                )
-                                step_extra = derived_params.get(step.name, {})
-                                comp_fields = {}
-                                for fname in type(step.component).model_fields:
-                                    if fname in _INTERNAL_FIELDS:
-                                        continue
-                                    val2 = getattr(step.component, fname)
-                                    if val2 is not None:
-                                        comp_fields[fname] = val2
-                                merged = {**comp_fields, **ctx_params, **step_extra}
-                                merged["run_date"] = run_date
+                # Build comparison expression
+                op = cond_block.operator
+                cond_val = cond_block.value
+                ops = {
+                    "!=": lambda s, v: s != v,
+                    "==": lambda s, v: s == v,
+                    ">": lambda s, v: s > v,
+                    "<": lambda s, v: s < v,
+                    ">=": lambda s, v: s >= v,
+                    "<=": lambda s, v: s <= v,
+                }
+                cond_expr = ops.get(op, ops["!="])(source_output, cond_val)
 
-                                accepted = set(
-                                    component_fn.component_spec.inputs or {}  # type: ignore[attr-defined]
-                                )
-                                call_kwargs = {}
-                                for k, v in merged.items():
-                                    if k not in accepted:
-                                        continue
-                                    if isinstance(v, (dict, list)):
-                                        call_kwargs[k] = json.dumps(v)
-                                    elif not isinstance(v, str):
-                                        call_kwargs[k] = str(v)
-                                    else:
-                                        call_kwargs[k] = v
+                # Helper: compile a list of steps inside a condition branch
+                def _compile_branch(
+                    branch_steps: list,
+                    branch_prev: object,
+                ) -> None:
+                    for bstep in branch_steps:
+                        step_module = bstep.component.__class__.__module__
+                        step_image = self._resolve_image_uri(
+                            context, bstep.component.runtime_dockerfile
+                        )
+                        component_fn = bstep.component.as_kfp_component(
+                            step_module=step_module,
+                            base_image=step_image,
+                        )
+                        step_extra = derived_params.get(bstep.name, {})
+                        comp_fields = {}
+                        for fname in type(bstep.component).model_fields:
+                            if fname in _INTERNAL_FIELDS:
+                                continue
+                            fval = getattr(bstep.component, fname)
+                            if fval is not None:
+                                comp_fields[fname] = fval
+                        merged = {**comp_fields, **ctx_params, **step_extra}
+                        merged["run_date"] = run_date
+                        # Wire cross-step data into condition branches
+                        if last_model_output is not None:
+                            merged["model_uri"] = last_model_output
+                        if last_dataset_output is not None:
+                            merged["dataset_uri"] = last_dataset_output
 
-                                task = component_fn(**call_kwargs)
-                                task.set_display_name(step.name)
-                                if cond_prev is not None:
-                                    task.after(cond_prev)
-                                cond_prev = task
+                        accepted = set(
+                            component_fn.component_spec.inputs or {}  # type: ignore[attr-defined]
+                        )
+                        call_kwargs = {}
+                        for k, v in merged.items():
+                            if k not in accepted:
+                                continue
+                            if isinstance(v, (dict, list)):
+                                call_kwargs[k] = json.dumps(v)
+                            elif not isinstance(v, str):
+                                call_kwargs[k] = str(v)
+                            else:
+                                call_kwargs[k] = v
+
+                        btask = component_fn(**call_kwargs)
+                        btask.set_display_name(bstep.name)
+                        if branch_prev is not None:
+                            btask.after(branch_prev)
+                        branch_prev = btask
+
+                with dsl.If(cond_expr, name=f"condition_{cond_block.index}"):
+                    _compile_branch(cond_block.then_steps, source_task)
+
+                if cond_block.else_steps:
+                    with dsl.Else(name=f"condition_{cond_block.index}_else"):
+                        _compile_branch(cond_block.else_steps, source_task)
 
         return _pipeline
 

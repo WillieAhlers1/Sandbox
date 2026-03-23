@@ -1,4 +1,4 @@
-"""Serving application for the house_price regression model.
+"""Serving application for the training_pipeline regression model.
 
 Vertex AI custom container requirements:
 - Listen on AIP_HTTP_PORT (default 8080)
@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="House Price Regression Model")
+app = FastAPI(title="Training Pipeline — House Price Model")
 
 # Model is loaded once at startup from the artifact directory
 _model = None

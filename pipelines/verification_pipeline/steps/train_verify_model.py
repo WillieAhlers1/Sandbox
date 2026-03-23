@@ -1,7 +1,6 @@
 """Simple training step for verification — trains on verification_features table."""
 
 import pickle
-from pathlib import Path
 
 from loguru import logger
 
@@ -27,7 +26,7 @@ class TrainVerifyModelStep(TrainModel):
         model = HousePredictionModel()
         model.fit(df, df["price"])
 
-        local_path = Path(self._work_dir) / "model.pkl"
+        local_path = self._work_dir / "model.pkl"
         with open(local_path, "wb") as f:
             pickle.dump(model, f)
         logger.info(f"[train_verify_model] Model saved to {local_path}")
